@@ -36,7 +36,19 @@ export const buildLibraryRouter = (library: LocalLibraryService) => {
         res.status(410).json({ error: 'Expired', message: 'Library output is unavailable' });
         return;
       }
-      res.download(resolved.path, resolved.entry.filename);
+      res.download(resolved.path, resolved.entry.filename, (error) => {
+        if (!error) return;
+        if (res.headersSent) {
+          res.destroy();
+          return;
+        }
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code === 'ENOENT') {
+          res.status(410).json({ error: 'Expired', message: 'Library output is unavailable' });
+        } else {
+          res.status(500).json({ error: 'LibraryUnavailable', message: 'Local library is unavailable' });
+        }
+      });
     } catch (error) {
       if (error instanceof LocalLibraryValidationError) sendError(res, error);
       else if (error instanceof LocalLibraryNotFoundError) {

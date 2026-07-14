@@ -448,6 +448,8 @@ export class JobQueueService {
       // restart will find the job as 'cancelled' (not 'queued' with missing files)
       job.status = 'cancelled';
       await this.persistAll();
+      await this.reconcileLibraryHolds();
+      await this.localLibrary?.cleanupExpired();
       this.syncQueueMetrics();
       // Now cleanup the files - if this fails after persist, recovery will handle it
       await cleanupJobByWorkDir(job.files.workDir, 'cancelled', jobId);

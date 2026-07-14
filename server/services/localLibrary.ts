@@ -7,10 +7,12 @@ import { ComposerJobRecord } from '../types/renderJob.ts';
 const RETENTION_MS = 86_400_000;
 const IDENTIFIER = /^[a-zA-Z0-9-]+$/;
 const STATE_FILENAME = 'entries.json';
+const OWNERSHIP_MARKER = '.local-library-owner';
 
 interface StoredLibraryEntry extends LocalLibraryEntry {
   relativePath: string;
   relativeWorkDir: string;
+  ownershipToken: string;
 }
 
 export interface RegisterLibraryOutput {
@@ -63,6 +65,7 @@ const isInside = (root: string, candidate: string): boolean => {
 const publicEntry = ({
   relativePath: _relativePath,
   relativeWorkDir: _relativeWorkDir,
+  ownershipToken: _ownershipToken,
   ...entry
 }: StoredLibraryEntry): LocalLibraryEntry => structuredClone(entry);
 
@@ -139,7 +142,10 @@ export class LocalLibraryService {
         throw new LocalLibraryValidationError('Library output must be inside the dedicated output directory');
       }
       const children = await fs.readdir(workDir, { withFileTypes: true });
-      if (children.some((child) => !child.isDirectory() || (child.name !== 'input' && child.name !== 'output'))) {
+      if (children.some((child) => (
+        child.name !== OWNERSHIP_MARKER
+        && (!child.isDirectory() || (child.name !== 'input' && child.name !== 'output'))
+      ))) {
         throw new LocalLibraryValidationError('Library output requires a dedicated work directory');
       }
       const stat = await fs.stat(outputPath);
@@ -158,6 +164,13 @@ export class LocalLibraryService {
       if (!Number.isFinite(completedAt) || completedAt < 0) {
         throw new LocalLibraryValidationError('Completion time must be a finite timestamp');
       }
+      const managedReal = await fs.realpath(this.managedRoot);
+      const ownershipToken = randomUUID();
+      try {
+        await fs.writeFile(path.join(workDir, OWNERSHIP_MARKER), ownershipToken, 'utf8');
+      } catch {
+        throw new LocalLibraryStorageError('Composer work directory ownership could not be recorded');
+      }
       const entry: StoredLibraryEntry = {
         id: randomUUID(),
         batchId: input.batchId,
@@ -174,8 +187,9 @@ export class LocalLibraryService {
         holds: [],
         // Persist the managed lexical location, not Windows' potentially short-name
         // realpath spelling. Every later access resolves and revalidates symlinks.
-        relativePath: path.relative(this.managedRoot, path.resolve(input.outputPath)),
-        relativeWorkDir: path.relative(this.managedRoot, path.resolve(input.workDir)),
+        relativePath: path.relative(managedReal, outputPath),
+        relativeWorkDir: path.relative(managedReal, workDir),
+        ownershipToken,
       };
       this.entries!.set(entry.id, entry);
       return publicEntry(entry);
@@ -275,7 +289,7 @@ export class LocalLibraryService {
 
   async deleteMany(ids: string[]): Promise<DeleteManyLibraryResult> {
     if (!Array.isArray(ids) || ids.some((id) => typeof id !== 'string' || !IDENTIFIER.test(id))) {
-      throw new Error('Invalid library identifiers');
+      throw new LocalLibraryValidationError('Invalid library identifiers');
     }
     return this.mutate(async () => {
       const result: DeleteManyLibraryResult = { deleted: [], inUse: [], missing: [] };
@@ -378,9 +392,10 @@ export class LocalLibraryService {
   }
 
   private async resolveStoredFile(entry: StoredLibraryEntry): Promise<string | null> {
-    const lexical = path.resolve(this.managedRoot, entry.relativePath);
-    if (!isInside(this.managedRoot, lexical)) return null;
     try {
+      const managedReal = await fs.realpath(this.managedRoot);
+      const lexical = path.resolve(managedReal, entry.relativePath);
+      if (!isInside(managedReal, lexical)) return null;
       const resolved = await this.requireManagedFile(lexical);
       const stat = await fs.stat(resolved);
       return stat.isFile() ? resolved : null;
@@ -390,10 +405,15 @@ export class LocalLibraryService {
   }
 
   private async resolveStoredDirectory(entry: StoredLibraryEntry): Promise<string | null> {
-    const lexical = path.resolve(this.managedRoot, entry.relativeWorkDir);
-    if (!isInside(this.managedRoot, lexical)) return null;
     try {
-      const resolved = await this.requireManagedDirectory(lexical);
+      const managedReal = await fs.realpath(this.managedRoot);
+      const expected = path.resolve(managedReal, entry.relativeWorkDir);
+      if (!isInside(managedReal, expected)) return null;
+      const actual = await fs.realpath(expected);
+      if (path.relative(expected, actual) !== '') return null;
+      const marker = await fs.readFile(path.join(actual, OWNERSHIP_MARKER), 'utf8');
+      if (marker !== entry.ownershipToken) return null;
+      const resolved = await this.requireManagedDirectory(actual);
       return resolved;
     } catch {
       return null;
@@ -442,6 +462,8 @@ export class LocalLibraryService {
       && !path.isAbsolute(entry.relativePath)
       && typeof entry.relativeWorkDir === 'string'
       && !path.isAbsolute(entry.relativeWorkDir)
+      && typeof entry.ownershipToken === 'string'
+      && IDENTIFIER.test(entry.ownershipToken)
       && Array.isArray(entry.holds)
       && entry.holds.every((hold) => typeof hold === 'string' && IDENTIFIER.test(hold));
   };

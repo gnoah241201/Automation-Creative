@@ -226,6 +226,28 @@ test('workDir symlink swaps never delete outside managed storage', async (t) => 
   assert.equal(await fs.readFile(sentinel, 'utf8'), 'safe');
 });
 
+test('workDir junction swaps never delete a sibling managed job', async (t) => {
+  const harness = await createLibraryHarness();
+  const entry = await registerFixture(harness);
+  const siblingWorkDir = path.join(harness.managedRoot, 'jobs', 'sibling-job');
+  const siblingSentinel = path.join(siblingWorkDir, 'must-survive.txt');
+  await fs.mkdir(siblingWorkDir, { recursive: true });
+  await fs.writeFile(siblingSentinel, 'sibling-safe');
+  await fs.rm(harness.workDir, { recursive: true });
+  try {
+    await fs.symlink(siblingWorkDir, harness.workDir, 'junction');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
+      t.skip('Creating junctions requires elevated Windows privileges');
+      return;
+    }
+    throw error;
+  }
+
+  assert.equal(await harness.library.delete(entry.id), true);
+  assert.equal(await fs.readFile(siblingSentinel, 'utf8'), 'sibling-safe');
+});
+
 test('failed persistence rolls back holds and registrations in memory', async () => {
   let writes = 0;
   let failWrite = false;
@@ -355,6 +377,52 @@ test('library routes conceal storage paths and map typed failures', async () => 
   }
 });
 
+test('bulk delete rejects malformed IDs as validation errors', async () => {
+  const harness = await createLibraryHarness();
+  const app = express();
+  app.use('/api/library', buildLibraryRouter(harness.library));
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    await assert.rejects(
+      harness.library.deleteMany(['../outside']),
+      LocalLibraryValidationError,
+    );
+    const response = await fetch(`http://127.0.0.1:${port}/api/library/delete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ['../outside'] }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json() as { error: string }).error, 'ValidationError');
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
+test('download race returns a generic gone response without leaking a managed path', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'library-download-race-'));
+  const missingPath = path.join(root, 'vanished-output.mp4');
+  const service = {
+    resolveUsablePath: async () => ({ entry: entryFixture(), path: missingPath }),
+  } as unknown as LocalLibraryService;
+  const app = express();
+  app.use('/api/library', buildLibraryRouter(service));
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/library/entry-1/download`);
+    assert.equal(response.status, 410);
+    const body = await response.text();
+    assert.equal(body.includes(root), false);
+    assert.match(body, /Library output is unavailable/);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+});
+
 test('queue restart reconciles persisted holds against active Resize jobs', async () => {
   const harness = await createLibraryHarness();
   const entry = await registerFixture(harness);
@@ -396,6 +464,31 @@ test('queue restart reconciles persisted holds against active Resize jobs', asyn
     libraryRoot: path.join(harness.managedRoot, 'composer', 'library'),
   });
   assert.deepEqual((await reloaded.listAll())[0].holds, ['resize-active']);
+});
+
+test('queued Resize cancellation releases its hold and cleans an expired library workDir immediately', async () => {
+  const harness = await createLibraryHarness();
+  const entry = await registerFixture(harness);
+  const queue = new JobQueueService(0, { tempRoot: harness.managedRoot, localLibrary: harness.library });
+  await queue.init();
+  const resizeInputDir = path.join(harness.managedRoot, 'queued-resize', 'input');
+  const foregroundPath = path.join(resizeInputDir, 'foreground.mp4');
+  await fs.mkdir(resizeInputDir, { recursive: true });
+  await fs.writeFile(foregroundPath, 'resize-source');
+  const job = await queue.createJob({
+    inputRatio: '16:9', outputRatio: '9:16', duration: 10, fgPosition: 'right', bgType: 'video',
+    backgroundImageMode: 'clean', blurAmount: 24, logoX: 0, logoY: 0, logoSize: 100,
+    buttonType: 'text', buttonText: 'Play', buttonX: 0, buttonY: 0, buttonSize: 100,
+    naming: { gameName: 'Game', version: 'v1', suffix: 'S1' }, outputFilename: 'resize.mp4',
+  }, { foregroundPath });
+  await harness.library.hold(entry.id, job.id);
+  harness.setNow(entry.expiresAt + 1);
+
+  await queue.cancelJob(job.id);
+
+  assert.deepEqual(await harness.library.listAll(), []);
+  await assert.rejects(fs.access(harness.workDir), /ENOENT/);
+  queue.stopCleanupScheduler();
 });
 
 test('completed final composer jobs register once and previews never enter the library', async () => {
