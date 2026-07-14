@@ -339,6 +339,29 @@ test('batch routes distinguish missing drafts from storage failures', async (t) 
   });
 });
 
+test('render route conceals unexpected draft-store paths as a generic server error', async (t) => {
+  const secret = 'D:\\private\\composer\\draft.json';
+  const drafts = {
+    require: async () => { throw new Error(`EACCES: permission denied, open '${secret}'`); },
+  } as unknown as ComposerDraftStore;
+  const assets = {} as ComposerAssetStore;
+  const renderer = { submit: async () => { throw new Error('renderer must not run'); } } as any;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter(assets, drafts, undefined, renderer));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/composer/batches/batch-1/render`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selectedCellIds: ['o1:h1'] }),
+  });
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body, { error: 'InternalError', message: 'Unable to load composer batch' });
+  assert.doesNotMatch(JSON.stringify(body), /private|draft\.json|EACCES/);
+});
+
 test('batch routes conceal invalid managed batch IDs as not found', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-draft-invalid-id-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

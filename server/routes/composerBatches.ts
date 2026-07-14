@@ -174,13 +174,22 @@ export const buildComposerBatchesRouter = (
 
   if (renderer) {
     router.post('/batches/:batchId/render', express.json(), async (req, res) => {
+      let draft;
       try {
-        const draft = await drafts.require(req.params.batchId);
+        draft = await drafts.require(req.params.batchId);
+      } catch (error) {
+        if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else {
+          console.error('[composerBatches] Draft load failed before render:', error);
+          res.status(500).json({ error: 'InternalError', message: 'Unable to load composer batch' });
+        }
+        return;
+      }
+      try {
         const selectedCellIds = Array.isArray(req.body?.selectedCellIds) ? req.body.selectedCellIds : [];
         res.status(202).json(await renderer.submit(draft, selectedCellIds));
       } catch (error) {
-        if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
-        else if (error instanceof ComposerPartialSubmissionError) res.status(503).json({
+        if (error instanceof ComposerPartialSubmissionError) res.status(503).json({
           error: 'PartialSubmission', message: error.message, createdJobIds: error.createdJobIds,
         });
         else if (error instanceof ComposerStorageError) {
