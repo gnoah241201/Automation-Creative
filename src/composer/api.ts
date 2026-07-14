@@ -31,17 +31,45 @@ export const uploadComposerAsset = (
   kind: ComposerAssetKind,
   file: File,
   signal?: AbortSignal,
-): Promise<ComposerAsset> => {
+  onProgress?: (percent: number) => void,
+): Promise<ComposerAsset> => new Promise((resolve, reject) => {
   const body = new FormData();
   body.append('kind', kind);
   body.append('file', file);
-  return fetch(`${API_BASE}/assets`, {
-    method: 'POST',
-    credentials: 'include',
-    body,
-    signal,
-  }).then(json<ComposerAsset>);
-};
+  const request = new XMLHttpRequest();
+  const abort = () => request.abort();
+  const cleanup = () => signal?.removeEventListener('abort', abort);
+  request.open('POST', `${API_BASE}/assets`);
+  request.withCredentials = true;
+  request.upload.onprogress = (event) => {
+    if (event.lengthComputable) onProgress?.(Math.round((event.loaded / event.total) * 100));
+  };
+  request.onload = () => {
+    cleanup();
+    let payload: (ComposerAsset & { message?: string }) | null = null;
+    try {
+      payload = JSON.parse(request.responseText) as ComposerAsset & { message?: string };
+    } catch {
+      // A non-JSON response is surfaced as plain text below.
+    }
+    if (request.status >= 200 && request.status < 300 && payload) resolve(payload);
+    else reject(new Error(payload?.message || request.responseText || `Request failed with ${request.status}`));
+  };
+  request.onerror = () => {
+    cleanup();
+    reject(new Error('Upload failed because the server could not be reached'));
+  };
+  request.onabort = () => {
+    cleanup();
+    reject(new DOMException('Upload cancelled', 'AbortError'));
+  };
+  if (signal?.aborted) {
+    reject(new DOMException('Upload cancelled', 'AbortError'));
+    return;
+  }
+  signal?.addEventListener('abort', abort, { once: true });
+  request.send(body);
+});
 
 export const saveComposerCrop = (
   assetId: string,
