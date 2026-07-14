@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const tempRoot = path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
+export const managedRenderRoot = tempRoot;
 
 /**
  * Retention policy configuration
@@ -98,19 +99,40 @@ export const isJobExpired = (
   status: 'completed' | 'failed',
   finishedAt?: number,
   downloadedAt?: number,
+  now = Date.now(),
 ): boolean => {
   const expiryTime = getExpiryTime(status, finishedAt, downloadedAt);
   if (!expiryTime) {
     // No finishedAt means it's still running or old data - treat as not expired for safety
     return false;
   }
-  const expired = Date.now() > expiryTime;
+  const expired = now > expiryTime;
 
   if (expired) {
     console.log(`[fileStore] Job ${jobId} (${status}) expired at ${new Date(expiryTime).toISOString()}`);
   }
 
   return expired;
+};
+
+type RetainedJob = {
+  id: string;
+  kind?: 'resize' | 'trim' | 'compose' | 'compose-preview';
+  status: string;
+  finishedAt?: number;
+  downloadedAt?: number;
+};
+
+/** Composer output downloads never shorten their 24-hour completion retention. */
+export const isManagedJobExpired = (job: RetainedJob, now = Date.now()): boolean => {
+  if (job.status !== 'completed' && job.status !== 'failed') return false;
+  return isJobExpired(
+    job.id,
+    job.status,
+    job.finishedAt,
+    job.kind === 'compose' || job.kind === 'compose-preview' ? undefined : job.downloadedAt,
+    now,
+  );
 };
 
 /**
@@ -148,13 +170,16 @@ export const getRetentionDescription = (
  * @returns Number of jobs cleaned up
  */
 export const cleanupExpiredJobs = async (
-  jobs: Array<{ id: string; status: string; finishedAt?: number; downloadedAt?: number; files: { workDir: string } }>
+  jobs: Array<RetainedJob & { files: { workDir: string } }>
 ): Promise<number> => {
   let cleaned = 0;
 
   for (const job of jobs) {
+    // Final composer outputs are owned by LocalLibraryService so active Resize
+    // holds can protect them. The legacy queue retention must never race it.
+    if (job.kind === 'compose' && job.status === 'completed') continue;
     if ((job.status === 'completed' || job.status === 'failed') && job.finishedAt) {
-      if (isJobExpired(job.id, job.status, job.finishedAt, job.downloadedAt)) {
+      if (isManagedJobExpired(job)) {
         await cleanupJobByWorkDir(job.files.workDir, 'expired', job.id);
         cleaned++;
       }

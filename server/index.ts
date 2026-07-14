@@ -5,6 +5,7 @@ import { getEncoderConfig, getFfmpegPath } from './services/encoderConfig';
 import { setEncoder } from './services/renderRunner';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import fs from 'node:fs';
+import path from 'node:path';
 import crypto from 'node:crypto';
 import { buildComposerAssetsRouter } from './routes/composerAssets';
 import { ComposerAssetStore } from './services/composerAssetStore';
@@ -12,6 +13,9 @@ import { composerRoot } from './services/composerPaths';
 import { ComposerDraftStore } from './services/composerDraftStore';
 import { buildComposerBatchesRouter } from './routes/composerBatches';
 import { ComposerPreviewService } from './services/composerPreviewService';
+import { buildLibraryRouter } from './routes/library';
+import { DiskCapacityGuard, LocalLibraryService } from './services/localLibrary';
+import { managedRenderRoot } from './services/fileStore';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -241,7 +245,14 @@ setEncoder(encoderConfig.effectiveEncoder);
 
 const start = async () => {
   const app = express();
-  const queue = new JobQueueService(maxConcurrentJobs);
+  const localLibrary = new LocalLibraryService({
+    managedRoot: managedRenderRoot,
+    libraryRoot: path.join(composerRoot, 'library'),
+  });
+  const queue = new JobQueueService(maxConcurrentJobs, {
+    localLibrary,
+    diskCapacityGuard: new DiskCapacityGuard(),
+  });
   const composerAssetStore = new ComposerAssetStore(composerRoot);
   const composerDraftStore = new ComposerDraftStore(composerRoot);
   const composerPreviewService = new ComposerPreviewService({
@@ -377,6 +388,7 @@ const start = async () => {
     composerDraftStore,
     composerPreviewService,
   ));
+  app.use('/api/library', requireAuth, buildLibraryRouter(localLibrary));
 
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);

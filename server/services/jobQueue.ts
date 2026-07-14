@@ -4,11 +4,12 @@ import fs from 'node:fs/promises';
 import { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { RenderSpec } from '../../shared/render-contract';
 import { ComposerRenderSpec } from '../../shared/composer-contract';
-import { ensureTempRoot, cleanupJobByWorkDir, cleanupExpiredJobs, isJobExpired } from './fileStore';
+import { ensureTempRoot, cleanupJobByWorkDir, cleanupExpiredJobs, isManagedJobExpired } from './fileStore';
 import { runRenderJob, runTrimJob, RenderProgress, determineProgressMode } from './renderRunner';
 import { ComposerJobRecord, JobFiles, NativeJobRecord, RenderJobRecord } from '../types/renderJob';
 import { runComposerJob } from './composerRunner';
 import { JobStore } from './jobStore';
+import { DiskCapacityGuard, LocalLibraryService } from './localLibrary.ts';
 import {
   activeJobs,
   cancelledJobs,
@@ -59,6 +60,8 @@ type QueueDeps = {
   runRenderJob?: typeof runRenderJob;
   runComposerJob?: typeof runComposerJob;
   determineProgressMode?: typeof determineProgressMode;
+  localLibrary?: Pick<LocalLibraryService, 'registerFromCompletedJob' | 'cleanupExpired'>;
+  diskCapacityGuard?: Pick<DiskCapacityGuard, 'requireCapacity'>;
 };
 
 export class JobQueueService {
@@ -72,6 +75,8 @@ export class JobQueueService {
   private readonly runRenderJobImpl: typeof runRenderJob;
   private readonly runComposerJobImpl: typeof runComposerJob;
   private readonly determineProgressModeImpl: typeof determineProgressMode;
+  private readonly localLibrary?: QueueDeps['localLibrary'];
+  private readonly diskCapacityGuard?: QueueDeps['diskCapacityGuard'];
 
   constructor(private readonly maxConcurrentJobs: number, deps: QueueDeps = {}) {
     this.tempRoot = deps.tempRoot ?? path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
@@ -79,6 +84,8 @@ export class JobQueueService {
     this.runRenderJobImpl = deps.runRenderJob ?? runRenderJob;
     this.runComposerJobImpl = deps.runComposerJob ?? runComposerJob;
     this.determineProgressModeImpl = deps.determineProgressMode ?? determineProgressMode;
+    this.localLibrary = deps.localLibrary;
+    this.diskCapacityGuard = deps.diskCapacityGuard;
   }
 
   async init() {
@@ -203,12 +210,15 @@ export class JobQueueService {
 
         // Perform cleanup (fileStore deletes expired workDirs)
         await cleanupExpiredJobs(jobsToCheck);
+        await this.localLibrary?.cleanupExpired();
 
         // Remove expired jobs from memory and persist
         const expiredIds = jobsToCheck
           .filter((job) => {
-            const status = job.status as 'completed' | 'failed';
-            return isJobExpired(job.id, status, job.finishedAt, job.downloadedAt);
+            return isManagedJobExpired({
+              ...job,
+              status: job.status as 'completed' | 'failed',
+            });
           })
           .map((job) => job.id);
 
@@ -515,6 +525,16 @@ export class JobQueueService {
       }
 
       if (isComposerJob(job)) {
+        if (this.diskCapacityGuard) {
+          const duration = job.spec.trimEnd - job.spec.trimStart;
+          const bitrate = job.kind === 'compose-preview'
+            ? 900_000 + 192_000
+            : 6_000_000 + 192_000;
+          await this.diskCapacityGuard.requireCapacity(
+            path.dirname(job.files.outputPath),
+            Math.ceil(duration * bitrate / 8),
+          );
+        }
         const result = this.runComposerJobImpl(job, updateProgress);
         child = result.child;
         completion = result.completion;
@@ -550,6 +570,10 @@ export class JobQueueService {
         // CRITICAL: Terminal state must be consistent
         // Completed is always determinate (100%), even if started as indeterminate
         job.progressMode = 'determinate';
+        job.finishedAt = Date.now();
+        if (job.kind === 'compose') {
+          await this.localLibrary?.registerFromCompletedJob(job);
+        }
         // Note: completed jobs retain their workDir for download (handled by retention policy)
         jobsCompleted.inc({ status: 'completed' });
       }
@@ -567,7 +591,7 @@ export class JobQueueService {
         failedJobs.inc();
       }
     } finally {
-      job.finishedAt = Date.now();
+      job.finishedAt ??= Date.now();
       this.activeProcesses.delete(job.id);
       this.activeCount = Math.max(0, this.activeCount - 1);
       
