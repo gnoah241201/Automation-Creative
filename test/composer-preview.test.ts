@@ -85,6 +85,10 @@ test('preview cache key changes for every render-affecting input and is canonica
     { ...base, originalCrop: { x: 0.1, y: 0, width: 0.9, height: 1 } },
     { ...base, hookCrop: { x: 0.1, y: 0, width: 0.9, height: 1 } },
   ]) assert.notEqual(baseKey, getPreviewCacheKey(changed));
+  assert.notEqual(
+    getPreviewCacheKey({ ...base, insertAt: 2.0001 }),
+    getPreviewCacheKey({ ...base, insertAt: 2.0004 }),
+  );
 });
 
 test('a completed non-expired preview with a real output is a cache hit', async (t) => {
@@ -140,6 +144,81 @@ test('expired metadata is not served as a cache hit', async (t) => {
   const second = await service.requestPreview({ ...harness.request, draftExpiresAt: 2_000 });
   assert.equal(second.cacheHit, false);
   assert.equal(harness.queue.createComposerJobCalls, 2);
+});
+
+test('expired active and cancelling attempts are replaced without reusing their work directories', async (t) => {
+  let now = 1_000;
+  const harness = await createHarness(now);
+  t.after(() => fs.rm(harness.root, { recursive: true, force: true }));
+  const service = new ComposerPreviewService({
+    root: harness.root, assets: harness.assets, queue: harness.queue, now: () => now,
+  });
+  const first = await service.requestPreview({ ...harness.request, draftExpiresAt: 1_100 });
+  const firstJob = harness.queue.getJob(first.jobId!)!;
+  now = 1_101;
+  const second = await service.requestPreview({ ...harness.request, draftExpiresAt: 2_000 });
+  const secondJob = harness.queue.getJob(second.jobId!)!;
+  assert.notEqual(secondJob.files.workDir, firstJob.files.workDir);
+  assert.equal(await fs.readFile(firstJob.files.foregroundPath, 'utf8'), 'original-1');
+  secondJob.status = 'cancelling';
+  const third = await service.requestPreview({ ...harness.request, draftExpiresAt: 3_000 });
+  const thirdJob = harness.queue.getJob(third.jobId!)!;
+  assert.notEqual(thirdJob.files.workDir, secondJob.files.workDir);
+  assert.equal(await fs.readFile(secondJob.files.backgroundVideoPath!, 'utf8'), 'hook-1');
+  assert.equal(harness.queue.createComposerJobCalls, 3);
+});
+
+test('completed cross-batch cache reuse extends expiry and records lifecycle references', async (t) => {
+  let now = 1_000;
+  const harness = await createHarness(now);
+  t.after(() => fs.rm(harness.root, { recursive: true, force: true }));
+  const service = new ComposerPreviewService({
+    root: harness.root, assets: harness.assets, queue: harness.queue, now: () => now,
+  });
+  const first = await service.requestPreview({ ...harness.request, draftExpiresAt: 1_100 });
+  const job = harness.queue.getJob(first.jobId!)!;
+  await fs.writeFile(job.files.outputPath, 'preview');
+  job.status = 'completed';
+  now = 1_200;
+  const reused = await service.requestPreview({
+    ...harness.request, batchId: 'batch-2', draftExpiresAt: 3_000,
+  });
+  assert.equal(reused.jobId, first.jobId);
+  await service.requestPreview({
+    ...harness.request, batchId: 'batch-1', draftExpiresAt: 2_500,
+  });
+  now = 2_000;
+  assert.ok(await service.getUsable(first.previewId));
+  const metadata = JSON.parse(await fs.readFile(
+    path.join(harness.root, 'previews', first.previewId, 'metadata.json'), 'utf8',
+  )) as { expiresAt: number; batchIds: string[] };
+  assert.equal(metadata.expiresAt, 3_000);
+  assert.deepEqual(metadata.batchIds.sort(), ['batch-1', 'batch-2']);
+});
+
+test('concurrent pending reuse keeps the longest expiry and all batch references', async (t) => {
+  let now = 1_000;
+  const harness = await createHarness(now);
+  t.after(() => fs.rm(harness.root, { recursive: true, force: true }));
+  const service = new ComposerPreviewService({
+    root: harness.root, assets: harness.assets, queue: harness.queue, now: () => now,
+  });
+  const [first, second] = await Promise.all([
+    service.requestPreview({ ...harness.request, batchId: 'batch-1', draftExpiresAt: 1_100 }),
+    service.requestPreview({ ...harness.request, batchId: 'batch-2', draftExpiresAt: 4_000 }),
+  ]);
+  assert.equal(first.jobId, second.jobId);
+  const job = harness.queue.getJob(first.jobId!)!;
+  await fs.writeFile(job.files.outputPath, 'preview');
+  job.status = 'completed';
+  now = 3_000;
+  assert.ok(await service.getUsable(first.previewId));
+  const metadata = JSON.parse(await fs.readFile(
+    path.join(harness.root, 'previews', first.previewId, 'metadata.json'), 'utf8',
+  )) as { expiresAt: number; batchIds: string[] };
+  assert.equal(metadata.expiresAt, 4_000);
+  assert.deepEqual(metadata.batchIds.sort(), ['batch-1', 'batch-2']);
+  assert.equal(harness.queue.createComposerJobCalls, 1);
 });
 
 test('missing completed output and failed jobs enqueue a replacement', async (t) => {
