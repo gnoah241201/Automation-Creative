@@ -27,7 +27,7 @@ const mediaAsset = (id: string, kind: 'original' | 'hook', cropped = false): Com
   lastAccessedAt: 1,
 });
 
-test('app shell exposes ordinary authenticated navigation without an incomplete tab contract', () => {
+test('app shell exposes resize, composer, and local library navigation', () => {
   const html = renderToStaticMarkup(
     <AppShell activeTab="composer" onTabChange={() => {}}><p>Workspace</p></AppShell>,
   );
@@ -35,7 +35,7 @@ test('app shell exposes ordinary authenticated navigation without an incomplete 
   assert.match(html, /<nav[^>]+aria-label="Main tools"/);
   assert.match(html, /aria-current="page"[^>]*>Hook Composer/);
   assert.doesNotMatch(html, /role="tab(?:list|panel)?"/);
-  assert.doesNotMatch(html, /app-tab-library|Local Library/);
+  assert.match(html, />Local Library</);
 });
 
 test('hook composer heading uses a readable multiplication sign', () => {

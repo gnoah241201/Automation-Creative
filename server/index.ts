@@ -388,7 +388,7 @@ const start = async () => {
 
   app.get(['/metrics', '/api/metrics'], serveMetrics);
 
-  app.use('/api/jobs', requireAuth, buildJobsRouter(queue));
+  app.use('/api/jobs', requireAuth, buildJobsRouter(queue, { library: localLibrary }));
   app.use('/api/composer', requireAuth, buildComposerAssetsRouter(composerAssetStore));
   app.use('/api/composer', requireAuth, buildComposerBatchesRouter(
     composerAssetStore,

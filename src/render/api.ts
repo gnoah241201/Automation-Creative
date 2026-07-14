@@ -9,6 +9,9 @@ import {
   UploadSessionResponse,
 } from '../../shared/render-contract';
 
+export { createLibraryUploadSessions } from '../library/api';
+export type { LibraryUploadSession } from '../library/api';
+
 const API_BASE = '/api/jobs';
 const AUTH_BASE = '/api/auth';
 

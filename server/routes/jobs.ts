@@ -8,6 +8,11 @@ import { RenderSpec } from '../../shared/render-contract';
 import { createJobDirs, removeWorkDir, isJobExpired, getRetentionDescription } from '../services/fileStore';
 import { validateRenderSpec } from '../services/validation';
 import { uploadSize } from '../metrics.ts';
+import {
+  LocalLibraryNotFoundError,
+  LocalLibraryService,
+  LocalLibraryValidationError,
+} from '../services/localLibrary.ts';
 
 // Extend Express Request to track temp directories
 declare module 'express-serve-static-core' {
@@ -78,8 +83,88 @@ async function cleanupTempDir(tempWorkDir: string | undefined): Promise<void> {
   await removeWorkDir(tempWorkDir).catch(() => {});
 }
 
-export const buildJobsRouter = (queue: JobQueueService) => {
+export const buildJobsRouter = (
+  queue: JobQueueService,
+  deps?: { library: LocalLibraryService },
+) => {
   const router = express.Router();
+
+  router.post('/uploads/from-library', express.json(), async (req, res) => {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    if (
+      !deps?.library
+      || ids.length < 1
+      || ids.length > 10
+      || ids.some((id: unknown) => typeof id !== 'string')
+      || new Set(ids).size !== ids.length
+    ) {
+      res.status(400).json({ error: 'ValidationError', message: 'Select 1-10 library outputs' });
+      return;
+    }
+
+    const staged: UploadSession[] = [];
+    const held: Array<{ id: string; referenceId: string }> = [];
+    try {
+      for (const id of ids as string[]) {
+        const uploadId = randomUUID();
+        try {
+          await deps.library.hold(id, uploadId);
+          held.push({ id, referenceId: uploadId });
+          const resolved = await deps.library.resolveUsablePath(id);
+          if (!resolved) throw new LocalLibraryNotFoundError('Library output is unavailable');
+          const dirs = await createJobDirs(`library-${uploadId}`);
+          const foregroundPath = path.join(dirs.inputDir, path.basename(resolved.entry.filename));
+          try {
+            await fs.copyFile(resolved.path, foregroundPath);
+          } catch (error) {
+            await cleanupTempDir(dirs.workDir);
+            throw error;
+          }
+          staged.push({
+            id: uploadId,
+            workDir: dirs.workDir,
+            foregroundPath,
+            createdAt: Date.now(),
+            lastAccessedAt: Date.now(),
+          });
+        } finally {
+          const holdIndex = held.findIndex((item) => item.referenceId === uploadId);
+          if (holdIndex >= 0) {
+            await deps.library.release(id, uploadId);
+            held.splice(holdIndex, 1);
+          }
+        }
+      }
+
+      for (const session of staged) uploadSessions.set(session.id, session);
+      res.status(201).json({
+        sessions: staged.map((session, index) => ({
+          libraryId: ids[index],
+          uploadId: session.id,
+          filename: path.basename(session.foregroundPath),
+          expiresInMs: UPLOAD_SESSION_TTL_MS,
+        })),
+      });
+    } catch (error) {
+      for (const hold of held) {
+        await deps.library.release(hold.id, hold.referenceId).catch(() => {});
+      }
+      for (const session of staged) {
+        uploadSessions.delete(session.id);
+        await cleanupTempDir(session.workDir);
+      }
+      if (error instanceof LocalLibraryValidationError) {
+        res.status(400).json({ error: 'ValidationError', message: 'Invalid library output selection' });
+        return;
+      }
+      if (error instanceof LocalLibraryNotFoundError) {
+        res.status(410).json({ error: 'Expired', message: 'A selected library output is unavailable' });
+        return;
+      }
+      console.error('[jobs] Failed to create library upload sessions:', error);
+      res.status(500).json({ error: 'InternalError', message: 'Failed to prepare selected library outputs' });
+    }
+  });
 
   router.post(
     '/uploads',
@@ -204,17 +289,21 @@ export const buildJobsRouter = (queue: JobQueueService) => {
           await fs.copyFile(session.foregroundPath, stagedForegroundPath);
           foregroundPath = path.resolve(stagedForegroundPath);
 
-          if (session.backgroundVideoPath) {
-            const stagedBackgroundVideoPath = path.join(dirs.inputDir, path.basename(session.backgroundVideoPath));
-            await fs.copyFile(session.backgroundVideoPath, stagedBackgroundVideoPath);
+          const sourceBackgroundVideoPath = session.backgroundVideoPath
+            ?? (backgroundVideoFromRequest ? path.resolve(backgroundVideoFromRequest.path) : undefined);
+          if (sourceBackgroundVideoPath) {
+            const stagedBackgroundVideoPath = path.join(dirs.inputDir, path.basename(sourceBackgroundVideoPath));
+            await fs.copyFile(sourceBackgroundVideoPath, stagedBackgroundVideoPath);
             backgroundVideoPath = path.resolve(stagedBackgroundVideoPath);
           } else {
             backgroundVideoPath = undefined;
           }
 
-          if (session.backgroundImagePath) {
-            const stagedBackgroundImagePath = path.join(dirs.inputDir, path.basename(session.backgroundImagePath));
-            await fs.copyFile(session.backgroundImagePath, stagedBackgroundImagePath);
+          const sourceBackgroundImagePath = session.backgroundImagePath
+            ?? (backgroundImageFromRequest ? path.resolve(backgroundImageFromRequest.path) : undefined);
+          if (sourceBackgroundImagePath) {
+            const stagedBackgroundImagePath = path.join(dirs.inputDir, path.basename(sourceBackgroundImagePath));
+            await fs.copyFile(sourceBackgroundImagePath, stagedBackgroundImagePath);
             backgroundImagePath = path.resolve(stagedBackgroundImagePath);
           } else {
             backgroundImagePath = undefined;

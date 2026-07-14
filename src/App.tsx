@@ -22,6 +22,10 @@ import { createDefaultButtonState, createDefaultLogoState } from './render/reset
 import { useJobPolling } from './render/useJobPolling';
 import { AppShell, AppTab } from './app/AppShell';
 import { HookComposerPage } from './composer/HookComposerPage';
+import { LocalLibraryPage } from './library/LocalLibraryPage';
+import { ResizeBatchPanel } from './render/ResizeBatchPanel';
+import { ResizeBatchSource } from './render/librarySources';
+import { submitResizeBatch } from './render/submitResizeBatch';
 import {
   getAnchorCenteredCropWindow,
   getOutputFrameDimensions,
@@ -495,6 +499,8 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authUsername, setAuthUsername] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('resize');
+  const [resizeBatchSources, setResizeBatchSources] = useState<ResizeBatchSource[]>([]);
+  const [isBatchSubmitting, setIsBatchSubmitting] = useState(false);
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -686,7 +692,7 @@ export default function App() {
   };
 
   const handleDownload = async () => {
-    if (!fgFile) {
+    if (!fgFile && resizeBatchSources.length === 0) {
       return;
     }
 
@@ -695,6 +701,97 @@ export default function App() {
     // Parse custom bitrate (kbps). Empty or invalid → undefined (use default)
     const parsedBitrate = customBitrate.trim() ? parseInt(customBitrate.trim(), 10) : undefined;
     const bitrate = parsedBitrate && parsedBitrate > 0 ? parsedBitrate : undefined;
+
+    if (resizeBatchSources.length > 0) {
+      const missingPrimary = selectedOutputs.find((output) => output.trimFrom
+        && !selectedOutputs.some((candidate) => candidate.id === output.trimFrom));
+      if (missingPrimary) {
+        window.alert(`Select ${missingPrimary.trimFrom} before its trim variant`);
+        return;
+      }
+      setIsBatchSubmitting(true);
+      setIsDownloadModalOpen(false);
+      setIsSidebarOpen(true);
+      const addPending = (source: ResizeBatchSource, output: OutputConfig, spec: RenderSpec) => {
+        const localId = Math.random().toString(36).slice(2);
+        setJobs((current) => [...current, {
+          id: localId,
+          outputId: `${source.localId}:${output.id}`,
+          label: `${source.filename} · ${output.label}`,
+          filename: spec.outputFilename,
+          spec,
+          status: 'submitting',
+          progress: 0,
+        }]);
+        return localId;
+      };
+      try {
+        await submitResizeBatch({
+          sources: resizeBatchSources,
+          outputs: selectedOutputs,
+          config: {
+            inputRatio: '9:16', bitrate, fgPosition, bgType, backgroundImageMode, blurAmount,
+            logoX, logoY, logoSize, buttonType, buttonText, buttonX, buttonY, buttonSize,
+          },
+          createJob: async ({ source, output, spec }) => {
+            const localId = addPending(source, output, spec);
+            try {
+              const overlayPng = await createOverlayPng(spec, {
+                logoUrl: logo, logoFile, buttonImageUrl: buttonImage, buttonImageFile,
+              });
+              const result = await createRenderJob({
+                spec,
+                uploadId: source.uploadId,
+                backgroundVideoFile: bgType === 'video' ? bgVideoFile : null,
+                backgroundImageFile: bgType === 'image' ? bgImageFile : null,
+                overlayPng,
+              });
+              setJobs((current) => current.map((job) => job.id === localId
+                ? { ...job, serverJobId: result.jobId, status: result.status, progress: 0 }
+                : job));
+              return result;
+            } catch (cause) {
+              setJobs((current) => current.map((job) => job.id === localId
+                ? { ...job, status: 'failed', error: cause instanceof Error ? cause.message : 'Failed to submit job' }
+                : job));
+              throw cause;
+            }
+          },
+          waitForPrimary: async (primary) => {
+            for (let attempt = 0; attempt < 600; attempt += 1) {
+              const state = await getRenderJob(primary.jobId);
+              if (state.status === 'completed') return primary.jobId;
+              if (state.status === 'failed' || state.status === 'cancelled') {
+                throw new Error('Source render failed before trim');
+              }
+              await new Promise((resolve) => window.setTimeout(resolve, 1000));
+            }
+            throw new Error('Source render timed out before trim');
+          },
+          createTrimJob: async ({ source, output, spec, sourceJobId }) => {
+            const localId = addPending(source, output, spec);
+            try {
+              const result = await createTrimJob({ spec, sourceJobId });
+              setJobs((current) => current.map((job) => job.id === localId
+                ? { ...job, serverJobId: result.jobId, status: result.status, progress: 0 }
+                : job));
+              return result;
+            } catch (cause) {
+              setJobs((current) => current.map((job) => job.id === localId
+                ? { ...job, status: 'failed', error: cause instanceof Error ? cause.message : 'Failed to submit trim job' }
+                : job));
+              throw cause;
+            }
+          },
+        });
+        setResizeBatchSources([]);
+      } catch (cause) {
+        window.alert(cause instanceof Error ? cause.message : 'Batch submission failed');
+      } finally {
+        setIsBatchSubmitting(false);
+      }
+      return;
+    }
 
     // Separate primary renders from trim variants
     const primaryOutputs = selectedOutputs.filter(o => !o.trimFrom);
@@ -1443,6 +1540,13 @@ export default function App() {
     <AppShell activeTab={activeTab} onTabChange={setActiveTab}>
       {activeTab === 'composer' ? (
         <HookComposerPage />
+      ) : activeTab === 'library' ? (
+        <LocalLibraryPage onSendToResize={(sources) => {
+          setResizeBatchSources(sources);
+          setInputRatio('9:16');
+          setFgDuration(Math.max(...sources.map((source) => source.duration)));
+          setActiveTab('resize');
+        }} />
       ) : (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 p-4 md:p-8 font-sans selection:bg-blue-500/30">
       <div className="w-full max-w-[1800px] mx-auto grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(420px,0.85fr)] gap-8 xl:gap-10 2xl:gap-14">
@@ -1458,6 +1562,14 @@ export default function App() {
             </p>
           </div>
 
+          {resizeBatchSources.length > 0 && (
+            <ResizeBatchPanel
+              sources={resizeBatchSources}
+              onRemove={(localId) => setResizeBatchSources((current) => current.filter((source) => source.localId !== localId))}
+              onClear={() => setResizeBatchSources([])}
+            />
+          )}
+
           {/* Input Format Control */}
           <div className="space-y-3">
             <div className="text-xs font-semibold text-neutral-400 uppercase tracking-wider">
@@ -1472,6 +1584,7 @@ export default function App() {
                   <button
                     key={ratio}
                     onClick={() => { setInputRatio(ratio); }}
+                    disabled={resizeBatchSources.length > 0}
                     className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${inputRatio === ratio ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
                       }`}
                   >
@@ -1881,7 +1994,7 @@ export default function App() {
               </button>
               <button
                 onClick={handleOpenDownloadModal}
-                disabled={!fgVideo}
+                disabled={!fgVideo && resizeBatchSources.length === 0}
                 className="px-4 py-2 flex items-center gap-2 text-sm font-medium bg-blue-600 text-white rounded-full hover:bg-blue-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-blue-900/20"
               >
                 <Download className="w-4 h-4" />
@@ -1970,7 +2083,7 @@ export default function App() {
             </div>
             <div className="flex gap-3">
               <button onClick={() => setIsDownloadModalOpen(false)} className="flex-1 py-2.5 rounded-xl font-medium text-neutral-300 bg-neutral-800 hover:bg-neutral-700">Cancel</button>
-              <button onClick={handleDownload} disabled={selectedDownloads.length === 0} className="flex-1 py-2.5 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 flex items-center justify-center gap-2">
+              <button onClick={handleDownload} disabled={selectedDownloads.length === 0 || isBatchSubmitting} className="flex-1 py-2.5 rounded-xl font-medium text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-50 flex items-center justify-center gap-2">
                 <Download className="w-4 h-4" /> Add Queue ({selectedDownloads.length})
               </button>
             </div>

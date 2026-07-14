@@ -8,9 +8,10 @@ interface AppShellProps {
   children: React.ReactNode;
 }
 
-const visibleTabs: Array<{ id: Extract<AppTab, 'resize' | 'composer'>; label: string }> = [
+const visibleTabs: Array<{ id: AppTab; label: string }> = [
   { id: 'resize', label: 'Resize' },
   { id: 'composer', label: 'Hook Composer' },
+  { id: 'library', label: 'Local Library' },
 ];
 
 export function AppShell({ activeTab, onTabChange, children }: AppShellProps) {

@@ -1,0 +1,51 @@
+import { ApiError } from '../../shared/render-contract.ts';
+import { LocalLibraryEntry } from '../../shared/composer-contract.ts';
+
+export interface LibraryUploadSession {
+  libraryId: string;
+  uploadId: string;
+  filename: string;
+  expiresInMs: number;
+}
+
+const parseJson = async <T,>(response: Response): Promise<T> => {
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as ApiError | null;
+    throw new Error(body?.message ?? `Request failed with status ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+};
+
+export const listLibraryEntries = async (): Promise<{ entries: LocalLibraryEntry[] }> => parseJson(
+  await fetch('/api/library', { credentials: 'include' }),
+);
+
+export const createLibraryUploadSessions = async (
+  ids: string[],
+): Promise<{ sessions: LibraryUploadSession[] }> => parseJson(await fetch('/api/jobs/uploads/from-library', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ids }),
+}));
+
+export const deleteLibraryEntry = async (id: string): Promise<void> => {
+  const response = await fetch(`/api/library/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    credentials: 'include',
+  });
+  if (!response.ok) await parseJson(response);
+};
+
+export const deleteLibraryEntries = async (ids: string[]): Promise<{
+  deleted: string[];
+  inUse: string[];
+  missing: string[];
+}> => parseJson(await fetch('/api/library/delete', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ids }),
+}));
+
+export const libraryDownloadUrl = (id: string): string => `/api/library/${encodeURIComponent(id)}/download`;
