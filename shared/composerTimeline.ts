@@ -25,6 +25,17 @@ export const groupHooksByDuration = (hooks: ComposerAsset[]): HookDurationGroup[
 
 export const getCombinedDuration = (originalDuration: number, hookDuration: number) => originalDuration + hookDuration;
 
+export const estimateComposerOutputBytes = (
+  durations: number[], videoBitsPerSecond = 6_000_000, audioBitsPerSecond = 192_000,
+): number => {
+  if (durations.some((duration) => !Number.isFinite(duration) || duration <= 0)) {
+    throw new Error('Estimated output durations must be finite positive numbers');
+  }
+  const bytes = durations.reduce((total, duration) => total + Math.ceil(duration * (videoBitsPerSecond + audioBitsPerSecond) / 8), 0);
+  if (!Number.isSafeInteger(bytes)) throw new Error('Estimated output size exceeds the safe integer range');
+  return bytes;
+};
+
 export const validateComposerVariant = (
   config: ComposerVariantConfig, originalDuration: number, maxHookDuration: number,
 ): { valid: boolean; message?: string } => {

@@ -6,6 +6,7 @@ import {
 import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
 import { validateComposerConfiguration } from '../services/composerValidation.ts';
 import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
+import { ComposerBatchRenderer, ComposerPartialSubmissionError } from '../services/composerBatchRenderer.ts';
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
 
@@ -21,6 +22,7 @@ export const buildComposerBatchesRouter = (
   assets: ComposerAssetStore,
   drafts: ComposerDraftStore,
   previews?: ComposerPreviewService,
+  renderer?: ComposerBatchRenderer,
 ) => {
   const router = express.Router();
 
@@ -167,5 +169,56 @@ export const buildComposerBatchesRouter = (
     });
   }
 
+  if (renderer) {
+    router.post('/batches/:batchId/render', express.json(), async (req, res) => {
+      try {
+        const draft = await drafts.require(req.params.batchId);
+        const selectedCellIds = Array.isArray(req.body?.selectedCellIds) ? req.body.selectedCellIds : [];
+        res.status(202).json(await renderer.submit(draft, selectedCellIds));
+      } catch (error) {
+        if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else if (error instanceof ComposerPartialSubmissionError) res.status(503).json({
+          error: 'PartialSubmission', message: error.message, createdJobIds: error.createdJobIds,
+        });
+        else res.status(400).json({ error: 'InvalidBatch', message: toMessage(error) });
+      }
+    });
+
+    router.get('/batches/:batchId/jobs', async (req, res) => {
+      try {
+        await drafts.require(req.params.batchId);
+        res.json({ batchId: req.params.batchId, jobs: renderer.listBatchJobs(req.params.batchId) });
+      } catch (error) {
+        if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else sendInternalError(res, 'Unable to list composer jobs');
+      }
+    });
+
+    router.post('/batches/:batchId/jobs/:jobId/retry', async (req, res) => {
+      try {
+        const job = await renderer.retry(req.params.batchId, req.params.jobId);
+        res.status(202).json({ batchId: req.params.batchId, ...jobResponseForRoute(job) });
+      } catch (error) {
+        const message = toMessage(error);
+        res.status(message.includes('not found') ? 404 : message.includes('failed composer') ? 409 : 400)
+          .json({ error: 'InvalidRetry', message });
+      }
+    });
+
+    router.delete('/batches/:batchId/jobs', async (req, res) => {
+      try {
+        await drafts.require(req.params.batchId);
+        res.json(await renderer.cancelBatch(req.params.batchId));
+      } catch (error) {
+        if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else sendInternalError(res, 'Unable to cancel composer jobs');
+      }
+    });
+  }
+
   return router;
 };
+
+const jobResponseForRoute = (job: { id: string; status: string; progress: number; spec: { outputFilename: string } }) => ({
+  jobId: job.id, status: job.status, progress: job.progress, outputFilename: job.spec.outputFilename,
+});

@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
-import { ComposerAsset, ComposerCrop, ComposerVariantConfig } from '../../shared/composer-contract.ts';
+import { ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig } from '../../shared/composer-contract.ts';
+import { deriveComposerMatrix, estimateComposerOutputBytes } from '../../shared/composerTimeline.ts';
 import {
   createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getExactPreviewStatus, requestExactPreview,
-  saveComposerConfiguration, saveComposerCrop,
+  saveComposerConfiguration, saveComposerCrop, renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
 } from './api.ts';
 import { ComposerPreview } from './ComposerPreview.tsx';
 import { ComposerTimeline } from './ComposerTimeline.tsx';
@@ -11,6 +12,8 @@ import { CropEditor } from './CropEditor.tsx';
 import { MediaPanel } from './MediaPanel.tsx';
 import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets.ts';
 import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
+import { ReviewMatrix } from './ReviewMatrix.tsx';
+import { useJobPolling } from '../render/useJobPolling.ts';
 
 const stages: Array<{ id: ComposerStage; step: number; label: string; description: string }> = [
   { id: 'sources', step: 1, label: 'Sources', description: 'Choose original videos and hooks' },
@@ -43,11 +46,15 @@ export function HookComposerPage() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string>();
   const [exactPreview, setExactPreview] = useState<{ url?: string; status?: string; error?: string }>({});
+  const [renderJobs, setRenderJobs] = useState<ComposerBatchJob[]>([]);
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState<string>();
   const sourceAssetsRef = useRef<ComposerAsset[]>([]);
   const sourceRevision = useRef(0);
   const createRequest = useRef<AbortController | undefined>(undefined);
   const saveRequest = useRef<AbortController | undefined>(undefined);
   const previewRequest = useRef<AbortController | undefined>(undefined);
+  const renderRequest = useRef<AbortController | undefined>(undefined);
   const configRevision = useRef(0);
   const latestBatchId = useRef<string | undefined>(undefined);
   const latestConfiguration = useRef<ComposerVariantConfig | undefined>(undefined);
@@ -69,6 +76,7 @@ export function HookComposerPage() {
       createRequest.current?.abort();
       saveRequest.current?.abort();
       previewRequest.current?.abort();
+      renderRequest.current?.abort();
       unmountFlushTimer.current = window.setTimeout(() => {
         const batchId = latestBatchId.current;
         const configuration = latestConfiguration.current;
@@ -81,6 +89,14 @@ export function HookComposerPage() {
       }, 0);
     };
   }, []);
+
+  useEffect(() => {
+    renderRequest.current?.abort();
+    renderRequest.current = undefined;
+    setRenderJobs([]);
+    setRendering(false);
+    setRenderError(undefined);
+  }, [state.batchId]);
 
   useEffect(() => {
     if (state.stage !== 'edit' || state.activeVariant || !state.originals[0] || !state.durationGroups[0]) return;
@@ -309,6 +325,44 @@ export function HookComposerPage() {
   if (editingConfig?.reviewed) reviewedConfigurationIds.add(editingConfig.id);
   else if (editingConfig) reviewedConfigurationIds.delete(editingConfig.id);
   const reviewTotal = state.originals.length * state.durationGroups.length;
+  const reviewMap = useMemo(() => new Map(Object.entries(state.configurations).map(([id, configuration]) => [id, { reviewed: configuration.reviewed }])), [state.configurations]);
+  const matrixCells = useMemo(() => deriveComposerMatrix(state.originals, state.hooks, reviewMap), [reviewMap, state.hooks, state.originals]);
+  const selectedCells = matrixCells.filter((cell) => state.selectedCellIds.includes(`${cell.originalId}:${cell.hookId}`));
+  const selectedDurations = selectedCells.map((cell) => {
+    const configuration = state.configurations[cell.configurationId];
+    return configuration ? configuration.trimEnd - configuration.trimStart : 0;
+  }).filter((duration) => duration > 0);
+  const estimatedDuration = selectedDurations.reduce((total, duration) => total + duration, 0);
+  const estimatedBytes = selectedDurations.length > 0 ? estimateComposerOutputBytes(selectedDurations) : 0;
+
+  useJobPolling({
+    items: state.batchId && renderJobs.some((job) => ['queued', 'processing'].includes(job.status)) ? [state.batchId] : [],
+    isActive: () => true,
+    getKey: (batchId) => batchId,
+    poll: getComposerBatchJobs,
+    onResult: (_batchId, response) => setRenderJobs(response.jobs),
+    onError: (_batchId, error) => setRenderError(error instanceof Error ? error.message : 'Could not refresh render jobs'),
+  });
+
+  const submitRender = async () => {
+    if (!state.batchId || rendering) return;
+    const batchId = state.batchId;
+    const controller = new AbortController();
+    renderRequest.current?.abort();
+    renderRequest.current = controller;
+    setRendering(true); setRenderError(undefined);
+    try {
+      const response = await renderComposerBatch(batchId, state.selectedCellIds, controller.signal);
+      if (controller.signal.aborted || latestBatchId.current !== batchId) return;
+      setRenderJobs(response.jobs.map((job) => ({ ...job, progress: 0 })));
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setRenderError(error instanceof Error ? error.message : 'Could not submit outputs');
+    } finally {
+      if (renderRequest.current === controller) renderRequest.current = undefined;
+      if (!controller.signal.aborted && mounted.current) setRendering(false);
+    }
+  };
 
   return (
     <div className="mx-auto min-h-[calc(100vh-65px)] max-w-[1800px] px-4 py-6 sm:px-6 lg:px-8">
@@ -404,6 +458,23 @@ export function HookComposerPage() {
               <p className="inline-flex items-center gap-2 text-xs text-neutral-500"><Scissors className="h-4 w-4" />Trim always preserves the complete longest hook in this duration group.</p>
             </section>
           </div>
+        ) : state.stage === 'review' ? (
+          <ReviewMatrix
+            originals={state.originals}
+            hooks={state.hooks}
+            cells={matrixCells}
+            selectedIds={state.selectedCellIds}
+            estimatedDuration={estimatedDuration}
+            estimatedBytes={estimatedBytes}
+            jobs={renderJobs}
+            rendering={rendering}
+            error={renderError}
+            onToggle={(cellId) => dispatch({ type: 'toggleCellSelection', cellId })}
+            onSelectAll={(cellIds) => dispatch({ type: 'setCellSelection', cellIds })}
+            onRender={() => void submitRender()}
+            onCancel={() => state.batchId && void cancelComposerBatch(state.batchId).then(() => getComposerBatchJobs(state.batchId!)).then((response) => setRenderJobs(response.jobs)).catch((error) => setRenderError(error instanceof Error ? error.message : 'Could not cancel jobs'))}
+            onRetry={(jobId) => state.batchId && void retryComposerJob(state.batchId, jobId).then((job) => setRenderJobs((current) => [...current, job])).catch((error) => setRenderError(error instanceof Error ? error.message : 'Could not retry job'))}
+          />
         ) : (
           <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-neutral-700 bg-neutral-950/50 px-6 text-center text-sm text-neutral-500">
             {state.stage === 'edit'

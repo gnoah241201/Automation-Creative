@@ -164,9 +164,10 @@ export const createRenderJob = async (params: {
   return response.json();
 };
 
-export const getRenderJob = async (jobId: string): Promise<JobStateResponse> => {
+export const getRenderJob = async (jobId: string, signal?: AbortSignal): Promise<JobStateResponse> => {
   const response = await fetch(`${API_BASE}/${jobId}`, {
     credentials: 'include',
+    signal,
   });
   if (!response.ok) {
     const error = await parseErrorResponse(response);

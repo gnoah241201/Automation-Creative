@@ -37,6 +37,7 @@ export type ComposerAction =
   | { type: 'selectVariant'; originalId: string; durationGroupId: string }
   | { type: 'configurationSaved'; batchId: string; configuration: ComposerVariantConfig }
   | { type: 'toggleCellSelection'; cellId: string }
+  | { type: 'setCellSelection'; cellIds: string[] }
   | { type: 'setTool'; tool: ComposerTool }
   | { type: 'setStage'; stage: ComposerStage };
 
@@ -111,6 +112,8 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
           ? state.selectedCellIds.filter((id) => id !== action.cellId)
           : [...state.selectedCellIds, action.cellId],
       };
+    case 'setCellSelection':
+      return { ...state, selectedCellIds: [...new Set(action.cellIds)].slice(0, 100) };
     case 'setTool':
       return { ...state, tool: action.tool };
     case 'setStage':

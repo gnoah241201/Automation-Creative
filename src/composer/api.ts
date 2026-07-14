@@ -2,6 +2,8 @@ import {
   ComposerAsset,
   ComposerAssetKind,
   ComposerBatchDraft,
+  ComposerBatchJob,
+  ComposerBatchRenderResponse,
   ComposerCrop,
   ComposerVariantConfig,
   ExactPreviewResponse,
@@ -156,3 +158,27 @@ export const getExactPreviewStatus = (
 
 export const exactPreviewUrl = (previewId: string) =>
   `${API_BASE}/previews/${encodeURIComponent(previewId)}`;
+
+export const renderComposerBatch = (
+  batchId: string, selectedCellIds: string[], signal?: AbortSignal,
+): Promise<ComposerBatchRenderResponse> => fetch(`${API_BASE}/batches/${encodeURIComponent(batchId)}/render`, {
+  method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ selectedCellIds }), signal,
+}).then(json<ComposerBatchRenderResponse>);
+
+export const getComposerBatchJobs = (
+  batchId: string, signal?: AbortSignal,
+): Promise<{ batchId: string; jobs: ComposerBatchJob[] }> => fetch(
+  `${API_BASE}/batches/${encodeURIComponent(batchId)}/jobs`, { credentials: 'include', signal },
+).then(json<{ batchId: string; jobs: ComposerBatchJob[] }>);
+
+export const cancelComposerBatch = (batchId: string): Promise<{ batchId: string }> => fetch(
+  `${API_BASE}/batches/${encodeURIComponent(batchId)}/jobs`, { method: 'DELETE', credentials: 'include' },
+).then(json<{ batchId: string }>);
+
+export const retryComposerJob = (
+  batchId: string, jobId: string,
+): Promise<ComposerBatchJob> => fetch(
+  `${API_BASE}/batches/${encodeURIComponent(batchId)}/jobs/${encodeURIComponent(jobId)}/retry`,
+  { method: 'POST', credentials: 'include' },
+).then(json<ComposerBatchJob>);

@@ -16,6 +16,7 @@ import { ComposerPreviewService } from './services/composerPreviewService';
 import { buildLibraryRouter } from './routes/library';
 import { DiskCapacityGuard, LocalLibraryService } from './services/localLibrary';
 import { managedRenderRoot } from './services/fileStore';
+import { ComposerBatchRenderer } from './services/composerBatchRenderer';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -260,6 +261,12 @@ const start = async () => {
     assets: composerAssetStore,
     queue,
   });
+  const composerBatchRenderer = new ComposerBatchRenderer({
+    root: composerRoot,
+    assets: composerAssetStore,
+    queue,
+    disk: new DiskCapacityGuard(),
+  });
   await queue.init();
   let metricsInitialized = false;
 
@@ -387,6 +394,7 @@ const start = async () => {
     composerAssetStore,
     composerDraftStore,
     composerPreviewService,
+    composerBatchRenderer,
   ));
   app.use('/api/library', requireAuth, buildLibraryRouter(localLibrary));
 

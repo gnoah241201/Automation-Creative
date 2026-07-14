@@ -19,6 +19,7 @@ import {
   DEFAULT_BUTTON_Y,
 } from './render/overlayDefaults';
 import { createDefaultButtonState, createDefaultLogoState } from './render/resetState';
+import { useJobPolling } from './render/useJobPolling';
 import { AppShell, AppTab } from './app/AppShell';
 import { HookComposerPage } from './composer/HookComposerPage';
 import {
@@ -972,57 +973,20 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    const timer = window.setInterval(async () => {
-      const activeJobs = jobs.filter(
-        (job) => job.serverJobId && !['completed', 'failed', 'cancelled'].includes(job.status),
-      );
-
-      if (activeJobs.length === 0) {
-        return;
-      }
-
-      await Promise.all(activeJobs.map(async (job) => {
-        if (!job.serverJobId) {
-          return;
-        }
-        try {
-          const state = await getRenderJob(job.serverJobId);
-          setJobs((prev) => prev.map((item) =>
-            item.id === job.id
-              ? {
-                  ...item,
-                  status: state.status,
-                  progress: state.progress,
-                  progressMode: state.progressMode,
-                  error: state.error,
-                  downloadUrl: state.downloadUrl, // Track download availability
-                  // Capture outputFilename from backend as fallback/verification
-                  filename: state.outputFilename || item.filename,
-                  lastPollError: undefined, // Clear error on successful poll
-                  lastActionError: undefined, // Clear action errors on status update
-                }
-              : item,
-          ));
-        } catch (error) {
-          // Don't change job status on polling error - just track the error
-          // This prevents losing job state due to temporary network issues
-          setJobs((prev) => prev.map((item) =>
-            item.id === job.id
-              ? {
-                ...item,
-                lastPollError: error instanceof Error ? error.message : 'Failed to refresh job',
-              }
-              : item,
-          ));
-        }
-      }));
-    }, 1000);
-
-    return () => {
-      window.clearInterval(timer);
-    };
-  }, [jobs]);
+  useJobPolling({
+    items: jobs,
+    isActive: (job) => Boolean(job.serverJobId) && !['completed', 'failed', 'cancelled'].includes(job.status),
+    getKey: (job) => job.serverJobId,
+    poll: getRenderJob,
+    onResult: (job, state) => setJobs((prev) => prev.map((item) => item.id === job.id ? {
+      ...item, status: state.status, progress: state.progress, progressMode: state.progressMode,
+      error: state.error, downloadUrl: state.downloadUrl, filename: state.outputFilename || item.filename,
+      lastPollError: undefined, lastActionError: undefined,
+    } : item)),
+    onError: (job, error) => setJobs((prev) => prev.map((item) => item.id === job.id ? {
+      ...item, lastPollError: error instanceof Error ? error.message : 'Failed to refresh job',
+    } : item)),
+  });
 
   const handleCancelJob = async (jobId: string) => {
     const target = jobs.find((job) => job.id === jobId);

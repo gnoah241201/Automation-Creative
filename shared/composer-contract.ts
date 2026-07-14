@@ -93,6 +93,14 @@ export interface ComposerBatchRenderResponse {
   jobs: Array<{ jobId: string; status: RenderJobStatus; outputFilename: string }>;
 }
 
+export interface ComposerBatchJob {
+  jobId: string;
+  status: RenderJobStatus;
+  outputFilename: string;
+  progress: number;
+  error?: string;
+}
+
 export interface LocalLibraryEntry {
   id: string;
   batchId: string;
