@@ -1,6 +1,7 @@
 import { CreateJobResponse, RenderSpec } from '../../shared/render-contract.ts';
 import { OutputConfig } from './outputDerivation.ts';
 import { ResizeBatchSource } from './librarySources.ts';
+import { filterPendingOutputs, ResizeBatchWorkResult } from './resizeBatchState.ts';
 import { buildRenderSpec } from './renderSpec.ts';
 
 type SharedConfig = Omit<Parameters<typeof buildRenderSpec>[0],
@@ -45,6 +46,7 @@ export interface ResizeBatchSourceOutcome {
 export interface SubmitResizeBatchResult {
   submitted: SubmittedResizeJob[];
   outcomes: ResizeBatchSourceOutcome[];
+  workItems: ResizeBatchWorkResult[];
 }
 
 const buildSpec = (
@@ -64,19 +66,25 @@ const failureMessage = (error: unknown): string => error instanceof Error ? erro
 
 export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<SubmitResizeBatchResult> {
   const submitted: SubmittedResizeJob[] = [];
+  const workItems: ResizeBatchWorkResult[] = [];
   const sourcePrimaries: Array<{
     source: ResizeBatchSource;
+    outputs: OutputConfig[];
     primaryByOutput: Map<string, SubmittedResizeJob>;
     outcome: ResizeBatchSourceOutcome;
   }> = [];
   for (const source of input.sources) {
+    const outputs = filterPendingOutputs(source, input.outputs);
     const primaryByOutput = new Map<string, SubmittedResizeJob>();
     const outcome: ResizeBatchSourceOutcome = {
       sourceId: source.libraryId ?? source.localId,
       accepted: false,
       errors: [],
     };
-    for (const output of input.outputs.filter((item) => !item.trimFrom)) {
+    for (const output of outputs) {
+      workItems.push({ sourceId: outcome.sourceId, outputId: output.id, status: 'retryable' });
+    }
+    for (const output of outputs.filter((item) => !item.trimFrom)) {
       const spec = buildSpec(input.config, source, output);
       try {
         const result = await input.createJob({ source, output, spec });
@@ -89,21 +97,36 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
         submitted.push(job);
         primaryByOutput.set(output.id, job);
         outcome.accepted = true;
+        const workItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.id)!;
+        workItem.status = 'accepted';
       } catch (error) {
         outcome.errors.push({ outputId: output.id, phase: 'primary', message: failureMessage(error) });
       }
     }
-    sourcePrimaries.push({ source, primaryByOutput, outcome });
+    sourcePrimaries.push({ source, outputs, primaryByOutput, outcome });
   }
 
   const readyPrimaryIds = new Map<string, { sourceJobId?: string; error?: string }>();
-  for (const { source, primaryByOutput, outcome } of sourcePrimaries) {
-    for (const output of input.outputs.filter((item) => item.trimFrom)) {
+  for (const { source, outputs, primaryByOutput, outcome } of sourcePrimaries) {
+    for (const output of outputs.filter((item) => item.trimFrom)) {
       if (!input.waitForPrimary || !input.createTrimJob) {
         outcome.errors.push({ outputId: output.id, phase: 'trim', message: 'Trim submission callbacks are required' });
         continue;
       }
+      const completedPrimaryJobId = source.completedPrimaryJobIds?.[output.trimFrom!];
       const primary = primaryByOutput.get(output.trimFrom!);
+      if (completedPrimaryJobId) {
+        const spec = buildSpec(input.config, source, output);
+        try {
+          const result = await input.createTrimJob({ source, output, spec, sourceJobId: completedPrimaryJobId });
+          submitted.push({ sourceId: outcome.sourceId, outputId: output.id, spec, ...result });
+          workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.id)!.status = 'accepted';
+          outcome.accepted = true;
+        } catch (error) {
+          outcome.errors.push({ outputId: output.id, phase: 'trim', message: failureMessage(error) });
+        }
+        continue;
+      }
       if (!primary) {
         outcome.errors.push({ outputId: output.id, phase: 'trim', message: `Primary output ${output.trimFrom} was not accepted` });
         continue;
@@ -118,9 +141,13 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
         readyPrimaryIds.set(primary.jobId, ready);
       }
       if (!ready.sourceJobId) {
+        const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.trimFrom);
+        if (primaryWorkItem) primaryWorkItem.status = 'retryable';
         outcome.errors.push({ outputId: output.id, phase: 'wait', message: ready.error ?? 'Primary output is unavailable' });
         continue;
       }
+      const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.trimFrom);
+      if (primaryWorkItem) primaryWorkItem.completedPrimaryJobId = ready.sourceJobId;
       const spec = buildSpec(input.config, source, output);
       try {
         const result = await input.createTrimJob({ source, output, spec, sourceJobId: ready.sourceJobId });
@@ -130,11 +157,12 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
           spec,
           ...result,
         });
+        workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.id)!.status = 'accepted';
         outcome.accepted = true;
       } catch (error) {
         outcome.errors.push({ outputId: output.id, phase: 'trim', message: failureMessage(error) });
       }
     }
   }
-  return { submitted, outcomes: sourcePrimaries.map(({ outcome }) => outcome) };
+  return { submitted, outcomes: sourcePrimaries.map(({ outcome }) => outcome), workItems };
 }

@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { ResizeBatchSource } from '../src/render/librarySources.ts';
 import {
-  applyResizeBatchResult,
+  applyResizeBatchWorkResult,
   canMutateBrowserForeground,
   clearResizeBatch,
   createResizeBatchState,
   deriveResizeInput,
+  filterPendingOutputs,
   removeResizeBatchSource,
   replaceResizeBatch,
   snapshotResizeBatch,
@@ -33,16 +34,33 @@ test('batch derivation never overwrites and restores the prior single-file foreg
   assert.deepEqual(deriveResizeInput(state, browserInput), browserInput);
 });
 
-test('successful accepted sources are removed while retry-safe failures remain', () => {
-  const ready = replaceResizeBatch(createResizeBatchState(), [source('accepted', 10), source('retry', 10)]);
+test('accepted output is removed while failed output on the same source remains retryable', () => {
+  const ready = replaceResizeBatch(createResizeBatchState(), [source('mixed', 10)]);
   const snapshot = snapshotResizeBatch(ready);
-  const next = applyResizeBatchResult(ready, snapshot, ['accepted']);
-  assert.deepEqual(next.sources.map((item) => item.localId), ['retry']);
+  const next = applyResizeBatchWorkResult(ready, snapshot, [
+    { sourceId: 'mixed', outputId: 'first', status: 'accepted' },
+    { sourceId: 'mixed', outputId: 'second', status: 'retryable' },
+  ]);
+  assert.deepEqual(next.sources[0].pendingOutputIds, ['second']);
+  assert.deepEqual(filterPendingOutputs(next.sources[0], [{ id: 'first' }, { id: 'second' }]).map((item) => item.id), ['second']);
+});
+
+test('completed primary is retained as trim dependency without becoming retryable itself', () => {
+  const ready = replaceResizeBatch(createResizeBatchState(), [source('trim-source', 40)]);
+  const snapshot = snapshotResizeBatch(ready);
+  const next = applyResizeBatchWorkResult(ready, snapshot, [
+    { sourceId: 'trim-source', outputId: '16:9', status: 'accepted', completedPrimaryJobId: 'primary-job' },
+    { sourceId: 'trim-source', outputId: '16:9-15s', status: 'retryable' },
+  ]);
+  assert.deepEqual(next.sources[0].pendingOutputIds, ['16:9-15s']);
+  assert.deepEqual(next.sources[0].completedPrimaryJobIds, { '16:9': 'primary-job' });
 });
 
 test('late completion from batch A cannot clear or replace batch B', () => {
   const batchA = replaceResizeBatch(createResizeBatchState(), [source('a', 10)]);
   const snapshotA = snapshotResizeBatch(batchA);
   const batchB = replaceResizeBatch(batchA, [source('b', 20)]);
-  assert.deepEqual(applyResizeBatchResult(batchB, snapshotA, ['a']), batchB);
+  assert.deepEqual(applyResizeBatchWorkResult(batchB, snapshotA, [
+    { sourceId: 'a', outputId: '9:16', status: 'accepted' },
+  ]), batchB);
 });

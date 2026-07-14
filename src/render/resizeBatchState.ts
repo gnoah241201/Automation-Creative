@@ -11,6 +11,13 @@ export interface ResizeBatchSnapshot {
   sources: ResizeBatchSource[];
 }
 
+export interface ResizeBatchWorkResult {
+  sourceId: string;
+  outputId: string;
+  status: 'accepted' | 'retryable';
+  completedPrimaryJobId?: string;
+}
+
 export const createResizeBatchState = (): ResizeBatchState => ({ revision: 0, sources: [] });
 
 export const canMutateBrowserForeground = (state: ResizeBatchState): boolean => state.sources.length === 0;
@@ -38,16 +45,44 @@ export const snapshotResizeBatch = (state: ResizeBatchState): ResizeBatchSnapsho
   sources: [...state.sources],
 });
 
-export const applyResizeBatchResult = (
+export const filterPendingOutputs = <T extends { id: string }>(
+  source: ResizeBatchSource,
+  outputs: T[],
+): T[] => source.pendingOutputIds
+  ? outputs.filter((output) => source.pendingOutputIds!.includes(output.id))
+  : outputs;
+
+export const applyResizeBatchWorkResult = (
   state: ResizeBatchState,
   snapshot: ResizeBatchSnapshot,
-  acceptedSourceIds: string[],
+  workItems: ResizeBatchWorkResult[],
 ): ResizeBatchState => {
   if (state.revision !== snapshot.revision) return state;
-  const accepted = new Set(acceptedSourceIds);
+  const bySource = new Map<string, ResizeBatchWorkResult[]>();
+  for (const item of workItems) {
+    const current = bySource.get(item.sourceId) ?? [];
+    current.push(item);
+    bySource.set(item.sourceId, current);
+  }
+  const sources = state.sources.flatMap((source) => {
+    const identity = source.libraryId ?? source.localId;
+    const results = bySource.get(identity);
+    if (!results) return [source];
+    const resultIds = new Set(results.map((item) => item.outputId));
+    const pendingOutputIds = [
+      ...(source.pendingOutputIds ?? []).filter((outputId) => !resultIds.has(outputId)),
+      ...results.filter((item) => item.status === 'retryable').map((item) => item.outputId),
+    ];
+    if (pendingOutputIds.length === 0) return [];
+    const completedPrimaryJobIds = { ...(source.completedPrimaryJobIds ?? {}) };
+    for (const item of results) {
+      if (item.completedPrimaryJobId) completedPrimaryJobIds[item.outputId] = item.completedPrimaryJobId;
+    }
+    return [{ ...source, pendingOutputIds, completedPrimaryJobIds }];
+  });
   return {
     revision: state.revision + 1,
-    sources: state.sources.filter((source) => !accepted.has(source.libraryId ?? source.localId)),
+    sources,
   };
 };
 

@@ -106,7 +106,7 @@ test('trim failure for one source does not prevent later independent sources', a
   assert.equal(result.outcomes.find((item) => item.sourceId === 'b')?.errors.length, 0);
 });
 
-test('source with any accepted job is removed from retry set to avoid duplicate submission', async () => {
+test('two outputs keep only the failed combination retryable', async () => {
   const outputs: OutputConfig[] = [
     { id: '16:9', ratio: '16:9', label: 'first' },
     { id: '9:16', ratio: '9:16', label: 'second' },
@@ -120,8 +120,44 @@ test('source with any accepted job is removed from retry set to avoid duplicate 
       return { jobId: 'accepted-job', status: 'queued' };
     },
   });
-  assert.equal(result.outcomes[0].accepted, true);
-  assert.equal(result.outcomes[0].errors.length, 1);
+  assert.deepEqual(result.workItems.map((item) => [item.outputId, item.status]), [
+    ['16:9', 'accepted'],
+    ['9:16', 'retryable'],
+  ]);
+});
+
+test('accepted primary that later fails leaves primary and dependent trim recoverable', async () => {
+  const outputs: OutputConfig[] = [
+    { id: '16:9', ratio: '16:9', label: 'full' },
+    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' },
+  ];
+  const result = await submitResizeBatch({
+    sources: [source('recover', 40)], outputs, config: config(),
+    createJob: async () => ({ jobId: 'failed-primary', status: 'queued' }),
+    waitForPrimary: async () => { throw new Error('primary failed'); },
+    createTrimJob: async () => { throw new Error('must not run'); },
+  });
+  assert.deepEqual(result.workItems.map((item) => [item.outputId, item.status]), [
+    ['16:9', 'retryable'],
+    ['16:9-15s', 'retryable'],
+  ]);
+});
+
+test('retry submits no already accepted source-output combination', async () => {
+  const calls: string[] = [];
+  const retrySource = { ...source('retry'), pendingOutputIds: ['9:16'] };
+  const outputs: OutputConfig[] = [
+    { id: '16:9', ratio: '16:9', label: 'accepted' },
+    { id: '9:16', ratio: '9:16', label: 'retry' },
+  ];
+  await submitResizeBatch({
+    sources: [retrySource], outputs, config: config(),
+    createJob: async ({ output }) => {
+      calls.push(output.id);
+      return { jobId: output.id, status: 'queued' };
+    },
+  });
+  assert.deepEqual(calls, ['9:16']);
 });
 
 test('resize batch submits every primary before entering the trim phase', async () => {

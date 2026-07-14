@@ -7,4 +7,6 @@ export interface ResizeBatchSource {
   gameName: string;
   version: string;
   suffix: string;
+  pendingOutputIds?: string[];
+  completedPrimaryJobIds?: Record<string, string>;
 }

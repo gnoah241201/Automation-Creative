@@ -23,12 +23,13 @@ import { useJobPolling } from './render/useJobPolling';
 import { AppShell, AppTab } from './app/AppShell';
 import { HookComposerPage } from './composer/HookComposerPage';
 import { LocalLibraryPage } from './library/LocalLibraryPage';
-import { libraryDownloadUrl } from './library/api';
+import { createLibraryUploadSessions, libraryDownloadUrl } from './library/api';
 import { ResizeBatchPanel } from './render/ResizeBatchPanel';
 import { ResizeBatchSource } from './render/librarySources';
 import { submitResizeBatch } from './render/submitResizeBatch';
+import { BatchRetryInputs, retryBatchJob } from './render/batchRetry';
 import {
-  applyResizeBatchResult,
+  applyResizeBatchWorkResult,
   canMutateBrowserForeground,
   clearResizeBatch,
   createResizeBatchState,
@@ -46,6 +47,18 @@ import {
   shouldUsePrecomposedHiddenFgAnchor,
 } from '../shared/precomposedAnchor';
 
+type BrowserRetryInputs = {
+  kind: 'browser';
+  foregroundFile: File;
+  backgroundType: 'video' | 'image';
+  backgroundVideoFile?: File | null;
+  backgroundImageFile?: File | null;
+  logoFile?: File | null;
+  logoUrl?: string | null;
+  buttonImageFile?: File | null;
+  buttonImageUrl?: string | null;
+};
+
 type RenderJob = {
   id: string;
   serverJobId?: string;
@@ -59,16 +72,7 @@ type RenderJob = {
   error?: string;
   lastPollError?: string;
   lastActionError?: string;
-  retryInputs?: {
-    foregroundFile: File;
-    backgroundType: 'video' | 'image';
-    backgroundVideoFile?: File | null;
-    backgroundImageFile?: File | null;
-    logoFile?: File | null;
-    logoUrl?: string | null;
-    buttonImageFile?: File | null;
-    buttonImageUrl?: string | null;
-  };
+  retryInputs?: BrowserRetryInputs | BatchRetryInputs;
   downloadUrl?: string;
 };
 
@@ -766,7 +770,25 @@ export default function App() {
                 overlayPng,
               });
               setJobs((current) => current.map((job) => job.id === localId
-                ? { ...job, serverJobId: result.jobId, status: result.status, progress: 0 }
+                ? {
+                    ...job,
+                    serverJobId: result.jobId,
+                    status: result.status,
+                    progress: 0,
+                    retryInputs: selectedOutputs.some((candidate) => candidate.trimFrom === output.id)
+                      ? undefined
+                      : {
+                          kind: 'library',
+                          libraryId: source.libraryId ?? source.localId,
+                          backgroundType: bgType,
+                          backgroundVideoFile: bgVideoFile,
+                          backgroundImageFile: bgImageFile,
+                          logoFile,
+                          logoUrl: logo,
+                          buttonImageFile,
+                          buttonImageUrl: buttonImage,
+                        },
+                  }
                 : job));
               return result;
             } catch (cause) {
@@ -792,7 +814,13 @@ export default function App() {
             try {
               const result = await createTrimJob({ spec, sourceJobId });
               setJobs((current) => current.map((job) => job.id === localId
-                ? { ...job, serverJobId: result.jobId, status: result.status, progress: 0 }
+                ? {
+                    ...job,
+                    serverJobId: result.jobId,
+                    status: result.status,
+                    progress: 0,
+                    retryInputs: { kind: 'trim', sourceJobId },
+                  }
                 : job));
               return result;
             } catch (cause) {
@@ -803,10 +831,7 @@ export default function App() {
             }
           },
         });
-        const acceptedSourceIds = batchResult.outcomes
-          .filter((outcome) => outcome.accepted)
-          .map((outcome) => outcome.sourceId);
-        setResizeBatchState((current) => applyResizeBatchResult(current, batchSnapshot, acceptedSourceIds));
+        setResizeBatchState((current) => applyResizeBatchWorkResult(current, batchSnapshot, batchResult.workItems));
         const failures = batchResult.outcomes.flatMap((outcome) => outcome.errors);
         if (failures.length > 0) {
           window.alert(`${failures.length} Resize output${failures.length === 1 ? '' : 's'} could not be submitted. Safe sources remain selected for retry.`);
@@ -856,6 +881,7 @@ export default function App() {
         status: 'submitting',
         progress: 0,
         retryInputs: {
+          kind: 'browser',
           foregroundFile: fgFile,
           backgroundType: bgType,
           backgroundVideoFile: bgType === 'video' ? bgVideoFile : null,
@@ -1187,36 +1213,41 @@ export default function App() {
       spec: targetJob.spec,
       status: 'submitting',
       progress: 0,
-      // IMPORTANT: Use the stored retryInputs, not current editor state!
-        retryInputs: {
-          foregroundFile: retryInputs.foregroundFile,
-          backgroundType: retryInputs.backgroundType,
-          backgroundVideoFile: retryInputs.backgroundVideoFile,
-          backgroundImageFile: retryInputs.backgroundImageFile,
-          logoFile: retryInputs.logoFile,
-          logoUrl: retryInputs.logoUrl,
-          buttonImageFile: retryInputs.buttonImageFile,
-          buttonImageUrl: retryInputs.buttonImageUrl,
-        },
+      retryInputs,
     };
 
     setJobs(prev => [...prev, pendingJob]);
 
     try {
-      const overlayPng = await createOverlayPng(targetJob.spec, {
-        logoUrl: retryInputs.logoUrl ?? undefined,
-        logoFile: retryInputs.logoFile ?? undefined,
-        buttonImageUrl: retryInputs.buttonImageUrl ?? undefined,
-        buttonImageFile: retryInputs.buttonImageFile ?? undefined,
-      });
-
-      const result = await createRenderJob({
-        spec: targetJob.spec,
-        foregroundFile: retryInputs.foregroundFile,
-        backgroundVideoFile: retryInputs.backgroundType === 'video' ? retryInputs.backgroundVideoFile ?? null : null,
-        backgroundImageFile: retryInputs.backgroundType === 'image' ? retryInputs.backgroundImageFile ?? null : null,
-        overlayPng,
-      });
+      const result = retryInputs.kind === 'browser'
+        ? await (async () => {
+            const overlayPng = await createOverlayPng(targetJob.spec, {
+              logoUrl: retryInputs.logoUrl ?? undefined,
+              logoFile: retryInputs.logoFile ?? undefined,
+              buttonImageUrl: retryInputs.buttonImageUrl ?? undefined,
+              buttonImageFile: retryInputs.buttonImageFile ?? undefined,
+            });
+            return createRenderJob({
+              spec: targetJob.spec,
+              foregroundFile: retryInputs.foregroundFile,
+              backgroundVideoFile: retryInputs.backgroundType === 'video' ? retryInputs.backgroundVideoFile ?? null : null,
+              backgroundImageFile: retryInputs.backgroundType === 'image' ? retryInputs.backgroundImageFile ?? null : null,
+              overlayPng,
+            });
+          })()
+        : await retryBatchJob({
+            retry: retryInputs,
+            spec: targetJob.spec,
+            createLibrarySessions: createLibraryUploadSessions,
+            createOverlay: (spec, assets) => createOverlayPng(spec, {
+              logoUrl: assets.logoUrl ?? undefined,
+              logoFile: assets.logoFile ?? undefined,
+              buttonImageUrl: assets.buttonImageUrl ?? undefined,
+              buttonImageFile: assets.buttonImageFile ?? undefined,
+            }),
+            createRender: createRenderJob,
+            createTrim: createTrimJob,
+          });
 
       setJobs(prev => prev.map(job =>
         job.id === newLocalId
@@ -2160,7 +2191,7 @@ export default function App() {
                       {(job.status === 'submitting' || job.status === 'queued' || job.status === 'processing' || job.status === 'cancelling') && (
                         <button onClick={() => handleCancelJob(job.id)} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-red-400 hover:text-red-300 bg-red-400/10 hover:bg-red-400/20 rounded">Cancel</button>
                       )}
-                      {job.status === 'failed' && (
+                      {job.status === 'failed' && job.retryInputs && (
                         <button onClick={() => handleRetryJob(job.id)} className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 rounded">Retry</button>
                       )}
                       {(job.status === 'completed' || job.status === 'failed' || job.status === 'cancelled') && (
