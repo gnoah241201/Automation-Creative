@@ -14,6 +14,8 @@ interface JobPollingOptions<T, R> {
 export function useJobPolling<T, R>(options: JobPollingOptions<T, R>) {
   const latest = useRef(options);
   latest.current = options;
+  const activeIdentity = options.items.filter(options.isActive)
+    .map(options.getKey).filter((key): key is string => Boolean(key)).sort().join('\u0000');
 
   useEffect(() => {
     const controller = new AbortController();
@@ -29,9 +31,11 @@ export function useJobPolling<T, R>(options: JobPollingOptions<T, R>) {
         if (!key) return;
         try {
           const result = await current.poll(key, controller.signal);
-          if (!controller.signal.aborted) latest.current.onResult(item, result);
+          const stillCurrent = latest.current.items.find((candidate) => latest.current.getKey(candidate) === key);
+          if (!controller.signal.aborted && stillCurrent && latest.current.isActive(stillCurrent)) latest.current.onResult(stillCurrent, result);
         } catch (error) {
-          if (!controller.signal.aborted) latest.current.onError(item, error);
+          const stillCurrent = latest.current.items.find((candidate) => latest.current.getKey(candidate) === key);
+          if (!controller.signal.aborted && stillCurrent && latest.current.isActive(stillCurrent)) latest.current.onError(stillCurrent, error);
         }
       }));
       polling = false;
@@ -39,5 +43,5 @@ export function useJobPolling<T, R>(options: JobPollingOptions<T, R>) {
     const timer = window.setInterval(() => void tick(), options.intervalMs ?? 1_000);
     void tick();
     return () => { controller.abort(); window.clearInterval(timer); };
-  }, [options.intervalMs]);
+  }, [activeIdentity, options.intervalMs]);
 }

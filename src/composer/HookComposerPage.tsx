@@ -336,16 +336,18 @@ export function HookComposerPage() {
   const estimatedBytes = selectedDurations.length > 0 ? estimateComposerOutputBytes(selectedDurations) : 0;
 
   useJobPolling({
-    items: state.batchId && renderJobs.some((job) => ['queued', 'processing'].includes(job.status)) ? [state.batchId] : [],
+    items: state.batchId && renderJobs.some((job) => ['queued', 'processing', 'cancelling'].includes(job.status)) ? [state.batchId] : [],
     isActive: () => true,
     getKey: (batchId) => batchId,
     poll: getComposerBatchJobs,
-    onResult: (_batchId, response) => setRenderJobs(response.jobs),
+    onResult: (batchId, response) => {
+      if (response.batchId === batchId && latestBatchId.current === batchId) setRenderJobs(response.jobs);
+    },
     onError: (_batchId, error) => setRenderError(error instanceof Error ? error.message : 'Could not refresh render jobs'),
   });
 
   const submitRender = async () => {
-    if (!state.batchId || rendering) return;
+    if (!state.batchId || rendering || renderJobs.some((job) => ['queued', 'processing', 'cancelling'].includes(job.status))) return;
     const batchId = state.batchId;
     const controller = new AbortController();
     renderRequest.current?.abort();

@@ -4,7 +4,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ComposerAsset, ComposerBatchDraft, ComposerVariantConfig } from '../shared/composer-contract.ts';
-import { ComposerBatchRenderer } from '../server/services/composerBatchRenderer.ts';
+import { allocateComposerOutputFilenames, ComposerBatchRenderer, ComposerRetrySourceGoneError } from '../server/services/composerBatchRenderer.ts';
+import { estimateComposerOutputBytes } from '../shared/composerTimeline.ts';
 
 const asset = (id: string, kind: 'original' | 'hook', filename = `${id}.mp4`, duration = 3): ComposerAsset => ({
   id, kind, originalFilename: filename, duration, width: 1080, height: 1920,
@@ -35,6 +36,7 @@ const fixture = async (options: { failEnqueueAt?: number; duplicateNames?: boole
   const calls: any[] = [];
   const cancelled: string[] = [];
   const jobs = new Map<string, any>();
+  const capacity: number[] = [];
   const queue = {
     createComposerJob: async (spec: any, files: any, composer: any) => {
       if (options.failEnqueueAt === calls.length) throw new Error('queue unavailable');
@@ -56,9 +58,9 @@ const fixture = async (options: { failEnqueueAt?: number; duplicateNames?: boole
       getSourcePath: (id: string) => path.join(root, `${id}.mp4`),
     },
     queue,
-    disk: { requireCapacity: async () => {} },
+    disk: { requireCapacity: async (_root, bytes) => { capacity.push(bytes); } },
   });
-  return { root, renderer, queue, calls, cancelled, jobs };
+  return { root, renderer, queue, calls, cancelled, jobs, capacity };
 };
 
 test('render snapshots one job per selected valid cell in deterministic order', async (t) => {
@@ -66,6 +68,7 @@ test('render snapshots one job per selected valid cell in deterministic order', 
   const result = await f.renderer.submit(draft(), ['o2:h1', 'o1:h2', 'o1:h1']);
   assert.equal(result.jobs.length, 3);
   assert.deepEqual(result.jobs.map((job) => job.outputFilename), ['o1__h1.mp4', 'o1__h2.mp4', 'o2__h1.mp4']);
+  assert.deepEqual(f.capacity, [estimateComposerOutputBytes([6, 6, 6]) + 12]);
 });
 
 test('render rejects unknown, duplicate, excessive, and unreviewed selections before enqueue', async (t) => {
@@ -80,6 +83,13 @@ test('duplicate sanitized names receive stable suffixes', async (t) => {
   const f = await fixture({ duplicateNames: true }); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
   const result = await f.renderer.submit(draft(), ['o1:h2', 'o1:h1']);
   assert.deepEqual(result.jobs.map((job) => job.outputFilename), ['same___hook_.mp4', 'same___hook___2.mp4']);
+});
+
+test('collision allocator skips a naturally occupied numeric suffix case-insensitively', () => {
+  assert.deepEqual(
+    allocateComposerOutputFilenames(['x.mp4', 'X.mp4', 'x__2.mp4', 'x.mp4']),
+    ['x.mp4', 'X__2.mp4', 'x__2__2.mp4', 'x__3.mp4'],
+  );
 });
 
 test('retry uses immutable snapshot and is limited to failed jobs in its batch', async (t) => {
@@ -101,4 +111,22 @@ test('partial enqueue failure cancels already-created siblings and reports their
     return true;
   });
   assert.deepEqual(f.cancelled, ['job-1']);
+});
+
+test('batch status never exposes FFmpeg stderr or managed source paths', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const job = f.jobs.get(submitted.jobs[0].jobId);
+  job.status = 'failed'; job.error = `ffmpeg failed at ${path.join(f.root, 'secret.mp4')}: stderr details`;
+  const listed = f.renderer.listBatchJobs('batch-1');
+  assert.equal(listed[0].error, 'Render failed. Retry this output or check the source media.');
+  assert.doesNotMatch(JSON.stringify(listed), /secret|stderr|composer-batch-/);
+});
+
+test('retry reports a typed gone error when immutable staged sources disappeared', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const job = f.jobs.get(submitted.jobs[0].jobId); job.status = 'failed';
+  await fs.rm(job.files.foregroundPath);
+  await assert.rejects(() => f.renderer.retry('batch-1', job.id), ComposerRetrySourceGoneError);
 });

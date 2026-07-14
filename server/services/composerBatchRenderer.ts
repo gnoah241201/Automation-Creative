@@ -39,34 +39,40 @@ interface RenderSnapshot {
 }
 
 export class ComposerPartialSubmissionError extends Error {
-  constructor(public readonly createdJobIds: string[], cause: unknown) {
-    super(`Batch was partially submitted; ${createdJobIds.length} created job(s) were cancelled: ${cause instanceof Error ? cause.message : 'queue failure'}`);
+  constructor(public readonly createdJobIds: string[]) {
+    super(`Batch was partially submitted; ${createdJobIds.length} created job(s) were cancelled`);
     this.name = 'ComposerPartialSubmissionError';
   }
 }
+export class ComposerJobNotFoundError extends Error {}
+export class ComposerInvalidRetryError extends Error {}
+export class ComposerRetrySourceGoneError extends Error {}
+export class ComposerStorageError extends Error {}
 
 const jobResponse = (job: ComposerJobRecord) => ({
   jobId: job.id,
   status: job.status,
   outputFilename: job.spec.outputFilename,
   progress: job.progress,
-  error: job.error,
+  error: job.error ? 'Render failed. Retry this output or check the source media.' : undefined,
 });
 
-const withCollisionSuffixes = (snapshots: RenderSnapshot[]): RenderSnapshot[] => {
-  const counts = new Map<string, number>();
-  return snapshots.map((snapshot) => {
-    const filename = snapshot.spec.outputFilename;
-    const key = filename.toLocaleLowerCase('en-US');
-    const occurrence = (counts.get(key) ?? 0) + 1;
-    counts.set(key, occurrence);
-    if (occurrence === 1) return snapshot;
+export const allocateComposerOutputFilenames = (filenames: string[]): string[] => {
+  const used = new Set<string>();
+  return filenames.map((filename) => {
     const extension = path.extname(filename);
-    return {
-      ...snapshot,
-      spec: { ...snapshot.spec, outputFilename: `${filename.slice(0, -extension.length)}__${occurrence}${extension}` },
-    };
+    const base = filename.slice(0, -extension.length);
+    let candidate = filename;
+    let suffix = 2;
+    while (used.has(candidate.toLocaleLowerCase('en-US'))) candidate = `${base}__${suffix++}${extension}`;
+    used.add(candidate.toLocaleLowerCase('en-US'));
+    return candidate;
   });
+};
+
+const withCollisionSuffixes = (snapshots: RenderSnapshot[]): RenderSnapshot[] => {
+  const filenames = allocateComposerOutputFilenames(snapshots.map((item) => item.spec.outputFilename));
+  return snapshots.map((snapshot, index) => ({ ...snapshot, spec: { ...snapshot.spec, outputFilename: filenames[index] } }));
 };
 
 export class ComposerBatchRenderer {
@@ -141,16 +147,36 @@ export class ComposerBatchRenderer {
     });
     snapshots = withCollisionSuffixes(snapshots).map((item) => structuredClone(item));
 
-    await fs.mkdir(this.jobsRoot, { recursive: true });
-    await Promise.all(snapshots.flatMap((snapshot) => [fs.access(snapshot.originalSourcePath), fs.access(snapshot.hookSourcePath)]));
-    await this.disk.requireCapacity(this.root, estimateComposerOutputBytes(snapshots.map((item) => item.spec.trimEnd - item.spec.trimStart)));
+    try { await fs.mkdir(this.jobsRoot, { recursive: true }); } catch { throw new ComposerStorageError('Composer storage is unavailable'); }
+    let inputBytes = 0;
+    try {
+      const stats = await Promise.all(snapshots.flatMap((snapshot) => [fs.stat(snapshot.originalSourcePath), fs.stat(snapshot.hookSourcePath)]));
+      inputBytes = stats.reduce((total, stat) => {
+        const next = total + stat.size;
+        if (!Number.isSafeInteger(next)) throw new ComposerStorageError('Composer storage estimate is too large');
+        return next;
+      }, 0);
+    } catch (error) {
+      if (error instanceof ComposerStorageError) throw error;
+      console.error('[composerBatchRenderer] Source stat failed:', error);
+      throw new ComposerStorageError('Composer source storage is unavailable');
+    }
+    const outputBytes = estimateComposerOutputBytes(snapshots.map((item) => item.spec.trimEnd - item.spec.trimStart));
+    const totalBytes = inputBytes + outputBytes;
+    if (!Number.isSafeInteger(totalBytes)) throw new ComposerStorageError('Composer storage estimate is too large');
+    try { await this.disk.requireCapacity(this.root, totalBytes); }
+    catch (error) {
+      console.error('[composerBatchRenderer] Disk preflight failed:', error);
+      throw new ComposerStorageError('Composer storage capacity is unavailable');
+    }
 
     const staged: Array<{ snapshot: RenderSnapshot; files: JobFiles }> = [];
     try {
       for (const snapshot of snapshots) staged.push({ snapshot, files: await this.stage(snapshot) });
     } catch (error) {
       await Promise.allSettled(staged.map(({ files }) => fs.rm(files.workDir, { recursive: true, force: true })));
-      throw error;
+      console.error('[composerBatchRenderer] Source staging failed:', error);
+      throw new ComposerStorageError('Composer sources could not be staged');
     }
 
     const created: ComposerJobRecord[] = [];
@@ -161,7 +187,8 @@ export class ComposerBatchRenderer {
     } catch (error) {
       await Promise.allSettled(created.map((job) => this.queue.cancelJob(job.id)));
       await Promise.allSettled(staged.slice(created.length).map(({ files }) => fs.rm(files.workDir, { recursive: true, force: true })));
-      throw new ComposerPartialSubmissionError(created.map((job) => job.id), error);
+      console.error('[composerBatchRenderer] Partial enqueue failure:', error);
+      throw new ComposerPartialSubmissionError(created.map((job) => job.id));
     }
     return { batchId: batch.id, jobs: created.map(jobResponse) };
   }
@@ -174,7 +201,7 @@ export class ComposerBatchRenderer {
 
   async cancelBatch(batchId: string) {
     const scoped = this.queue.getAllJobs().filter((job): job is ComposerJobRecord => (
-      job.kind === 'compose' && job.spec.batchId === batchId && ['queued', 'processing'].includes(job.status)
+      job.kind === 'compose' && job.spec.batchId === batchId && ['queued', 'processing', 'cancelling'].includes(job.status)
     ));
     const results = await Promise.all(scoped.map(async (job) => ({ jobId: job.id, cancelled: await this.queue.cancelJob(job.id) })));
     return { batchId, jobs: results };
@@ -182,14 +209,19 @@ export class ComposerBatchRenderer {
 
   async retry(batchId: string, jobId: string): Promise<ComposerJobRecord> {
     const source = this.queue.getJob(jobId);
-    if (!source || source.kind !== 'compose' || source.spec.batchId !== batchId) throw new Error('Composer job was not found in this batch');
-    if (source.status !== 'failed') throw new Error('Only failed composer jobs can be retried');
-    await Promise.all([fs.access(source.files.foregroundPath), fs.access(source.files.backgroundVideoPath!)]);
+    if (!source || source.kind !== 'compose' || source.spec.batchId !== batchId) throw new ComposerJobNotFoundError('Composer job was not found in this batch');
+    if (source.status !== 'failed') throw new ComposerInvalidRetryError('Only failed composer jobs can be retried');
+    try { await Promise.all([fs.access(source.files.foregroundPath), fs.access(source.files.backgroundVideoPath!)]); }
+    catch { throw new ComposerRetrySourceGoneError('Composer retry sources are no longer available'); }
     const snapshot: RenderSnapshot = {
       spec: structuredClone(source.spec), composer: structuredClone(source.composer),
       originalSourcePath: source.files.foregroundPath, hookSourcePath: source.files.backgroundVideoPath!,
     };
-    await this.disk.requireCapacity(this.root, estimateComposerOutputBytes([source.spec.trimEnd - source.spec.trimStart]));
+    const retryStats = await Promise.all([fs.stat(source.files.foregroundPath), fs.stat(source.files.backgroundVideoPath!)]);
+    const retryBytes = retryStats.reduce((total, stat) => total + stat.size, estimateComposerOutputBytes([source.spec.trimEnd - source.spec.trimStart]));
+    if (!Number.isSafeInteger(retryBytes)) throw new ComposerStorageError('Composer storage estimate is too large');
+    try { await this.disk.requireCapacity(this.root, retryBytes); }
+    catch { throw new ComposerStorageError('Composer storage capacity is unavailable'); }
     const files = await this.stage(snapshot);
     try {
       return await this.queue.createComposerJob(snapshot.spec, files, snapshot.composer);

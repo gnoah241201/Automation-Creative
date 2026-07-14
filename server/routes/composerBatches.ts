@@ -6,7 +6,10 @@ import {
 import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
 import { validateComposerConfiguration } from '../services/composerValidation.ts';
 import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
-import { ComposerBatchRenderer, ComposerPartialSubmissionError } from '../services/composerBatchRenderer.ts';
+import {
+  ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
+  ComposerPartialSubmissionError, ComposerRetrySourceGoneError, ComposerStorageError,
+} from '../services/composerBatchRenderer.ts';
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
 
@@ -180,7 +183,10 @@ export const buildComposerBatchesRouter = (
         else if (error instanceof ComposerPartialSubmissionError) res.status(503).json({
           error: 'PartialSubmission', message: error.message, createdJobIds: error.createdJobIds,
         });
-        else res.status(400).json({ error: 'InvalidBatch', message: toMessage(error) });
+        else if (error instanceof ComposerStorageError) {
+          console.error('[composerBatches] Render storage failure:', error);
+          res.status(500).json({ error: 'StorageError', message: 'Composer storage is unavailable' });
+        } else res.status(400).json({ error: 'InvalidBatch', message: toMessage(error) });
       }
     });
 
@@ -199,9 +205,13 @@ export const buildComposerBatchesRouter = (
         const job = await renderer.retry(req.params.batchId, req.params.jobId);
         res.status(202).json({ batchId: req.params.batchId, ...jobResponseForRoute(job) });
       } catch (error) {
-        const message = toMessage(error);
-        res.status(message.includes('not found') ? 404 : message.includes('failed composer') ? 409 : 400)
-          .json({ error: 'InvalidRetry', message });
+        if (error instanceof ComposerJobNotFoundError) res.status(404).json({ error: 'NotFound', message: error.message });
+        else if (error instanceof ComposerInvalidRetryError) res.status(409).json({ error: 'InvalidRetry', message: error.message });
+        else if (error instanceof ComposerRetrySourceGoneError) res.status(410).json({ error: 'Gone', message: error.message });
+        else {
+          console.error('[composerBatches] Retry failure:', error);
+          res.status(500).json({ error: 'InternalError', message: 'Unable to retry composer job' });
+        }
       }
     });
 

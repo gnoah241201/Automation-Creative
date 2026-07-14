@@ -24,6 +24,7 @@ const bytesLabel = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 export function ReviewMatrix(props: Props) {
   const selected = props.cells.filter((cell) => props.selectedIds.includes(`${cell.originalId}:${cell.hookId}`));
   const blocked = selected.some((cell) => !cell.valid);
+  const batchActive = props.jobs.some((job) => ['queued', 'processing', 'cancelling'].includes(job.status));
   const allIds = props.cells.map((cell) => `${cell.originalId}:${cell.hookId}`);
   return <div className="space-y-5">
     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-neutral-950/70 p-4">
@@ -50,8 +51,8 @@ export function ReviewMatrix(props: Props) {
     </div>
     {props.error && <p role="alert" className="text-sm text-red-300">{props.error}</p>}
     <div className="flex flex-wrap gap-3">
-      <button type="button" disabled={blocked || selected.length === 0 || props.rendering} onClick={props.onRender} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40">{props.rendering && <LoaderCircle className="h-4 w-4 animate-spin" />}Render {selected.length} outputs</button>
-      {props.jobs.some((job) => ['queued', 'processing'].includes(job.status)) && <button type="button" onClick={props.onCancel} className="inline-flex items-center gap-2 rounded-xl border border-red-700 px-4 py-3 text-sm text-red-200"><Square className="h-4 w-4" />Cancel active</button>}
+      <button type="button" disabled={blocked || selected.length === 0 || props.rendering || batchActive} onClick={props.onRender} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40">{props.rendering && <LoaderCircle className="h-4 w-4 animate-spin" />}Render {selected.length} outputs</button>
+      {batchActive && <button type="button" onClick={props.onCancel} className="inline-flex items-center gap-2 rounded-xl border border-red-700 px-4 py-3 text-sm text-red-200"><Square className="h-4 w-4" />Cancel active</button>}
     </div>
     {props.jobs.length > 0 && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{props.jobs.map((job) => <article key={job.jobId} className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-3">
       <div className="flex items-start justify-between gap-2"><p className="truncate text-sm font-medium">{job.outputFilename}</p>{job.status === 'failed' ? <XCircle className="h-4 w-4 text-red-400" /> : job.status === 'completed' ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <LoaderCircle className="h-4 w-4 text-blue-300" />}</div>
