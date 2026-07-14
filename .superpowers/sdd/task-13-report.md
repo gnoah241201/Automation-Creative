@@ -29,7 +29,7 @@
 Run from `D:\Videcode\ResizeVideo1\.worktrees\hook-composer` on 2026-07-14:
 
 - `npm.cmd test`
-  - PASS: 174 tests, 0 failed, 0 skipped, exit 0 after review fixes.
+  - PASS: 175 tests, 0 failed, 0 skipped, exit 0 after review fixes.
   - Includes the generated real-media test (about 3.3 seconds in the final run).
 - `npm.cmd run lint`
   - PASS: TypeScript `tsc --noEmit`, exit 0.
@@ -74,3 +74,7 @@ Two independent review findings were reproduced with failing tests before implem
 2. Direct queued-to-cancelled composer jobs did not increment cancellation metrics. The queued branch now increments both the global cancelled counter and `resize_video_composer_jobs_completed_total{status="cancelled"}` after its terminal state is persisted. A regression cancels queued and running composer jobs twice each and verifies exactly one increment per job.
 
 Fresh post-review verification: focused tests PASS (14/14), full suite PASS (174/174), lint PASS, production build PASS, and `git diff --check` PASS. The full suite includes the real-media smoke test, which remains green.
+
+A final preview-lifecycle review found that a completed preview whose metadata had already expired could still be returned as a cache hit and have its lifetime extended. A RED regression created the completed output, advanced the clock exactly to expiry, and requested the same preview from a second batch; the stale job was incorrectly reused. Completed reuse is now gated by `record.expiresAt > now`. Expired terminal preview storage is removed before a fresh attempt and fresh metadata are written, while active expired attempts retain the existing replacement behavior. The valid pre-expiry cross-batch test remains green with a corrected still-live fixture.
+
+Fresh verification after this final fix: preview/retention/queue focused tests PASS (24/24), full suite PASS (175/175), lint PASS, production build PASS, real-media smoke PASS as part of the suite, and `git diff --check` PASS.

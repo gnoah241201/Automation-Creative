@@ -146,6 +146,37 @@ test('expired metadata is not served as a cache hit', async (t) => {
   assert.equal(harness.queue.createComposerJobCalls, 2);
 });
 
+test('expired completed preview cannot be revived by cross-batch reuse', async (t) => {
+  let now = 1_000;
+  const harness = await createHarness(now);
+  t.after(() => fs.rm(harness.root, { recursive: true, force: true }));
+  const service = new ComposerPreviewService({
+    root: harness.root, assets: harness.assets, queue: harness.queue, now: () => now,
+  });
+  const first = await service.requestPreview({
+    ...harness.request, batchId: 'batch-1', draftExpiresAt: 1_100,
+  });
+  const expiredJob = harness.queue.getJob(first.jobId!)!;
+  await fs.writeFile(expiredJob.files.outputPath, 'expired-preview');
+  expiredJob.status = 'completed';
+  now = 1_100;
+
+  const replacement = await service.requestPreview({
+    ...harness.request, batchId: 'batch-2', draftExpiresAt: 2_000,
+  });
+
+  assert.equal(replacement.cacheHit, false);
+  assert.notEqual(replacement.jobId, expiredJob.id);
+  assert.equal(harness.queue.createComposerJobCalls, 2);
+  await assert.rejects(fs.access(expiredJob.files.outputPath));
+  const metadata = JSON.parse(await fs.readFile(
+    path.join(harness.root, 'previews', first.previewId, 'metadata.json'), 'utf8',
+  )) as { jobId: string; expiresAt: number; batchIds: string[] };
+  assert.equal(metadata.jobId, replacement.jobId);
+  assert.equal(metadata.expiresAt, 2_000);
+  assert.deepEqual(metadata.batchIds, ['batch-2']);
+});
+
 test('expired active and cancelling attempts are replaced without reusing their work directories', async (t) => {
   let now = 1_000;
   const harness = await createHarness(now);
@@ -175,7 +206,7 @@ test('completed cross-batch cache reuse extends expiry and records lifecycle ref
   const service = new ComposerPreviewService({
     root: harness.root, assets: harness.assets, queue: harness.queue, now: () => now,
   });
-  const first = await service.requestPreview({ ...harness.request, draftExpiresAt: 1_100 });
+  const first = await service.requestPreview({ ...harness.request, draftExpiresAt: 1_500 });
   const job = harness.queue.getJob(first.jobId!)!;
   await fs.writeFile(job.files.outputPath, 'preview');
   job.status = 'completed';

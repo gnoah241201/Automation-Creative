@@ -175,9 +175,14 @@ export class ComposerPreviewService {
     original: ComposerAsset,
     hook: ComposerAsset,
   ): Promise<ExactPreviewResponse> {
-    const record = await this.readRecord(key);
+    let record = await this.readRecord(key);
     const existingJob = record ? this.queue.getJob(record.jobId) : undefined;
-    const completed = record ? await this.getCompletedPreview(record) : null;
+    const recordIsFresh = !!record && record.expiresAt > this.now();
+    if (record && !recordIsFresh && (!existingJob || ['completed', 'failed', 'cancelled'].includes(existingJob.status))) {
+      await fs.rm(this.getPreviewDirectory(key), { recursive: true, force: true });
+      record = null;
+    }
+    const completed = recordIsFresh && record ? await this.getCompletedPreview(record) : null;
     const existing = completed ? {
       cacheHit: true,
       previewId: key,

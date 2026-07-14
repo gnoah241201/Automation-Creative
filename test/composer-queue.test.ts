@@ -235,6 +235,7 @@ test('queued and running composer cancellation metrics increment exactly once ea
 
   await Promise.all([harness.queue.cancelJob(running.id), harness.queue.cancelJob(running.id)]);
   await waitFor(() => harness.queue.getJob(running.id)?.status === 'cancelled');
+  await waitForMetric(async () => metricValue(await cancelledJobs.get()) - beforeCancelled, 2);
   assert.equal(metricValue(await cancelledJobs.get()) - beforeCancelled, 2);
   assert.equal(
     metricValue(await composerJobsCompleted.get(), 'status', 'cancelled') - beforeComposerCancelled,
@@ -277,3 +278,11 @@ const metricValue = (
 ): number => metric.values
   .filter((value) => !label || value.labels[label] === expected)
   .reduce((sum, value) => sum + value.value, 0);
+
+const waitForMetric = async (read: () => Promise<number>, expected: number): Promise<void> => {
+  const deadline = Date.now() + 3_000;
+  while (await read() !== expected) {
+    if (Date.now() > deadline) throw new Error(`Timed out waiting for metric value ${expected}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+};
