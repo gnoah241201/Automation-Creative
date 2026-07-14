@@ -1,0 +1,5 @@
+{
+  "name": "Vertical Video Layout Editor",
+  "description": "Create a 9:16 vertical video layout with a centered foreground video and a blurred background video.",
+  "requestFramePermissions": []
+}

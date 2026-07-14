@@ -1,0 +1,178 @@
+﻿[
+    {
+        "Type":  "Different",
+        "Rel":  "docker\\nginx.conf"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "docker-compose.yml"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "Dockerfile"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "package.json"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "package-lock.json"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "README.md"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "server\\ffmpeg\\buildCommand.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "server\\index.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "server\\routes\\jobs.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "server\\services\\jobQueue.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "server\\services\\renderRunner.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "server\\services\\validation.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "shared\\render-contract.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "src\\App.tsx"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "src\\render\\api.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "src\\render\\outputDerivation.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "src\\render\\overlay.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "src\\render\\renderSpec.ts"
+    },
+    {
+        "Type":  "Different",
+        "Rel":  "test\\reset-and-spec.test.ts"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "BANNER_BACKGROUND_MODE_PLAN.md"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "DRAG_DROP_IMPLEMENTATION_PLAN.md"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "PRECOMPOSED_BANNER_CROP_BUG_NOTE.md"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "PRECOMPOSED_BANNER_FG_REGION_ANCHOR_PLAN.md"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-batch-space.ps1"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-gcloud.ps1"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-gcloud-call.ps1"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-gcloud-config.ps1"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-gcloud-direct.ps1"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-gcloud-path.ps1"
+    },
+    {
+        "Type":  "OnlyNew",
+        "Rel":  "test-invoke-gcloud.ps1"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  ".package-lock.json"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "deploy-docker-ubuntu.md"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "diagnostic.sh"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "FIX_PROMETHEUS_ACCESS.md"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "grafana\\resize-video-ops-dashboard.json"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "HANDOFF.md"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "install-prometheus.sh"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "MONITORING.md"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "nginx-domain.conf.example"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "nginx-resize.bravestars.com.http.conf"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "nginx-resize.bravestars.com.https.conf"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "prometheus.yml"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "server\\metrics.ts"
+    },
+    {
+        "Type":  "OnlyOld",
+        "Rel":  "upload-to-ubuntu-vm.ps1"
+    }
+]

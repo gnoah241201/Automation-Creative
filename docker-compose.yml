@@ -1,0 +1,110 @@
+services:
+  backend:
+    build:
+      context: .
+      target: backend
+    environment:
+      PORT: 3001
+      MAX_CONCURRENT_JOBS: ${MAX_CONCURRENT_JOBS:-5}
+      FFMPEG_BINARY_PATH: /usr/bin/ffmpeg
+      FFMPEG_ENCODER: ${FFMPEG_ENCODER:-libx264}
+      APP_AUTH_USERNAME: ${APP_AUTH_USERNAME:-admin}
+      APP_AUTH_PASSWORD: ${APP_AUTH_PASSWORD:-resize-video-local}
+      APP_AUTH_SECRET: ${APP_AUTH_SECRET:-change-this-secret-before-public-use}
+      APP_AUTH_COOKIE_SECURE: ${APP_AUTH_COOKIE_SECURE:-false}
+      GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+      GOOGLE_WORKSPACE_DOMAIN: ${GOOGLE_WORKSPACE_DOMAIN:-}
+    volumes:
+      - render_data:/app/temp_superpowers/native-renders
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    expose:
+      - "3001"
+    networks:
+      - monitoring
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+      args:
+        VITE_GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
+        VITE_GOOGLE_WORKSPACE_DOMAIN: ${GOOGLE_WORKSPACE_DOMAIN:-}
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${APP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/api/health"]
+      interval: 20s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - monitoring
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: node-exporter
+    restart: unless-stopped
+    ports:
+      - "9100:9100"
+    expose:
+      - "9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring
+
+  prometheus:
+    build:
+      context: .
+      target: prometheus
+    container_name: prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+    depends_on:
+      - backend
+      - node-exporter
+    expose:
+      - "9090"
+    networks:
+      - monitoring
+
+volumes:
+  render_data:
+  prometheus_data:
+
+networks:
+  monitoring:
+    driver: bridge
+

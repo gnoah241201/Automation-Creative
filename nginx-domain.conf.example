@@ -1,0 +1,66 @@
+# Nginx config for ResizeVideo domain routing.
+#
+# Usage on Ubuntu VM:
+# 1) Replace example.com and www.example.com with your domain.
+# 2) Ensure your app is running on localhost:8080 (docker compose).
+# 3) Save this file to /etc/nginx/sites-available/resize-video-domain
+# 4) sudo ln -sf /etc/nginx/sites-available/resize-video-domain /etc/nginx/sites-enabled/resize-video-domain
+# 5) sudo nginx -t && sudo systemctl reload nginx
+#
+# TLS cert paths below assume Let's Encrypt certbot setup.
+
+upstream resize_video_app {
+    server 127.0.0.1:8080;
+    keepalive 32;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name example.com www.example.com;
+
+    # Uncomment this location if you use certbot webroot challenge.
+    # location /.well-known/acme-challenge/ {
+    #     root /var/www/certbot;
+    # }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name example.com www.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/example.com/privkey.pem;
+    ssl_session_timeout 1d;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_tickets off;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers off;
+
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options SAMEORIGIN;
+    add_header Referrer-Policy strict-origin-when-cross-origin;
+
+    client_max_body_size 500M;
+
+    location / {
+        proxy_pass http://resize_video_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        proxy_connect_timeout 60s;
+        proxy_request_buffering off;
+    }
+}
