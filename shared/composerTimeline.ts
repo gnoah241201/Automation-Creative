@@ -10,7 +10,10 @@ export const groupHooksByDuration = (hooks: ComposerAsset[]): HookDurationGroup[
   const groups: HookDurationGroup[] = [];
   for (const hook of sorted) {
     const current = groups.at(-1);
-    if (!current || hook.duration - current.minDuration > GROUP_TOLERANCE_SECONDS) {
+    const comparisonEpsilon = current
+      ? Number.EPSILON * Math.max(1, Math.abs(hook.duration), Math.abs(current.minDuration))
+      : 0;
+    if (!current || hook.duration - current.minDuration > GROUP_TOLERANCE_SECONDS + comparisonEpsilon) {
       groups.push({ id: `g-${hook.duration.toFixed(3)}`, minDuration: hook.duration, maxDuration: hook.duration, hookIds: [hook.id] });
     } else {
       current.maxDuration = Math.max(current.maxDuration, hook.duration);

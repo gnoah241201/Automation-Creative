@@ -31,6 +31,14 @@ test('groups hooks only when total duration spread is at most 0.1 seconds', () =
   assert.deepEqual(groups.map((group) => group.hookIds), [['h1', 'h2'], ['h3']]);
 });
 
+test('groups hooks whose duration spread is exactly 0.1 seconds', () => {
+  const groups = groupHooksByDuration([
+    asset('h1', 'hook', 3),
+    asset('h2', 'hook', 3.1),
+  ]);
+  assert.deepEqual(groups.map((group) => group.hookIds), [['h1', 'h2']]);
+});
+
 test('variant trim must contain the longest hook interval', () => {
   const config: ComposerVariantConfig = {
     id: 'o1:g1', originalId: 'o1', durationGroupId: 'g1', representativeHookId: 'h1',
