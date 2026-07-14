@@ -3,6 +3,7 @@ import test from 'node:test';
 import { OutputConfig } from '../src/render/outputDerivation.ts';
 import { ResizeBatchSource } from '../src/render/librarySources.ts';
 import { submitResizeBatch } from '../src/render/submitResizeBatch.ts';
+import { applyResizeBatchWorkResult, createResizeBatchState, replaceResizeBatch, snapshotResizeBatch } from '../src/render/resizeBatchState.ts';
 
 const source = (id: string, duration = 12): ResizeBatchSource => ({
   localId: id,
@@ -158,6 +159,45 @@ test('retry submits no already accepted source-output combination', async () => 
     },
   });
   assert.deepEqual(calls, ['9:16']);
+});
+
+test('retrying only a failed primary records it for an unselected pending dependent trim', async () => {
+  const primary: OutputConfig = { id: '16:9', ratio: '16:9', label: 'primary' };
+  const trim: OutputConfig = { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' };
+  const retrySource = {
+    ...source('dependency', 40),
+    pendingOutputIds: ['16:9', '16:9-15s'],
+  };
+  const first = await submitResizeBatch({
+    sources: [retrySource],
+    outputs: [primary],
+    outputCatalog: [primary, trim],
+    config: config(),
+    createJob: async () => ({ jobId: 'replacement-primary', status: 'queued' }),
+    waitForPrimary: async (job) => job.jobId,
+    createTrimJob: async () => { throw new Error('trim was intentionally not selected'); },
+  });
+  assert.equal(first.workItems[0].completedPrimaryJobId, 'replacement-primary');
+
+  const ready = replaceResizeBatch(createResizeBatchState(), [retrySource]);
+  const next = applyResizeBatchWorkResult(ready, snapshotResizeBatch(ready), first.workItems);
+  assert.deepEqual(next.sources[0].pendingOutputIds, ['16:9-15s']);
+  assert.deepEqual(next.sources[0].completedPrimaryJobIds, { '16:9': 'replacement-primary' });
+
+  const calls: string[] = [];
+  await submitResizeBatch({
+    sources: next.sources,
+    outputs: [trim],
+    outputCatalog: [primary, trim],
+    config: config(),
+    createJob: async () => { throw new Error('primary must not be duplicated'); },
+    waitForPrimary: async () => { throw new Error('completed primary must not be awaited twice'); },
+    createTrimJob: async ({ sourceJobId }) => {
+      calls.push(sourceJobId);
+      return { jobId: 'trim-job', status: 'queued' };
+    },
+  });
+  assert.deepEqual(calls, ['replacement-primary']);
 });
 
 test('resize batch submits every primary before entering the trim phase', async () => {

@@ -16,6 +16,7 @@ export interface SubmittedResizeJob extends CreateJobResponse {
 export interface SubmitResizeBatchInput {
   sources: ResizeBatchSource[];
   outputs: OutputConfig[];
+  outputCatalog?: OutputConfig[];
   config: SharedConfig;
   createJob: (input: {
     source: ResizeBatchSource;
@@ -107,6 +108,36 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
   }
 
   const readyPrimaryIds = new Map<string, { sourceJobId?: string; error?: string }>();
+  for (const { source, outputs, primaryByOutput, outcome } of sourcePrimaries) {
+    const selectedIds = new Set(outputs.map((output) => output.id));
+    const pendingIds = new Set(source.pendingOutputIds ?? selectedIds);
+    const deferredDependencies = (input.outputCatalog ?? input.outputs).filter((output) => (
+      output.trimFrom
+      && pendingIds.has(output.id)
+      && !selectedIds.has(output.id)
+    ));
+    for (const primaryOutputId of new Set(deferredDependencies.map((output) => output.trimFrom!))) {
+      const primary = primaryByOutput.get(primaryOutputId);
+      if (!primary || !input.waitForPrimary) continue;
+      let ready = readyPrimaryIds.get(primary.jobId);
+      if (!ready) {
+        try {
+          ready = { sourceJobId: await input.waitForPrimary(primary) };
+        } catch (error) {
+          ready = { error: failureMessage(error) };
+        }
+        readyPrimaryIds.set(primary.jobId, ready);
+      }
+      const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === primaryOutputId);
+      if (!primaryWorkItem) continue;
+      if (ready.sourceJobId) {
+        primaryWorkItem.completedPrimaryJobId = ready.sourceJobId;
+      } else {
+        primaryWorkItem.status = 'retryable';
+        outcome.errors.push({ outputId: primaryOutputId, phase: 'wait', message: ready.error ?? 'Primary output is unavailable' });
+      }
+    }
+  }
   for (const { source, outputs, primaryByOutput, outcome } of sourcePrimaries) {
     for (const output of outputs.filter((item) => item.trimFrom)) {
       if (!input.waitForPrimary || !input.createTrimJob) {

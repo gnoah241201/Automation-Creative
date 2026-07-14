@@ -752,6 +752,7 @@ export default function App() {
         const batchResult = await submitResizeBatch({
           sources: batchSnapshot.sources,
           outputs: selectedOutputs,
+          outputCatalog: outputs,
           config: {
             inputRatio: '9:16', bitrate, fgPosition, bgType, backgroundImageMode, blurAmount,
             logoX, logoY, logoSize, buttonType, buttonText, buttonX, buttonY, buttonSize,
@@ -775,7 +776,10 @@ export default function App() {
                     serverJobId: result.jobId,
                     status: result.status,
                     progress: 0,
-                    retryInputs: selectedOutputs.some((candidate) => candidate.trimFrom === output.id)
+                    retryInputs: outputs.some((candidate) => (
+                      candidate.trimFrom === output.id
+                      && (!source.pendingOutputIds || source.pendingOutputIds.includes(candidate.id))
+                    ))
                       ? undefined
                       : {
                           kind: 'library',
