@@ -6,6 +6,9 @@ import { setEncoder } from './services/renderRunner';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { buildComposerAssetsRouter } from './routes/composerAssets';
+import { ComposerAssetStore } from './services/composerAssetStore';
+import { composerRoot } from './services/composerPaths';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -236,6 +239,7 @@ setEncoder(encoderConfig.effectiveEncoder);
 const start = async () => {
   const app = express();
   const queue = new JobQueueService(maxConcurrentJobs);
+  const composerAssetStore = new ComposerAssetStore(composerRoot);
   await queue.init();
   let metricsInitialized = false;
 
@@ -358,6 +362,7 @@ const start = async () => {
   app.get(['/metrics', '/api/metrics'], serveMetrics);
 
   app.use('/api/jobs', requireAuth, buildJobsRouter(queue));
+  app.use('/api/composer', requireAuth, buildComposerAssetsRouter(composerAssetStore));
 
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);
