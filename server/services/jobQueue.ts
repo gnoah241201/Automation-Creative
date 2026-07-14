@@ -60,7 +60,10 @@ type QueueDeps = {
   runRenderJob?: typeof runRenderJob;
   runComposerJob?: typeof runComposerJob;
   determineProgressMode?: typeof determineProgressMode;
-  localLibrary?: Pick<LocalLibraryService, 'registerFromCompletedJob' | 'cleanupExpired'>;
+  localLibrary?: Pick<
+    LocalLibraryService,
+    'registerFromCompletedJob' | 'cleanupExpired' | 'reconcileHolds'
+  >;
   diskCapacityGuard?: Pick<DiskCapacityGuard, 'requireCapacity'>;
 };
 
@@ -93,6 +96,8 @@ export class JobQueueService {
     
     // Recover from any previous state
     await this.recoverFromRestart();
+    await this.reconcileLibraryHolds();
+    await this.localLibrary?.cleanupExpired();
     
     // Start periodic cleanup of expired jobs
     this.startCleanupScheduler();
@@ -209,6 +214,7 @@ export class JobQueueService {
         );
 
         // Perform cleanup (fileStore deletes expired workDirs)
+        await this.reconcileLibraryHolds();
         await cleanupExpiredJobs(jobsToCheck);
         await this.localLibrary?.cleanupExpired();
 
@@ -326,6 +332,17 @@ export class JobQueueService {
     await this.persistAll();
     this.schedule();
     return job;
+  }
+
+  private async reconcileLibraryHolds(): Promise<void> {
+    if (!this.localLibrary) return;
+    const activeResizeReferences = this.getAllJobs()
+      .filter((job) => (
+        (job.kind === 'resize' || job.kind === 'trim')
+        && (job.status === 'queued' || job.status === 'processing' || (job.status as string) === 'cancelling')
+      ))
+      .map((job) => job.id);
+    await this.localLibrary.reconcileHolds(activeResizeReferences);
   }
 
   private async getQueuedRecoveryError(job: NativeJobRecord): Promise<string | null> {
@@ -602,6 +619,7 @@ export class JobQueueService {
       
       // Persist after terminal state
       await this.persistAll();
+      await this.reconcileLibraryHolds();
       
       // Update metrics after state change
       this.syncQueueMetrics();

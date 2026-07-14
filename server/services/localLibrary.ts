@@ -10,6 +10,7 @@ const STATE_FILENAME = 'entries.json';
 
 interface StoredLibraryEntry extends LocalLibraryEntry {
   relativePath: string;
+  relativeWorkDir: string;
 }
 
 export interface RegisterLibraryOutput {
@@ -20,6 +21,7 @@ export interface RegisterLibraryOutput {
   filename: string;
   duration: number;
   outputPath: string;
+  workDir: string;
   completedAt?: number;
 }
 
@@ -38,6 +40,7 @@ interface LocalLibraryOptions {
   managedRoot: string;
   libraryRoot: string;
   now?: () => number;
+  persistState?: (statePath: string, entries: unknown[]) => Promise<void>;
 }
 
 interface StatFsLike {
@@ -47,21 +50,30 @@ interface StatFsLike {
 
 type StatFs = (targetPath: string) => Promise<StatFsLike>;
 
+export class LocalLibraryValidationError extends Error {}
+export class LocalLibraryNotFoundError extends Error {}
+export class LocalLibraryInUseError extends Error {}
+export class LocalLibraryStorageError extends Error {}
+
 const isInside = (root: string, candidate: string): boolean => {
   const relative = path.relative(root, candidate);
   return relative !== '' && !relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative);
 };
 
-const publicEntry = ({ relativePath: _relativePath, ...entry }: StoredLibraryEntry): LocalLibraryEntry => (
-  structuredClone(entry)
-);
+const publicEntry = ({
+  relativePath: _relativePath,
+  relativeWorkDir: _relativeWorkDir,
+  ...entry
+}: StoredLibraryEntry): LocalLibraryEntry => structuredClone(entry);
 
 const validateIdentifier = (value: string, label = 'library identifier'): void => {
-  if (!IDENTIFIER.test(value)) throw new Error(`Invalid ${label}`);
+  if (!IDENTIFIER.test(value)) throw new LocalLibraryValidationError(`Invalid ${label}`);
 };
 
 const validateFinitePositive = (value: number, label: string): void => {
-  if (!Number.isFinite(value) || value <= 0) throw new Error(`${label} must be a finite positive number`);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new LocalLibraryValidationError(`${label} must be a finite positive number`);
+  }
 };
 
 export const isLibraryEntryExpired = (
@@ -96,6 +108,7 @@ export class LocalLibraryService {
   private readonly libraryRoot: string;
   private readonly statePath: string;
   private readonly now: () => number;
+  private readonly persistState: (statePath: string, entries: unknown[]) => Promise<void>;
   private entries: Map<string, StoredLibraryEntry> | null = null;
   private operationChain: Promise<void> = Promise.resolve();
 
@@ -107,21 +120,43 @@ export class LocalLibraryService {
     }
     this.statePath = path.join(this.libraryRoot, STATE_FILENAME);
     this.now = options.now ?? Date.now;
+    this.persistState = options.persistState ?? LocalLibraryService.persistAtomically;
   }
 
   async registerOutput(input: RegisterLibraryOutput): Promise<LocalLibraryEntry> {
     return this.mutate(async () => {
       this.validateRegistration(input);
-      const outputPath = await this.requireManagedFile(input.outputPath);
+      const [outputPath, workDir] = await Promise.all([
+        this.requireManagedFile(input.outputPath),
+        this.requireManagedDirectory(input.workDir),
+      ]);
+      if (!isInside(workDir, outputPath)) {
+        throw new LocalLibraryValidationError('Library output must belong to its dedicated work directory');
+      }
+      const outputDirectory = await this.requireManagedDirectory(path.join(input.workDir, 'output'));
+      await this.requireManagedDirectory(path.join(input.workDir, 'input'));
+      if (!isInside(outputDirectory, outputPath)) {
+        throw new LocalLibraryValidationError('Library output must be inside the dedicated output directory');
+      }
+      const children = await fs.readdir(workDir, { withFileTypes: true });
+      if (children.some((child) => !child.isDirectory() || (child.name !== 'input' && child.name !== 'output'))) {
+        throw new LocalLibraryValidationError('Library output requires a dedicated work directory');
+      }
       const stat = await fs.stat(outputPath);
-      if (!stat.isFile()) throw new Error('Library output must be a managed file');
+      if (!stat.isFile()) throw new LocalLibraryValidationError('Library output must be a managed file');
 
       const existing = [...this.entries!.values()].find((entry) => entry.jobId === input.jobId);
       if (existing) return publicEntry(existing);
+      if ([...this.entries!.values()].some((entry) => entry.relativeWorkDir === path.relative(
+        this.managedRoot,
+        path.resolve(input.workDir),
+      ))) {
+        throw new LocalLibraryValidationError('Each composer output requires a dedicated work directory');
+      }
 
       const completedAt = input.completedAt ?? this.now();
       if (!Number.isFinite(completedAt) || completedAt < 0) {
-        throw new Error('Completion time must be a finite timestamp');
+        throw new LocalLibraryValidationError('Completion time must be a finite timestamp');
       }
       const entry: StoredLibraryEntry = {
         id: randomUUID(),
@@ -140,6 +175,7 @@ export class LocalLibraryService {
         // Persist the managed lexical location, not Windows' potentially short-name
         // realpath spelling. Every later access resolves and revalidates symlinks.
         relativePath: path.relative(this.managedRoot, path.resolve(input.outputPath)),
+        relativeWorkDir: path.relative(this.managedRoot, path.resolve(input.workDir)),
       };
       this.entries!.set(entry.id, entry);
       return publicEntry(entry);
@@ -158,6 +194,7 @@ export class LocalLibraryService {
       filename: job.spec.outputFilename,
       duration: job.spec.trimEnd - job.spec.trimStart,
       outputPath: job.files.outputPath,
+      workDir: job.files.workDir,
       completedAt: job.finishedAt,
     });
   }
@@ -175,7 +212,7 @@ export class LocalLibraryService {
         if (isLibraryEntryExpired(entry, now)) continue;
         const resolved = await this.resolveStoredFile(entry);
         if (!resolved) {
-          this.entries!.delete(entry.id);
+          await this.deleteInsideMutation(entry.id);
           continue;
         }
         usable.push(publicEntry(entry));
@@ -191,7 +228,7 @@ export class LocalLibraryService {
       if (!entry || isLibraryEntryExpired(entry, now)) return null;
       const resolved = await this.resolveStoredFile(entry);
       if (!resolved) {
-        this.entries!.delete(id);
+        await this.deleteInsideMutation(id);
         return null;
       }
       return { entry: publicEntry(entry), path: resolved };
@@ -204,11 +241,11 @@ export class LocalLibraryService {
     return this.mutate(async () => {
       const entry = this.entries!.get(id);
       if (!entry || isLibraryEntryExpired(entry, this.now())) {
-        throw new Error('Library output is unavailable');
+        throw new LocalLibraryNotFoundError('Library output is unavailable');
       }
       const resolved = await this.resolveStoredFile(entry);
       if (!resolved) {
-        throw new Error('Library output is unavailable');
+        throw new LocalLibraryNotFoundError('Library output is unavailable');
       }
       entry.holds = [...new Set([...entry.holds, referenceId])].sort();
       return publicEntry(entry);
@@ -228,7 +265,12 @@ export class LocalLibraryService {
 
   async delete(id: string): Promise<boolean> {
     validateIdentifier(id);
-    return this.mutate(() => this.deleteInsideMutation(id));
+    return this.mutate(async () => {
+      const result = await this.deleteInsideMutation(id);
+      if (result === 'missing') throw new LocalLibraryNotFoundError('Library output was not found');
+      if (result === 'in-use') throw new LocalLibraryInUseError('Output is held by an active job');
+      return true;
+    });
   }
 
   async deleteMany(ids: string[]): Promise<DeleteManyLibraryResult> {
@@ -241,10 +283,11 @@ export class LocalLibraryService {
         const entry = this.entries!.get(id);
         if (!entry) {
           result.missing.push(id);
-        } else if (entry.holds.length > 0) {
-          result.inUse.push(id);
-        } else if (await this.deleteInsideMutation(id)) {
-          result.deleted.push(id);
+        } else {
+          const deletion = await this.deleteInsideMutation(id);
+          if (deletion === 'in-use') result.inUse.push(id);
+          else if (deletion === 'deleted') result.deleted.push(id);
+          else result.missing.push(id);
         }
       }
       return result;
@@ -256,10 +299,27 @@ export class LocalLibraryService {
       const removed: string[] = [];
       for (const entry of [...this.entries!.values()]) {
         if (!isLibraryEntryExpired(entry, now) || entry.holds.length > 0) continue;
-        if (await this.deleteInsideMutation(entry.id)) removed.push(entry.id);
+        if (await this.deleteInsideMutation(entry.id) === 'deleted') removed.push(entry.id);
       }
       return removed;
     });
+  }
+
+  async reconcileHolds(activeReferenceIds: Iterable<string>): Promise<string[]> {
+    const active = new Set(activeReferenceIds);
+    for (const id of active) validateIdentifier(id, 'hold reference');
+    return this.mutate(() => {
+      const released = new Set<string>();
+      for (const entry of this.entries!.values()) {
+        const retained: string[] = [];
+        for (const hold of entry.holds) {
+          if (active.has(hold)) retained.push(hold);
+          else released.add(hold);
+        }
+        entry.holds = retained;
+      }
+      return [...released].sort();
+    }, (released) => released.length > 0);
   }
 
   private validateRegistration(input: RegisterLibraryOutput): void {
@@ -274,17 +334,23 @@ export class LocalLibraryService {
       !input.filename
       || input.filename !== path.basename(input.filename)
       || /[\u0000-\u001f\u007f]/.test(input.filename)
-    ) throw new Error('Output filename must be a safe basename');
+    ) throw new LocalLibraryValidationError('Output filename must be a safe basename');
   }
 
-  private async deleteInsideMutation(id: string): Promise<boolean> {
+  private async deleteInsideMutation(id: string): Promise<'deleted' | 'in-use' | 'missing'> {
     const entry = this.entries!.get(id);
-    if (!entry) return true;
-    if (entry.holds.length > 0) return false;
-    const resolved = await this.resolveStoredFile(entry);
-    if (resolved) await fs.unlink(resolved);
+    if (!entry) return 'missing';
+    if (entry.holds.length > 0) return 'in-use';
+    const resolved = await this.resolveStoredDirectory(entry);
+    if (resolved) {
+      try {
+        await fs.rm(resolved, { recursive: true });
+      } catch {
+        throw new LocalLibraryStorageError('Local library output could not be deleted');
+      }
+    }
     this.entries!.delete(id);
-    return true;
+    return 'deleted';
   }
 
   private async requireManagedFile(candidate: string): Promise<string> {
@@ -296,12 +362,19 @@ export class LocalLibraryService {
         fs.realpath(path.resolve(candidate)),
       ]);
     } catch {
-      throw new Error('Library output must exist in managed storage');
+      throw new LocalLibraryValidationError('Library output must exist in managed storage');
     }
     if (!isInside(managedReal, candidateReal)) {
-      throw new Error('Library output must exist in managed storage');
+      throw new LocalLibraryValidationError('Library output must exist in managed storage');
     }
     return candidateReal;
+  }
+
+  private async requireManagedDirectory(candidate: string): Promise<string> {
+    const resolved = await this.requireManagedFile(candidate);
+    const stat = await fs.stat(resolved);
+    if (!stat.isDirectory()) throw new LocalLibraryValidationError('Composer work directory is invalid');
+    return resolved;
   }
 
   private async resolveStoredFile(entry: StoredLibraryEntry): Promise<string | null> {
@@ -311,6 +384,17 @@ export class LocalLibraryService {
       const resolved = await this.requireManagedFile(lexical);
       const stat = await fs.stat(resolved);
       return stat.isFile() ? resolved : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async resolveStoredDirectory(entry: StoredLibraryEntry): Promise<string | null> {
+    const lexical = path.resolve(this.managedRoot, entry.relativeWorkDir);
+    if (!isInside(this.managedRoot, lexical)) return null;
+    try {
+      const resolved = await this.requireManagedDirectory(lexical);
+      return resolved;
     } catch {
       return null;
     }
@@ -332,7 +416,9 @@ export class LocalLibraryService {
       const entries = parsed.filter(this.isStoredEntry);
       this.entries = new Map(entries.map((entry) => [entry.id, structuredClone(entry)]));
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new LocalLibraryStorageError('Local library state could not be loaded');
+      }
       this.entries = new Map();
     }
   }
@@ -354,15 +440,26 @@ export class LocalLibraryService {
       && typeof entry.expiresAt === 'number' && Number.isFinite(entry.expiresAt)
       && typeof entry.relativePath === 'string'
       && !path.isAbsolute(entry.relativePath)
+      && typeof entry.relativeWorkDir === 'string'
+      && !path.isAbsolute(entry.relativeWorkDir)
       && Array.isArray(entry.holds)
       && entry.holds.every((hold) => typeof hold === 'string' && IDENTIFIER.test(hold));
   };
 
   private async persist(): Promise<void> {
-    const temporary = `${this.statePath}.${randomUUID()}.tmp`;
     try {
-      await fs.writeFile(temporary, JSON.stringify([...this.entries!.values()], null, 2), 'utf8');
-      await fs.rename(temporary, this.statePath);
+      await this.persistState(this.statePath, [...this.entries!.values()].map((entry) => structuredClone(entry)));
+    } catch (error) {
+      if (error instanceof LocalLibraryStorageError) throw error;
+      throw new LocalLibraryStorageError('Local library state could not be saved');
+    }
+  }
+
+  private static async persistAtomically(statePath: string, entries: unknown[]): Promise<void> {
+    const temporary = `${statePath}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temporary, JSON.stringify(entries, null, 2), 'utf8');
+      await fs.rename(temporary, statePath);
     } finally {
       await fs.rm(temporary, { force: true }).catch(() => {});
     }
@@ -374,12 +471,21 @@ export class LocalLibraryService {
     return operation();
   }
 
-  private async mutate<T>(operation: () => T | Promise<T>): Promise<T> {
+  private async mutate<T>(
+    operation: () => T | Promise<T>,
+    shouldPersist: (result: T) => boolean = () => true,
+  ): Promise<T> {
     let result!: T;
     const current = this.operationChain.catch(() => {}).then(async () => {
       await this.ensureLoaded();
-      result = await operation();
-      await this.persist();
+      const snapshot = new Map([...this.entries!.entries()].map(([id, entry]) => [id, structuredClone(entry)]));
+      try {
+        result = await operation();
+        if (shouldPersist(result)) await this.persist();
+      } catch (error) {
+        this.entries = snapshot;
+        throw error;
+      }
     });
     this.operationChain = current;
     await current;

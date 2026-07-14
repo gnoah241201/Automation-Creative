@@ -1,7 +1,22 @@
 import express from 'express';
-import { LocalLibraryService } from '../services/localLibrary.ts';
+import {
+  LocalLibraryInUseError,
+  LocalLibraryNotFoundError,
+  LocalLibraryService,
+  LocalLibraryValidationError,
+} from '../services/localLibrary.ts';
 
-const message = (error: unknown): string => error instanceof Error ? error.message : 'Library operation failed';
+const sendError = (res: express.Response, error: unknown): void => {
+  if (error instanceof LocalLibraryValidationError) {
+    res.status(400).json({ error: 'ValidationError', message: error.message });
+  } else if (error instanceof LocalLibraryNotFoundError) {
+    res.status(404).json({ error: 'NotFound', message: 'Library output was not found' });
+  } else if (error instanceof LocalLibraryInUseError) {
+    res.status(409).json({ error: 'InUse', message: 'Output is held by an active job' });
+  } else {
+    res.status(500).json({ error: 'LibraryUnavailable', message: 'Local library is unavailable' });
+  }
+};
 
 export const buildLibraryRouter = (library: LocalLibraryService) => {
   const router = express.Router();
@@ -10,7 +25,7 @@ export const buildLibraryRouter = (library: LocalLibraryService) => {
     try {
       res.json({ entries: await library.listUsable() });
     } catch (error) {
-      res.status(500).json({ error: 'LibraryUnavailable', message: message(error) });
+      sendError(res, error);
     }
   });
 
@@ -22,21 +37,20 @@ export const buildLibraryRouter = (library: LocalLibraryService) => {
         return;
       }
       res.download(resolved.path, resolved.entry.filename);
-    } catch {
-      res.status(410).json({ error: 'Expired', message: 'Library output is unavailable' });
+    } catch (error) {
+      if (error instanceof LocalLibraryValidationError) sendError(res, error);
+      else if (error instanceof LocalLibraryNotFoundError) {
+        res.status(410).json({ error: 'Expired', message: 'Library output is unavailable' });
+      } else sendError(res, error);
     }
   });
 
   router.delete('/:id', async (req, res) => {
     try {
-      const removed = await library.delete(req.params.id);
-      if (removed) {
-        res.status(204).send();
-        return;
-      }
-      res.status(409).json({ error: 'InUse', message: 'Output is held by an active job' });
+      await library.delete(req.params.id);
+      res.status(204).send();
     } catch (error) {
-      res.status(400).json({ error: 'ValidationError', message: message(error) });
+      sendError(res, error);
     }
   });
 
@@ -45,7 +59,7 @@ export const buildLibraryRouter = (library: LocalLibraryService) => {
       const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
       res.json(await library.deleteMany(ids));
     } catch (error) {
-      res.status(400).json({ error: 'ValidationError', message: message(error) });
+      sendError(res, error);
     }
   });
 
