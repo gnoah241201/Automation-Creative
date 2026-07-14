@@ -1,9 +1,20 @@
 import express from 'express';
 import { ComposerAssetStore } from '../services/composerAssetStore.ts';
-import { ComposerDraftStore } from '../services/composerDraftStore.ts';
+import {
+  ComposerDraftNotFoundError, ComposerDraftStore, ComposerDraftValidationError,
+} from '../services/composerDraftStore.ts';
 import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
+import { validateComposerConfiguration } from '../services/composerValidation.ts';
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
+
+const sendNotFound = (res: express.Response) => res.status(404).json({
+  error: 'NotFound', message: 'Composer batch not found',
+});
+
+const sendInternalError = (res: express.Response, message: string) => res.status(500).json({
+  error: 'InternalError', message,
+});
 
 export const buildComposerBatchesRouter = (
   assets: ComposerAssetStore,
@@ -12,6 +23,8 @@ export const buildComposerBatchesRouter = (
   const router = express.Router();
 
   router.post('/batches', express.json(), async (req, res) => {
+    let originals;
+    let hooks;
     try {
       const originalIds = Array.isArray(req.body?.originalIds) ? req.body.originalIds : [];
       const hookIds = Array.isArray(req.body?.hookIds) ? req.body.hookIds : [];
@@ -21,12 +34,17 @@ export const buildComposerBatchesRouter = (
       ) {
         throw new Error('Asset IDs must be strings');
       }
-      const originals = await Promise.all(
+      originals = await Promise.all(
         originalIds.map((id: string) => assets.requireReadyAsset(id, 'original')),
       );
-      const hooks = await Promise.all(
+      hooks = await Promise.all(
         hookIds.map((id: string) => assets.requireReadyAsset(id, 'hook')),
       );
+    } catch (error) {
+      res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
+      return;
+    }
+    try {
       const draft = await drafts.create(
         originals.map((item) => item.id),
         hooks.map((item) => item.id),
@@ -35,7 +53,11 @@ export const buildComposerBatchesRouter = (
       await drafts.save(draft);
       res.status(201).json(draft);
     } catch (error) {
-      res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
+      if (error instanceof ComposerDraftValidationError) {
+        res.status(400).json({ error: 'ValidationError', message: error.message });
+      } else {
+        sendInternalError(res, 'Unable to create composer batch');
+      }
     }
   });
 
@@ -45,9 +67,31 @@ export const buildComposerBatchesRouter = (
       return;
     }
     try {
-      res.json(await drafts.putConfiguration(req.params.batchId, req.body));
+      const draft = await drafts.require(req.params.batchId);
+      const structural = validateComposerConfiguration(draft, req.body);
+      if ('message' in structural) {
+        res.status(400).json({ error: 'ValidationError', message: structural.message });
+        return;
+      }
+      let original;
+      try {
+        [original] = await Promise.all([
+          assets.requireReadyAsset(structural.config.originalId, 'original'),
+          assets.requireReadyAsset(structural.config.representativeHookId, 'hook'),
+        ]);
+      } catch (error) {
+        res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
+        return;
+      }
+      const validation = validateComposerConfiguration(draft, structural.config, original.duration);
+      if ('message' in validation) {
+        res.status(400).json({ error: 'ValidationError', message: validation.message });
+        return;
+      }
+      res.json(await drafts.putConfiguration(req.params.batchId, validation.config));
     } catch (error) {
-      res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
+      if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+      else sendInternalError(res, 'Unable to update composer configuration');
     }
   });
 
@@ -55,9 +99,9 @@ export const buildComposerBatchesRouter = (
     try {
       const draft = await drafts.get(req.params.batchId);
       if (draft) res.json(draft);
-      else res.status(404).json({ error: 'NotFound', message: 'Composer batch not found' });
+      else sendNotFound(res);
     } catch {
-      res.status(404).json({ error: 'NotFound', message: 'Composer batch not found' });
+      sendInternalError(res, 'Unable to restore composer batch');
     }
   });
 

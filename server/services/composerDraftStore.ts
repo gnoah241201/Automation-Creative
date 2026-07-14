@@ -6,6 +6,9 @@ import { resolveComposerChild } from './composerPaths.ts';
 
 const RETENTION_MS = 86_400_000;
 
+export class ComposerDraftNotFoundError extends Error {}
+export class ComposerDraftValidationError extends Error {}
+
 export class ComposerDraftStore {
   private writePromise: Promise<void> = Promise.resolve();
 
@@ -18,7 +21,10 @@ export class ComposerDraftStore {
       || hookIds.length < 1
       || hookIds.length > 10
     ) {
-      throw new Error('A batch requires 1-10 originals and 1-10 hooks');
+      throw new ComposerDraftValidationError('A batch requires 1-10 originals and 1-10 hooks');
+    }
+    if (new Set(originalIds).size !== originalIds.length || new Set(hookIds).size !== hookIds.length) {
+      throw new ComposerDraftValidationError('A batch cannot contain duplicate asset IDs');
     }
 
     const now = Date.now();
@@ -43,7 +49,7 @@ export class ComposerDraftStore {
     let result: ComposerBatchDraft | undefined;
     const write = this.writePromise.catch(() => {}).then(async () => {
       const draft = await this.read(batchId);
-      if (!draft) throw new Error(`Composer batch ${batchId} was not found`);
+      if (!draft) throw new ComposerDraftNotFoundError(`Composer batch ${batchId} was not found`);
       const now = Date.now();
       result = {
         ...draft,
@@ -64,7 +70,7 @@ export class ComposerDraftStore {
 
   async require(batchId: string): Promise<ComposerBatchDraft> {
     const draft = await this.get(batchId);
-    if (!draft) throw new Error(`Composer batch ${batchId} was not found`);
+    if (!draft) throw new ComposerDraftNotFoundError(`Composer batch ${batchId} was not found`);
     return draft;
   }
 

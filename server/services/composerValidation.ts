@@ -1,9 +1,83 @@
-import { ComposerBatchDraft } from '../../shared/composer-contract.ts';
+import { ComposerBatchDraft, ComposerVariantConfig } from '../../shared/composer-contract.ts';
 
 export interface ComposerValidationResult {
   valid: boolean;
   message?: string;
 }
+
+type ConfigurationValidationResult =
+  | { valid: true; config: ComposerVariantConfig }
+  | { valid: false; message: string };
+
+export const validateComposerConfiguration = (
+  draft: ComposerBatchDraft,
+  candidate: unknown,
+  originalDuration?: number,
+): ConfigurationValidationResult => {
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) {
+    return { valid: false, message: 'Configuration must be an object' };
+  }
+  const value = candidate as Record<string, unknown>;
+  const stringFields = ['id', 'originalId', 'durationGroupId', 'representativeHookId'] as const;
+  if (stringFields.some((field) => typeof value[field] !== 'string' || value[field].length === 0)) {
+    return { valid: false, message: 'Configuration identity fields must be non-empty strings' };
+  }
+  const id = value.id as string;
+  const originalId = value.originalId as string;
+  const durationGroupId = value.durationGroupId as string;
+  const representativeHookId = value.representativeHookId as string;
+  if (id !== `${originalId}:${durationGroupId}`) {
+    return { valid: false, message: 'Configuration ID is not canonical' };
+  }
+  const group = draft.durationGroups.find((item) => item.id === durationGroupId);
+  if (
+    !draft.originalIds.includes(originalId)
+    || !group
+    || !draft.hookIds.includes(representativeHookId)
+    || !group.hookIds.includes(representativeHookId)
+  ) {
+    return { valid: false, message: 'Configuration assets do not belong to this batch variant' };
+  }
+  if (value.transition !== 'cut' || typeof value.reviewed !== 'boolean') {
+    return { valid: false, message: 'Configuration transition or review state is invalid' };
+  }
+  const times = [value.insertAt, value.trimStart, value.trimEnd];
+  if (times.some((time) => typeof time !== 'number' || !Number.isFinite(time))) {
+    return { valid: false, message: 'Configuration timeline values must be finite numbers' };
+  }
+  const insertAt = value.insertAt as number;
+  const trimStart = value.trimStart as number;
+  const trimEnd = value.trimEnd as number;
+  const hookEnd = insertAt + group.maxDuration;
+  const timelineValid = insertAt >= 0
+    && trimStart >= 0
+    && trimStart <= insertAt
+    && trimEnd >= hookEnd
+    && trimStart < trimEnd
+    && (originalDuration === undefined || (
+      Number.isFinite(originalDuration)
+      && originalDuration > 0
+      && insertAt <= originalDuration
+      && trimEnd <= originalDuration + group.maxDuration
+    ));
+  if (!timelineValid) {
+    return { valid: false, message: 'Configuration timeline or trim range is invalid' };
+  }
+  return {
+    valid: true,
+    config: {
+      id,
+      originalId,
+      durationGroupId,
+      representativeHookId,
+      insertAt,
+      trimStart,
+      trimEnd,
+      transition: 'cut',
+      reviewed: value.reviewed as boolean,
+    },
+  };
+};
 
 export const validateDraftForRender = (
   draft: ComposerBatchDraft,
@@ -24,23 +98,12 @@ export const validateDraftForRender = (
     if (!group || !config) {
       return { valid: false, message: `Selected output ${outputId} has no configuration` };
     }
-    if (!config.reviewed) {
-      return { valid: false, message: `Selected output ${outputId} has an unreviewed configuration` };
-    }
-
-    const hookEnd = config.insertAt + group.maxDuration;
-    const validConfig = config.originalId === originalId
-      && config.durationGroupId === group.id
-      && group.hookIds.includes(config.representativeHookId)
-      && config.transition === 'cut'
-      && [config.insertAt, config.trimStart, config.trimEnd].every(Number.isFinite)
-      && config.insertAt >= 0
-      && config.trimStart >= 0
-      && config.trimStart <= config.insertAt
-      && config.trimEnd >= hookEnd
-      && config.trimStart < config.trimEnd;
-    if (!validConfig) {
+    const validation = validateComposerConfiguration(draft, config);
+    if (!validation.valid) {
       return { valid: false, message: `Selected output ${outputId} has an invalid configuration` };
+    }
+    if (!validation.config.reviewed) {
+      return { valid: false, message: `Selected output ${outputId} has an unreviewed configuration` };
     }
   }
   return { valid: true };
