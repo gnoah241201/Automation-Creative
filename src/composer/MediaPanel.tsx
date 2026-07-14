@@ -98,6 +98,7 @@ export function MediaPanel({
   };
 
   const addFiles = (kind: ComposerAssetKind, files: File[]) => {
+    if (continuing) return;
     setNotice(undefined);
     const retained = kind === 'original' ? originals : hooks;
     const existingNames = new Set(retained.map((asset) => asset.originalFilename));
@@ -136,6 +137,7 @@ export function MediaPanel({
   const cancelUpload = (item: UploadItem) => controllers.current.get(item.id)?.abort();
   const dismissError = (item: UploadItem) => setUploads((current) => current.filter((entry) => entry.id !== item.id));
   const retryUpload = (item: UploadItem) => {
+    if (continuing) return;
     if (acceptedCounts.current[item.kind] >= MAX_ASSETS_PER_KIND) {
       setNotice(`Only ${MAX_ASSETS_PER_KIND} ${item.kind === 'original' ? 'originals' : 'hooks'} can be retained.`);
       return;
@@ -174,6 +176,7 @@ export function MediaPanel({
           onRetry={retryUpload}
           onCrop={onCropRequested}
           onRemove={removeAsset}
+          disabled={continuing}
         />
         <AssetCollection
           kind="hook"
@@ -187,6 +190,7 @@ export function MediaPanel({
           onRetry={retryUpload}
           onCrop={onCropRequested}
           onRemove={removeAsset}
+          disabled={continuing}
         />
       </div>
 
@@ -219,7 +223,7 @@ export function MediaPanel({
           className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-blue-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-950/30 hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {continuing && <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />}
-          {continuing ? 'Preparing…' : 'Continue to edit'}
+          {continuing ? 'Preparing...' : 'Continue to edit'}
         </button>
       </div>
     </div>
@@ -238,6 +242,7 @@ interface AssetCollectionProps {
   onRetry: (item: UploadItem) => void;
   onCrop: (asset: ComposerAsset) => void;
   onRemove: (asset: ComposerAsset) => void;
+  disabled: boolean;
 }
 
 function AssetCollection({
@@ -252,6 +257,7 @@ function AssetCollection({
   onRetry,
   onCrop,
   onRemove,
+  disabled,
 }: AssetCollectionProps) {
   const input = useRef<HTMLInputElement>(null);
   const count = assets.length + uploads.filter((item) => item.status === 'uploading').length;
@@ -272,6 +278,7 @@ function AssetCollection({
         ref={input}
         className="sr-only"
         type="file"
+        disabled={disabled}
         accept="video/*"
         multiple
         onChange={(event) => {
@@ -281,12 +288,12 @@ function AssetCollection({
       />
       <button
         type="button"
-        disabled={count >= MAX_ASSETS_PER_KIND}
+        disabled={disabled || count >= MAX_ASSETS_PER_KIND}
         onClick={() => input.current?.click()}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => {
           event.preventDefault();
-          if (count < MAX_ASSETS_PER_KIND) acceptFiles(event.dataTransfer.files);
+          if (!disabled && count < MAX_ASSETS_PER_KIND) acceptFiles(event.dataTransfer.files);
         }}
         className="mt-4 flex w-full flex-col items-center justify-center rounded-xl border border-dashed border-neutral-700 bg-neutral-900/70 px-4 py-5 text-center hover:border-blue-500/70 hover:bg-blue-500/5 disabled:cursor-not-allowed disabled:opacity-40"
       >
@@ -297,10 +304,10 @@ function AssetCollection({
 
       <div className="mt-4 space-y-3">
         {assets.map((asset) => (
-          <AssetCard key={asset.id} asset={asset} onCrop={() => onCrop(asset)} onRemove={() => onRemove(asset)} />
+          <AssetCard key={asset.id} asset={asset} disabled={disabled} onCrop={() => onCrop(asset)} onRemove={() => onRemove(asset)} />
         ))}
         {uploads.map((item) => (
-          <UploadCard key={item.id} item={item} onCancel={() => onCancel(item)} onDismiss={() => onDismissError(item)} onRetry={() => onRetry(item)} />
+          <UploadCard key={item.id} item={item} disabled={disabled} onCancel={() => onCancel(item)} onDismiss={() => onDismissError(item)} onRetry={() => onRetry(item)} />
         ))}
         {!assets.length && !uploads.length && (
           <p className="py-2 text-center text-xs text-neutral-600">No {kind === 'original' ? 'original videos' : 'hooks'} added yet.</p>
@@ -310,7 +317,7 @@ function AssetCollection({
   );
 }
 
-function AssetCard({ asset, onCrop, onRemove }: { asset: ComposerAsset; onCrop: () => void; onRemove: () => void }) {
+function AssetCard({ asset, disabled, onCrop, onRemove }: { asset: ComposerAsset; disabled: boolean; onCrop: () => void; onRemove: () => void }) {
   const ready = asset.status === 'ready';
   const needsCrop = asset.status === 'needs-crop';
   return (
@@ -322,7 +329,7 @@ function AssetCard({ asset, onCrop, onRemove }: { asset: ComposerAsset; onCrop: 
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-white" title={asset.originalFilename}>{asset.originalFilename}</p>
-        <p className="mt-1 text-xs text-neutral-500">{durationLabel(asset.duration)} · {asset.width}&times;{asset.height}</p>
+        <p className="mt-1 text-xs text-neutral-500">{durationLabel(asset.duration)} &middot; {asset.width}&times;{asset.height}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <span className={ready
             ? 'inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300'
@@ -333,19 +340,19 @@ function AssetCard({ asset, onCrop, onRemove }: { asset: ComposerAsset; onCrop: 
             {ready ? <Check className="h-3 w-3" aria-hidden="true" /> : <AlertCircle className="h-3 w-3" aria-hidden="true" />}
             {ready ? 'Ready' : needsCrop ? 'Crop required' : asset.error || 'Invalid media'}
           </span>
-          {needsCrop && (
-            <button type="button" onClick={onCrop} className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2 py-1 text-xs font-medium text-amber-100 hover:bg-amber-500/25">
-              <Crop className="h-3 w-3" aria-hidden="true" /> Crop 9:16
+          {(needsCrop || asset.crop) && (
+            <button type="button" disabled={disabled} onClick={onCrop} className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2 py-1 text-xs font-medium text-amber-100 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-40">
+              <Crop className="h-3 w-3" aria-hidden="true" /> {needsCrop ? 'Crop 9:16' : 'Adjust crop'}
             </button>
           )}
         </div>
       </div>
-      <button type="button" onClick={onRemove} className="h-8 rounded-lg p-2 text-neutral-500 hover:bg-red-500/10 hover:text-red-300" aria-label={`Remove ${asset.originalFilename}`}><Trash2 className="h-4 w-4" /></button>
+      <button type="button" disabled={disabled} onClick={onRemove} className="h-8 rounded-lg p-2 text-neutral-500 hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40" aria-label={`Remove ${asset.originalFilename}`}><Trash2 className="h-4 w-4" /></button>
     </article>
   );
 }
 
-function UploadCard({ item, onCancel, onDismiss, onRetry }: { item: UploadItem; onCancel: () => void; onDismiss: () => void; onRetry: () => void }) {
+function UploadCard({ item, disabled, onCancel, onDismiss, onRetry }: { item: UploadItem; disabled: boolean; onCancel: () => void; onDismiss: () => void; onRetry: () => void }) {
   const failed = item.status === 'error';
   return (
     <article className="rounded-xl border border-neutral-800 bg-neutral-900 p-3">
@@ -366,7 +373,7 @@ function UploadCard({ item, onCancel, onDismiss, onRetry }: { item: UploadItem; 
         </div>
         {failed ? (
           <div className="flex gap-1">
-            <button type="button" onClick={onRetry} className="rounded-lg px-2 py-1 text-xs font-medium text-blue-300 hover:bg-blue-500/10">Retry</button>
+            <button type="button" disabled={disabled} onClick={onRetry} className="rounded-lg px-2 py-1 text-xs font-medium text-blue-300 hover:bg-blue-500/10 disabled:cursor-not-allowed disabled:opacity-40">Retry</button>
             <button type="button" onClick={onDismiss} className="rounded-lg p-1 text-neutral-500 hover:bg-neutral-800 hover:text-white" aria-label={`Dismiss ${item.file.name} error`}><X className="h-4 w-4" /></button>
           </div>
         ) : (

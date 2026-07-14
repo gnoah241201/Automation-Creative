@@ -1,8 +1,9 @@
-import React, { useReducer, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { ComposerAsset, ComposerCrop } from '../../shared/composer-contract.ts';
 import { createComposerBatch, saveComposerCrop } from './api.ts';
 import { CropEditor } from './CropEditor.tsx';
 import { MediaPanel } from './MediaPanel.tsx';
+import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets.ts';
 import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
 
 const stages: Array<{ id: ComposerStage; step: number; label: string; description: string }> = [
@@ -17,17 +18,47 @@ export function HookComposerPage() {
   const [cropAsset, setCropAsset] = useState<ComposerAsset>();
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string>();
+  const sourceAssetsRef = useRef<ComposerAsset[]>([]);
+  const sourceRevision = useRef(0);
+  const createRequest = useRef<AbortController | undefined>(undefined);
+  const mounted = useRef(true);
   const originals = sourceAssets.filter((asset) => asset.kind === 'original');
   const hooks = sourceAssets.filter((asset) => asset.kind === 'hook');
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      createRequest.current?.abort();
+    };
+  }, []);
+
+  const updateSourceAssets = (change: ComposerSourceChange) => {
+    const result = reduceComposerSourceAssets(sourceAssetsRef.current, change, Boolean(state.batchId));
+    if (result.assets === sourceAssetsRef.current) return;
+    sourceAssetsRef.current = result.assets;
+    sourceRevision.current += 1;
+    createRequest.current?.abort();
+    setSourceAssets(result.assets);
+    setContinueError(undefined);
+    if (result.invalidateBatch) {
+      dispatch({
+        type: 'assetsLoaded',
+        originals: result.assets.filter((asset) => asset.kind === 'original'),
+        hooks: result.assets.filter((asset) => asset.kind === 'hook'),
+      });
+    }
+  };
 
   const saveCrop = async (crop: ComposerCrop) => {
     if (!cropAsset) return;
     const saved = await saveComposerCrop(cropAsset.id, crop);
-    setSourceAssets((current) => current.map((asset) => asset.id === saved.id ? saved : asset));
+    updateSourceAssets({ type: 'upsert', asset: saved });
     setCropAsset(undefined);
   };
 
   const continueToEdit = async () => {
+    if (continuing) return;
     const readyOriginals = originals.filter((asset) => asset.status === 'ready');
     const readyHooks = hooks.filter((asset) => asset.status === 'ready');
     if (
@@ -41,17 +72,27 @@ export function HookComposerPage() {
     }
     setContinuing(true);
     setContinueError(undefined);
+    const controller = new AbortController();
+    createRequest.current?.abort();
+    createRequest.current = controller;
+    const revision = sourceRevision.current;
     try {
       const batch = await createComposerBatch(
         readyOriginals.map((asset) => asset.id),
         readyHooks.map((asset) => asset.id),
+        controller.signal,
       );
+      if (controller.signal.aborted || revision !== sourceRevision.current) return;
       dispatch({ type: 'assetsLoaded', originals: readyOriginals, hooks: readyHooks });
       dispatch({ type: 'batchCreated', batch });
     } catch (error) {
+      if (controller.signal.aborted) return;
       setContinueError(error instanceof Error ? error.message : 'The batch could not be created');
     } finally {
-      setContinuing(false);
+      if (mounted.current && createRequest.current === controller) {
+        createRequest.current = undefined;
+        setContinuing(false);
+      }
     }
   };
 
@@ -73,7 +114,7 @@ export function HookComposerPage() {
               <button
                 type="button"
                 aria-current={active ? 'step' : undefined}
-                disabled={stage.id !== 'sources' && !state.batchId}
+                disabled={continuing || (stage.id !== 'sources' && !state.batchId)}
                 onClick={() => dispatch({ type: 'setStage', stage: stage.id })}
                 className={active
                   ? 'w-full rounded-xl border border-blue-500 bg-blue-500/10 p-3 text-left'
@@ -101,8 +142,8 @@ export function HookComposerPage() {
           <MediaPanel
             originals={originals}
             hooks={hooks}
-            onAssetUploaded={(asset) => setSourceAssets((current) => current.some((item) => item.id === asset.id) ? current : [...current, asset])}
-            onAssetRemoved={(assetId) => setSourceAssets((current) => current.filter((asset) => asset.id !== assetId))}
+            onAssetUploaded={(asset) => updateSourceAssets({ type: 'upsert', asset })}
+            onAssetRemoved={(assetId) => updateSourceAssets({ type: 'remove', assetId })}
             onCropRequested={setCropAsset}
             onContinue={() => void continueToEdit()}
             continuing={continuing}

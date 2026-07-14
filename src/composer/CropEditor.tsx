@@ -15,10 +15,11 @@ export function CropEditor({ asset, sourceUrl, onSave, onClose }: CropEditorProp
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const dialog = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
-    dialog.current?.focus();
+    closeButton.current?.focus();
     return () => previouslyFocused?.focus();
   }, []);
 
@@ -35,10 +36,15 @@ export function CropEditor({ asset, sourceUrl, onSave, onClose }: CropEditorProp
     if (!focusable.length) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
+    const activeElement = document.activeElement;
+    const focusIsOutside = !dialog.current?.contains(activeElement) || activeElement === dialog.current;
+    if (focusIsOutside) {
+      event.preventDefault();
+      (event.shiftKey ? last : first).focus();
+    } else if (event.shiftKey && activeElement === first) {
       event.preventDefault();
       last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
+    } else if (!event.shiftKey && activeElement === last) {
       event.preventDefault();
       first.focus();
     }
@@ -73,7 +79,7 @@ export function CropEditor({ asset, sourceUrl, onSave, onClose }: CropEditorProp
             <h2 id="crop-editor-title" className="mt-1 truncate text-xl font-semibold text-white">{asset.originalFilename}</h2>
             <p id="crop-editor-help" className="mt-1 text-sm text-neutral-400">Move and resize the frame. The selection always remains 9:16 and the source file is not changed.</p>
           </div>
-          <button type="button" disabled={saving} onClick={onClose} className="shrink-0 rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40" aria-label="Close crop editor"><X className="h-5 w-5" /></button>
+          <button ref={closeButton} type="button" disabled={saving} onClick={onClose} className="shrink-0 rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white disabled:opacity-40" aria-label="Close crop editor"><X className="h-5 w-5" /></button>
         </div>
 
         <div className="mt-5 rounded-2xl bg-black/80 p-3 sm:p-5">
@@ -102,7 +108,7 @@ export function CropEditor({ asset, sourceUrl, onSave, onClose }: CropEditorProp
             <button type="button" disabled={saving} onClick={onClose} className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm font-medium text-neutral-200 hover:bg-neutral-800 disabled:opacity-40">Cancel</button>
             <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex min-w-40 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-500 disabled:opacity-50">
               {saving && <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />}
-              {saving ? 'Saving…' : 'Use 9:16 crop'}
+              {saving ? 'Saving...' : 'Use 9:16 crop'}
             </button>
           </div>
         </div>
