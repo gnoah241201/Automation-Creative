@@ -125,18 +125,15 @@ export class JobQueueService {
         
         this.jobs.set(job.id, job);
       } else if (job.status === 'queued') {
-        // CRITICAL: Validate workDir exists before requeueing
-        // If workDir is missing, we can't process this job - mark as failed
-        const workDirExists = await this.jobStore.workDirExists(job.files.workDir);
-        
-        if (!workDirExists) {
-          // Work directory doesn't exist - job cannot be processed
+        const recoveryError = await this.getQueuedRecoveryError(job);
+
+        if (recoveryError) {
           job.status = 'failed';
-          job.error = 'Work directory missing after restart';
+          job.error = recoveryError;
           job.finishedAt = Date.now();
           
           this.jobs.set(job.id, job);
-          console.log(`[jobQueue] Job ${job.id} queued but workDir missing, marked as failed`);
+          console.log(`[jobQueue] Job ${job.id} cannot recover: ${recoveryError}`);
           failed++;
         } else {
           // Re-queue valid queued jobs
@@ -321,6 +318,28 @@ export class JobQueueService {
     return job;
   }
 
+  private async getQueuedRecoveryError(job: NativeJobRecord): Promise<string | null> {
+    if (!await this.jobStore.workDirExists(job.files.workDir)) {
+      return 'Work directory missing after restart';
+    }
+    if (!isComposerJob(job)) return null;
+
+    try {
+      await fs.access(job.files.foregroundPath);
+    } catch {
+      return 'Composer original source missing after restart';
+    }
+    if (!job.files.backgroundVideoPath) {
+      return 'Composer hook source missing after restart';
+    }
+    try {
+      await fs.access(job.files.backgroundVideoPath);
+    } catch {
+      return 'Composer hook source missing after restart';
+    }
+    return null;
+  }
+
   async createComposerJob(
     spec: ComposerRenderSpec,
     files: JobFiles,
@@ -488,6 +507,12 @@ export class JobQueueService {
           job.progressMode = renderProgress.mode;
         }
       };
+
+      // Cancellation can arrive while the processing state or progress mode is being persisted.
+      // Guard at the final synchronous boundary before any runner spawns a child process.
+      if (isCancelling(job)) {
+        throw new Error('Job cancelled before process start');
+      }
 
       if (isComposerJob(job)) {
         const result = this.runComposerJobImpl(job, updateProgress);

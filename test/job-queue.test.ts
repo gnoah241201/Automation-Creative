@@ -162,3 +162,36 @@ test('restart recovery marks interrupted work failed and re-queues queued jobs',
 
   secondRun.queue.stopCleanupScheduler();
 });
+
+test('cancelling during the pre-run progress phase never starts a process or leaks the slot', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'resize-video-pre-run-cancel-'));
+  let releaseProgressMode!: () => void;
+  let runnerStarts = 0;
+  const queue = new JobQueueService(1, {
+    tempRoot: root,
+    determineProgressMode: () => new Promise((resolve) => {
+      releaseProgressMode = () => resolve('determinate');
+    }),
+    runRenderJob: () => {
+      runnerStarts += 1;
+      return {
+        child: { kill: () => true } as unknown as ChildProcessWithoutNullStreams,
+        completion: Promise.resolve(),
+      };
+    },
+  });
+  await queue.init();
+  const uploads = await createUploadPaths(root, 'pre-run-cancel');
+  const job = await queue.createJob(createSpec(1), uploads);
+  await waitFor(() => queue.getJob(job.id)?.status === 'processing' && releaseProgressMode !== undefined);
+
+  await queue.cancelJob(job.id);
+  releaseProgressMode();
+  await waitFor(() => queue.getJob(job.id)?.status === 'cancelled');
+
+  assert.equal(runnerStarts, 0);
+  assert.equal(queue.getQueueStats().activeSlots, 0);
+  assert.equal(queue.getQueueStats().processing, 0);
+  assert.equal(queue.getQueueStats().cancelled, 1);
+  queue.stopCleanupScheduler();
+});

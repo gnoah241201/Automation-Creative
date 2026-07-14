@@ -151,6 +151,54 @@ test('queued composer jobs recover after restart and retain composer dispatch', 
   second.queue.stopCleanupScheduler();
 });
 
+const writeQueuedComposerState = async (
+  root: string,
+  files: JobFiles,
+  id: string,
+  mode: 'preview' | 'final' = 'final',
+) => {
+  const record: ComposerJobRecord = {
+    id,
+    kind: mode === 'preview' ? 'compose-preview' : 'compose',
+    spec: composerSpec(mode),
+    files,
+    composer: composerMetadata(),
+    status: 'queued',
+    progress: 0,
+  };
+  await fs.writeFile(path.join(root, 'queue-state.json'), JSON.stringify([record]));
+};
+
+test('restart fails a queued composer job whose immutable original source is missing', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-missing-original-'));
+  const files = await createFiles(root, 'queued');
+  await writeQueuedComposerState(root, files, 'missing-original');
+  await fs.unlink(files.foregroundPath);
+
+  const harness = await createHarness(1, root);
+  const recovered = harness.queue.getJob('missing-original');
+  assert.equal(recovered?.status, 'failed');
+  assert.match(recovered?.error ?? '', /original source missing after restart/i);
+  assert.deepEqual(harness.startedKinds, []);
+  assert.equal(harness.queue.getQueueStats().activeSlots, 0);
+  harness.queue.stopCleanupScheduler();
+});
+
+test('restart fails a queued composer job whose immutable hook source is missing', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-missing-hook-'));
+  const files = await createFiles(root, 'queued');
+  await writeQueuedComposerState(root, files, 'missing-hook', 'preview');
+  await fs.unlink(files.backgroundVideoPath!);
+
+  const harness = await createHarness(1, root);
+  const recovered = harness.queue.getJob('missing-hook');
+  assert.equal(recovered?.status, 'failed');
+  assert.match(recovered?.error ?? '', /hook source missing after restart/i);
+  assert.deepEqual(harness.startedKinds, []);
+  assert.equal(harness.queue.getQueueStats().activeSlots, 0);
+  harness.queue.stopCleanupScheduler();
+});
+
 test('cancelling an active composer job frees the shared slot exactly once', async () => {
   const harness = await createHarness(1);
   const first = await harness.queue.createComposerJob(composerSpec(), await createFiles(harness.tempRoot, 'cancel'), composerMetadata());
@@ -181,7 +229,7 @@ test('composer progress callbacks cannot advance a job after cancellation begins
   });
   await queue.init();
   const job = await queue.createComposerJob(composerSpec(), await createFiles(root, 'cancel-progress'), composerMetadata());
-  await waitFor(() => queue.getJob(job.id)?.status === 'processing');
+  await waitFor(() => queue.getJob(job.id)?.status === 'processing' && emitProgress !== undefined);
 
   await queue.cancelJob(job.id);
   emitProgress({ progress: 90, mode: 'determinate' });
