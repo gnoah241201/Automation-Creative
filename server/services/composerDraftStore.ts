@@ -82,7 +82,14 @@ export class ComposerDraftStore {
   }
 
   private getDraftDirectory(batchId: string): string {
-    return resolveComposerChild(path.join(this.root, 'drafts'), batchId);
+    try {
+      return resolveComposerChild(path.join(this.root, 'drafts'), batchId);
+    } catch (error) {
+      if (error instanceof Error && error.message === 'Invalid managed asset identifier') {
+        throw new ComposerDraftNotFoundError(`Composer batch ${batchId} was not found`);
+      }
+      throw error;
+    }
   }
 
   private async read(batchId: string): Promise<ComposerBatchDraft | null> {

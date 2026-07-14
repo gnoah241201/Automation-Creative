@@ -100,8 +100,9 @@ export const buildComposerBatchesRouter = (
       const draft = await drafts.get(req.params.batchId);
       if (draft) res.json(draft);
       else sendNotFound(res);
-    } catch {
-      sendInternalError(res, 'Unable to restore composer batch');
+    } catch (error) {
+      if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+      else sendInternalError(res, 'Unable to restore composer batch');
     }
   });
 

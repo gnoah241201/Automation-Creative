@@ -306,7 +306,7 @@ test('batch routes distinguish missing drafts from storage failures', async (t) 
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const address = server.address();
   assert.ok(address && typeof address !== 'string');
-  const base = `http://127.0.0.1:${address.port}/api/composer/batches/missing`;
+  const base = `http://127.0.0.1:${address.port}/api/composer/batches/00000000-0000-4000-8000-000000000000`;
   const missingGet = await fetch(base);
   assert.equal(missingGet.status, 404);
   const missingPut = await fetch(`${base}/configurations/o1:g-3.000`, {
@@ -337,4 +337,38 @@ test('batch routes distinguish missing drafts from storage failures', async (t) 
     error: 'InternalError',
     message: 'Unable to update composer configuration',
   });
+});
+
+test('batch routes conceal invalid managed batch IDs as not found', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-draft-invalid-id-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const drafts = new ComposerDraftStore(root);
+  const assets = {} as ComposerAssetStore;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter(assets, drafts));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => {
+    server.close((error) => error ? reject(error) : resolve());
+  }));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}/api/composer/batches`;
+
+  for (const invalidId of ['bad_id', '..%5Coutside']) {
+    const getResponse = await fetch(`${base}/${invalidId}`);
+    assert.equal(getResponse.status, 404, `GET should conceal ${invalidId}`);
+    assert.deepEqual(await getResponse.json(), {
+      error: 'NotFound', message: 'Composer batch not found',
+    });
+
+    const putResponse = await fetch(`${base}/${invalidId}/configurations/o1:g-3.000`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: 'o1:g-3.000' }),
+    });
+    assert.equal(putResponse.status, 404, `PUT should conceal ${invalidId}`);
+    assert.deepEqual(await putResponse.json(), {
+      error: 'NotFound', message: 'Composer batch not found',
+    });
+  }
 });
