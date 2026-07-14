@@ -9,6 +9,7 @@ import { ComposerDraftStore } from '../server/services/composerDraftStore.ts';
 import { validateDraftForRender } from '../server/services/composerValidation.ts';
 import { buildComposerBatchesRouter } from '../server/routes/composerBatches.ts';
 import { ComposerAssetStore } from '../server/services/composerAssetStore.ts';
+import { ComposerBatchActiveError } from '../server/services/composerBatchRenderer.ts';
 
 const draftFixture = (reviewed: boolean): ComposerBatchDraft => ({
   id: 'batch-1',
@@ -394,4 +395,20 @@ test('batch routes conceal invalid managed batch IDs as not found', async (t) =>
       error: 'NotFound', message: 'Composer batch not found',
     });
   }
+});
+
+test('render route maps an active batch collision to a safe typed conflict', async (t) => {
+  const drafts = { require: async () => draftFixture(true) } as unknown as ComposerDraftStore;
+  const renderer = { submit: async () => { throw new ComposerBatchActiveError('internal active claim detail'); } } as any;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter({} as ComposerAssetStore, drafts, undefined, renderer));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/composer/batches/batch-1/render`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ selectedCellIds: ['o1:h1'] }),
+  });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: 'BatchActive', message: 'This composer batch already has active render jobs' });
 });

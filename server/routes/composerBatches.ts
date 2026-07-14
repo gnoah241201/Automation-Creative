@@ -7,7 +7,7 @@ import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
 import { validateComposerConfiguration } from '../services/composerValidation.ts';
 import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
 import {
-  ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
+  ComposerBatchActiveError, ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
   ComposerPartialSubmissionError, ComposerRetrySourceGoneError, ComposerStorageError,
 } from '../services/composerBatchRenderer.ts';
 
@@ -202,7 +202,10 @@ export const buildComposerBatchesRouter = (
         const selectedCellIds = Array.isArray(req.body?.selectedCellIds) ? req.body.selectedCellIds : [];
         res.status(202).json(await renderer.submit(draft, selectedCellIds));
       } catch (error) {
-        if (error instanceof ComposerPartialSubmissionError) res.status(503).json({
+        if (error instanceof ComposerBatchActiveError) res.status(409).json({
+          error: 'BatchActive', message: 'This composer batch already has active render jobs',
+        });
+        else if (error instanceof ComposerPartialSubmissionError) res.status(503).json({
           error: 'PartialSubmission', message: error.message, createdJobIds: error.createdJobIds,
         });
         else if (error instanceof ComposerStorageError) {
@@ -227,7 +230,10 @@ export const buildComposerBatchesRouter = (
         const job = await renderer.retry(req.params.batchId, req.params.jobId);
         res.status(202).json({ batchId: req.params.batchId, ...jobResponseForRoute(job) });
       } catch (error) {
-        if (error instanceof ComposerJobNotFoundError) res.status(404).json({ error: 'NotFound', message: error.message });
+        if (error instanceof ComposerBatchActiveError) res.status(409).json({
+          error: 'BatchActive', message: 'This composer batch already has a render update in progress',
+        });
+        else if (error instanceof ComposerJobNotFoundError) res.status(404).json({ error: 'NotFound', message: error.message });
         else if (error instanceof ComposerInvalidRetryError) res.status(409).json({ error: 'InvalidRetry', message: error.message });
         else if (error instanceof ComposerRetrySourceGoneError) res.status(410).json({ error: 'Gone', message: error.message });
         else {

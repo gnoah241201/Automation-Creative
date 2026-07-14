@@ -48,6 +48,7 @@ export class ComposerJobNotFoundError extends Error {}
 export class ComposerInvalidRetryError extends Error {}
 export class ComposerRetrySourceGoneError extends Error {}
 export class ComposerStorageError extends Error {}
+export class ComposerBatchActiveError extends Error {}
 
 const jobResponse = (job: ComposerJobRecord) => ({
   jobId: job.id,
@@ -81,6 +82,7 @@ export class ComposerBatchRenderer {
   private readonly assets: AssetStoreLike;
   private readonly queue: QueueLike;
   private readonly disk: DiskGuardLike;
+  private readonly batchMutationClaims = new Set<string>();
 
   constructor(options: ComposerBatchRendererOptions) {
     this.root = path.resolve(options.root);
@@ -91,6 +93,18 @@ export class ComposerBatchRenderer {
   }
 
   async submit(batch: ComposerBatchDraft, selectedCellIds: string[]) {
+    if (this.batchMutationClaims.has(batch.id) || this.hasActiveJobs(batch.id)) {
+      throw new ComposerBatchActiveError('Composer batch already has active render work');
+    }
+    this.batchMutationClaims.add(batch.id);
+    try {
+      return await this.submitClaimed(batch, selectedCellIds);
+    } finally {
+      this.batchMutationClaims.delete(batch.id);
+    }
+  }
+
+  private async submitClaimed(batch: ComposerBatchDraft, selectedCellIds: string[]) {
     if (!Array.isArray(selectedCellIds) || selectedCellIds.length === 0) throw new Error('Select at least one output');
     if (selectedCellIds.length > 100) throw new Error('A composer batch can render at most 100 outputs');
     if (selectedCellIds.some((id) => typeof id !== 'string')) throw new Error('Selected output IDs must be strings');
@@ -209,6 +223,18 @@ export class ComposerBatchRenderer {
   }
 
   async retry(batchId: string, jobId: string): Promise<ComposerJobRecord> {
+    if (this.batchMutationClaims.has(batchId)) {
+      throw new ComposerBatchActiveError('Composer batch already has a render mutation in progress');
+    }
+    this.batchMutationClaims.add(batchId);
+    try {
+      return await this.retryClaimed(batchId, jobId);
+    } finally {
+      this.batchMutationClaims.delete(batchId);
+    }
+  }
+
+  private async retryClaimed(batchId: string, jobId: string): Promise<ComposerJobRecord> {
     const source = this.queue.getJob(jobId);
     if (!source || source.kind !== 'compose' || source.spec.batchId !== batchId) throw new ComposerJobNotFoundError('Composer job was not found in this batch');
     if (source.status !== 'failed') throw new ComposerInvalidRetryError('Only failed composer jobs can be retried');
@@ -230,6 +256,14 @@ export class ComposerBatchRenderer {
       await fs.rm(files.workDir, { recursive: true, force: true }).catch(() => {});
       throw error;
     }
+  }
+
+  private hasActiveJobs(batchId: string): boolean {
+    return this.queue.getAllJobs().some((job) => (
+      job.kind === 'compose'
+      && job.spec.batchId === batchId
+      && ['queued', 'processing', 'cancelling'].includes(job.status)
+    ));
   }
 
   private validateDraftGroups(batch: ComposerBatchDraft, hooks: ComposerAsset[]) {

@@ -15,7 +15,7 @@ import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets
 import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
 import { ReviewMatrix } from './ReviewMatrix.tsx';
 import { useJobPolling } from '../render/useJobPolling.ts';
-import { clearPersistedComposerBatchId, persistComposerBatchId, restorePersistedComposerDraft } from './restoreDraft.ts';
+import { clearPersistedComposerBatchId, isCurrentComposerRestore, persistComposerBatchId, restorePersistedComposerDraft } from './restoreDraft.ts';
 
 const stages: Array<{ id: ComposerStage; step: number; label: string; description: string }> = [
   { id: 'sources', step: 1, label: 'Sources', description: 'Choose original videos and hooks' },
@@ -60,6 +60,7 @@ export function HookComposerPage() {
   const renderRequest = useRef<AbortController | undefined>(undefined);
   const restoreRequest = useRef<AbortController | undefined>(undefined);
   const restoreRevision = useRef(0);
+  const restoredJobsBatchId = useRef<string | undefined>(undefined);
   const configRevision = useRef(0);
   const latestBatchId = useRef<string | undefined>(undefined);
   const latestConfiguration = useRef<ComposerVariantConfig | undefined>(undefined);
@@ -107,9 +108,10 @@ export function HookComposerPage() {
         storage: window.localStorage,
         getBatch: getComposerBatch,
         getAsset: getComposerAsset,
+        getJobs: getComposerBatchJobs,
         signal: controller.signal,
       });
-      if (controller.signal.aborted || revision !== restoreRevision.current) return;
+      if (!isCurrentComposerRestore(revision, restoreRevision.current, controller.signal)) return;
       if (result.status === 'none') {
         if (manual) setRestoreStatus('Không có bản nháp nào để khôi phục.');
         return;
@@ -120,7 +122,9 @@ export function HookComposerPage() {
       }
       sourceAssetsRef.current = result.assets;
       sourceRevision.current += 1;
+      restoredJobsBatchId.current = result.batch.id;
       setSourceAssets(result.assets);
+      setRenderJobs(result.jobs);
       setSourceUrls(Object.fromEntries(result.assets.map((asset) => [asset.id, composerAssetSourceUrl(asset.id)])));
       dispatch({
         type: 'assetsLoaded',
@@ -145,7 +149,8 @@ export function HookComposerPage() {
   useEffect(() => {
     renderRequest.current?.abort();
     renderRequest.current = undefined;
-    setRenderJobs([]);
+    if (restoredJobsBatchId.current === state.batchId) restoredJobsBatchId.current = undefined;
+    else setRenderJobs([]);
     setRendering(false);
     setRenderError(undefined);
   }, [state.batchId]);

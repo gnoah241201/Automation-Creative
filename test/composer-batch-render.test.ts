@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ComposerAsset, ComposerBatchDraft, ComposerVariantConfig } from '../shared/composer-contract.ts';
-import { allocateComposerOutputFilenames, ComposerBatchRenderer, ComposerRetrySourceGoneError } from '../server/services/composerBatchRenderer.ts';
+import { allocateComposerOutputFilenames, ComposerBatchActiveError, ComposerBatchRenderer, ComposerRetrySourceGoneError } from '../server/services/composerBatchRenderer.ts';
 import { estimateComposerOutputBytes } from '../shared/composerTimeline.ts';
 
 const asset = (id: string, kind: 'original' | 'hook', filename = `${id}.mp4`, duration = 3): ComposerAsset => ({
@@ -129,4 +129,25 @@ test('retry reports a typed gone error when immutable staged sources disappeared
   const job = f.jobs.get(submitted.jobs[0].jobId); job.status = 'failed';
   await fs.rm(job.files.foregroundPath);
   await assert.rejects(() => f.renderer.retry('batch-1', job.id), ComposerRetrySourceGoneError);
+});
+
+test('a second direct submission is rejected while the batch has active jobs and allowed after terminal state', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const first = await f.renderer.submit(draft(), ['o1:h1']);
+  await assert.rejects(() => f.renderer.submit(draft(), ['o1:h1']), ComposerBatchActiveError);
+  f.jobs.get(first.jobs[0].jobId).status = 'completed';
+  const afterTerminal = await f.renderer.submit(draft(), ['o1:h1']);
+  assert.equal(afterTerminal.jobs.length, 1);
+});
+
+test('concurrent submissions atomically allow only one batch submission', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const [left, right] = await Promise.allSettled([
+    f.renderer.submit(draft(), ['o1:h1']),
+    f.renderer.submit(draft(), ['o1:h2']),
+  ]);
+  assert.equal([left, right].filter((result) => result.status === 'fulfilled').length, 1);
+  const rejected = [left, right].find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  assert.ok(rejected?.reason instanceof ComposerBatchActiveError);
+  assert.equal(f.calls.length, 1);
 });

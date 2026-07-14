@@ -40,5 +40,6 @@ The first two import/crop checks require observing the browser workflow. The exa
 - Automated restore coverage verifies persisted batch lookup, restored asset crop metadata, stale draft removal, safe local identifier persistence, and the visible restore affordance.
 - Route regressions verify that upload probing, exact-preview creation, Resize job status/debug responses, and trim submission do not expose managed paths or FFmpeg diagnostics.
 - The full test command now includes both `.test.ts` and `.test.tsx` files and runs serially to avoid Windows file-rename contention in storage tests.
+- Reload coverage restores active batch jobs before exposing the review flow; server coverage proves duplicate and concurrent batch submissions are rejected atomically with a safe conflict response.
 
 The in-app browser harness remained unavailable during final hardening. No browser-only checkbox above was changed.
