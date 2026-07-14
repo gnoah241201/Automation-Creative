@@ -119,6 +119,20 @@ export const saveComposerConfiguration = (
   },
 ).then(json<ComposerBatchDraft>);
 
+export const flushComposerConfigurationKeepalive = (
+  batchId: string,
+  configuration: ComposerVariantConfig,
+): Promise<ComposerBatchDraft> => fetch(
+  `${API_BASE}/batches/${encodeURIComponent(batchId)}/configurations/${encodeURIComponent(configuration.id)}`,
+  {
+    method: 'PUT',
+    credentials: 'include',
+    keepalive: true,
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(configuration),
+  },
+).then(json<ComposerBatchDraft>);
+
 export const requestExactPreview = (
   batchId: string,
   configurationId: string,

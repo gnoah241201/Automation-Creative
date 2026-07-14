@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
 import { ComposerAsset, ComposerCrop, ComposerVariantConfig } from '../../shared/composer-contract.ts';
 import {
-  createComposerBatch, exactPreviewUrl, getExactPreviewStatus, requestExactPreview,
+  createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getExactPreviewStatus, requestExactPreview,
   saveComposerConfiguration, saveComposerCrop,
 } from './api.ts';
 import { ComposerPreview } from './ComposerPreview.tsx';
@@ -49,19 +49,36 @@ export function HookComposerPage() {
   const saveRequest = useRef<AbortController | undefined>(undefined);
   const previewRequest = useRef<AbortController | undefined>(undefined);
   const configRevision = useRef(0);
+  const latestBatchId = useRef<string | undefined>(undefined);
+  const latestConfiguration = useRef<ComposerVariantConfig | undefined>(undefined);
+  const unmountFlushTimer = useRef<number | undefined>(undefined);
   const mounted = useRef(true);
   const originals = sourceAssets.filter((asset) => asset.kind === 'original');
   const hooks = sourceAssets.filter((asset) => asset.kind === 'hook');
+  latestBatchId.current = state.batchId;
+  latestConfiguration.current = editingConfig;
 
   useEffect(() => {
+    if (unmountFlushTimer.current !== undefined) {
+      window.clearTimeout(unmountFlushTimer.current);
+      unmountFlushTimer.current = undefined;
+    }
     mounted.current = true;
     return () => {
       mounted.current = false;
       createRequest.current?.abort();
       saveRequest.current?.abort();
       previewRequest.current?.abort();
-      sourceUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
-      sourceUrlsRef.current.clear();
+      unmountFlushTimer.current = window.setTimeout(() => {
+        const batchId = latestBatchId.current;
+        const configuration = latestConfiguration.current;
+        if (batchId && configuration) {
+          void flushComposerConfigurationKeepalive(batchId, configuration).catch(() => {});
+        }
+        sourceUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        sourceUrlsRef.current.clear();
+        unmountFlushTimer.current = undefined;
+      }, 0);
     };
   }, []);
 
@@ -214,29 +231,42 @@ export function HookComposerPage() {
     setPlayhead((current) => Math.min(next.trimEnd, Math.max(next.trimStart, current)));
   };
 
+  const persistCurrentConfiguration = async (): Promise<boolean> => {
+    if (!state.batchId || !editingConfig) return true;
+    const controller = new AbortController();
+    saveRequest.current?.abort();
+    saveRequest.current = controller;
+    setSaveState('saving');
+    try {
+      const batch = await saveComposerConfiguration(state.batchId, editingConfig, controller.signal);
+      if (controller.signal.aborted) return false;
+      const saved = batch.configurations[editingConfig.id];
+      if (!saved) throw new Error('The saved configuration could not be restored');
+      dispatch({ type: 'configurationSaved', batchId: batch.id, configuration: saved });
+      setSaveState('saved');
+      setSaveError(undefined);
+      return true;
+    } catch (error) {
+      if (controller.signal.aborted) return false;
+      setSaveState('error');
+      setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
+      return false;
+    }
+  };
+
+  const changeStage = async (stage: ComposerStage) => {
+    if (stage === state.stage) return;
+    previewRequest.current?.abort();
+    setExactPreview({});
+    if (state.stage === 'edit' && !(await persistCurrentConfiguration())) return;
+    dispatch({ type: 'setStage', stage });
+  };
+
   const switchVariant = async (originalId: string, durationGroupId: string) => {
     if (originalId === activeOriginal?.id && durationGroupId === activeGroup?.id) return;
     previewRequest.current?.abort();
     setExactPreview({});
-    if (state.batchId && editingConfig) {
-      const controller = new AbortController();
-      saveRequest.current?.abort();
-      saveRequest.current = controller;
-      setSaveState('saving');
-      try {
-        const batch = await saveComposerConfiguration(state.batchId, editingConfig, controller.signal);
-        if (controller.signal.aborted) return;
-        const saved = batch.configurations[editingConfig.id];
-        if (saved) dispatch({ type: 'configurationSaved', batchId: batch.id, configuration: saved });
-        setSaveState('saved');
-        setSaveError(undefined);
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setSaveState('error');
-        setSaveError(error instanceof Error ? error.message : 'Save this variation before switching');
-        return;
-      }
-    }
+    if (!(await persistCurrentConfiguration())) return;
     dispatch({ type: 'selectVariant', originalId, durationGroupId });
   };
 
@@ -299,7 +329,7 @@ export function HookComposerPage() {
                 type="button"
                 aria-current={active ? 'step' : undefined}
                 disabled={continuing || (stage.id !== 'sources' && !state.batchId)}
-                onClick={() => dispatch({ type: 'setStage', stage: stage.id })}
+                onClick={() => void changeStage(stage.id)}
                 className={active
                   ? 'w-full rounded-xl border border-blue-500 bg-blue-500/10 p-3 text-left'
                   : 'w-full rounded-xl border border-neutral-800 bg-neutral-900/70 p-3 text-left text-neutral-400 hover:border-neutral-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-800 disabled:hover:text-neutral-400'}
@@ -364,7 +394,7 @@ export function HookComposerPage() {
               </div>
               <button type="button" disabled={editingConfig.reviewed} onClick={() => changeConfiguration({ ...editingConfig, reviewed: true })} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-default disabled:bg-emerald-900 disabled:text-emerald-200"><Check className="mr-2 inline h-4 w-4" />{editingConfig.reviewed ? 'Reviewed' : 'Mark reviewed'}</button>
             </aside>
-            <main className="flex min-w-0 flex-col gap-5">
+            <section aria-label="Composer preview workspace" className="flex min-w-0 flex-col gap-5">
               <div className="relative flex-1 rounded-2xl border border-neutral-800 bg-[radial-gradient(circle_at_center,_#262626,_#0a0a0a_65%)] p-4 sm:p-6">
                 <ComposerPreview original={activeOriginal} hook={representativeHook} originalUrl={sourceUrls[activeOriginal.id]} hookUrl={sourceUrls[representativeHook.id]} config={editingConfig} playhead={playhead} onPlayheadChange={setPlayhead} exactUrl={exactPreview.url} />
                 <button type="button" disabled={Boolean(exactPreview.status && !exactPreview.url)} onClick={() => void createExactPreview()} className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-xl border border-blue-400/40 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-500/25 disabled:opacity-50"><Sparkles className="h-4 w-4" />Exact preview</button>
@@ -372,7 +402,7 @@ export function HookComposerPage() {
               </div>
               <ComposerTimeline original={activeOriginal} hook={representativeHook} maxHookDuration={activeGroup.maxDuration} config={editingConfig} playhead={playhead} onPlayheadChange={setPlayhead} onChange={changeConfiguration} />
               <p className="inline-flex items-center gap-2 text-xs text-neutral-500"><Scissors className="h-4 w-4" />Trim always preserves the complete longest hook in this duration group.</p>
-            </main>
+            </section>
           </div>
         ) : (
           <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-neutral-700 bg-neutral-950/50 px-6 text-center text-sm text-neutral-500">

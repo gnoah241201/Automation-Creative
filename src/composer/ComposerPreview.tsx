@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Pause, Play, RotateCcw } from 'lucide-react';
 import type { ComposerAsset, ComposerVariantConfig } from '../../shared/composer-contract.ts';
-import { cropPreviewStyle, mapCombinedTime } from './previewClock.ts';
+import { cropPreviewStyle, mapCombinedTime, mapMediaProgress } from './previewClock.ts';
 
 interface ComposerPreviewProps {
   original: ComposerAsset;
@@ -32,6 +32,13 @@ export function ComposerPreview({
     hookRef.current?.pause();
     exactRef.current?.pause();
   }, [originalUrl, hookUrl, exactUrl]);
+
+  useEffect(() => {
+    if (playing) return;
+    originalRef.current?.pause();
+    hookRef.current?.pause();
+    exactRef.current?.pause();
+  }, [playing]);
 
   useEffect(() => {
     if (exactUrl) {
@@ -69,10 +76,13 @@ export function ComposerPreview({
 
   const updateBrowserClock = (source: 'original' | 'hook', sourceTime: number) => {
     if (!playing || exactUrl) return;
-    const next = source === 'hook'
-      ? config.insertAt + sourceTime
-      : sourceTime < config.insertAt ? sourceTime : sourceTime + hook.duration;
-    stopAtEnd(next);
+    const next = mapMediaProgress(source, sourceTime, {
+      activeSource: mapping.source,
+      virtualPlayhead: playhead,
+      insertAt: config.insertAt,
+      hookDuration: hook.duration,
+    });
+    if (next !== null) stopAtEnd(next);
   };
 
   const togglePlayback = () => {
@@ -89,7 +99,7 @@ export function ComposerPreview({
   return (
     <div className="flex min-h-0 flex-col items-center">
       <div className="relative aspect-[9/16] min-h-[360px] max-h-[64vh] w-auto max-w-full overflow-hidden rounded-2xl border border-neutral-700 bg-black shadow-2xl">
-        {!canPreview && (
+        {!canPreview && !exactUrl && (
           <div className="absolute inset-0 z-10 grid place-items-center px-8 text-center text-sm text-neutral-500">
             Browser preview is unavailable after reload. Create an exact preview to view this variation.
           </div>
