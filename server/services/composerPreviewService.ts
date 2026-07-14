@@ -8,6 +8,7 @@ import { ComposerJobRecord, JobFiles } from '../types/renderJob.ts';
 import { ComposerAssetStore } from './composerAssetStore.ts';
 import { JobQueueService } from './jobQueue.ts';
 import { resolveComposerChild } from './composerPaths.ts';
+import { composerPreviewCache } from '../metrics.ts';
 
 const PIPELINE_VERSION = 1;
 
@@ -193,7 +194,10 @@ export class ComposerPreviewService {
       existing.cacheHit
       || existing.status === 'queued'
       || existing.status === 'processing'
-    )) return existing;
+    )) {
+      composerPreviewCache.inc({ result: existing.cacheHit ? 'hit' : 'miss' });
+      return existing;
+    }
     const attemptId = randomUUID();
     const workDir = this.getAttemptDirectory(key, attemptId);
     const inputDir = path.join(workDir, 'input');
@@ -231,6 +235,7 @@ export class ComposerPreviewService {
       hookCrop: hook.crop,
     };
     const job = await this.queue.createComposerJob(spec, files, composer);
+    composerPreviewCache.inc({ result: 'miss' });
     await this.writeRecord({
       id: key,
       jobId: job.id,

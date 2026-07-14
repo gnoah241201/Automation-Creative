@@ -17,6 +17,7 @@ import { buildLibraryRouter } from './routes/library';
 import { DiskCapacityGuard, LocalLibraryService } from './services/localLibrary';
 import { managedRenderRoot } from './services/fileStore';
 import { ComposerBatchRenderer } from './services/composerBatchRenderer';
+import { ComposerCleanupCoordinator } from './services/composerCleanupCoordinator';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -253,6 +254,7 @@ const start = async () => {
   const queue = new JobQueueService(maxConcurrentJobs, {
     localLibrary,
     diskCapacityGuard: new DiskCapacityGuard(),
+    scheduleCleanup: false,
   });
   const composerAssetStore = new ComposerAssetStore(composerRoot);
   const composerDraftStore = new ComposerDraftStore(composerRoot);
@@ -268,6 +270,9 @@ const start = async () => {
     disk: new DiskCapacityGuard(),
   });
   await queue.init();
+  const composerCleanup = new ComposerCleanupCoordinator({ root: composerRoot, queue, library: localLibrary });
+  await composerCleanup.runCleanupCycle();
+  composerCleanup.start();
   let metricsInitialized = false;
 
   app.use((_req, res, next) => {

@@ -170,7 +170,8 @@ export const getRetentionDescription = (
  * @returns Number of jobs cleaned up
  */
 export const cleanupExpiredJobs = async (
-  jobs: Array<RetainedJob & { files: { workDir: string } }>
+  jobs: Array<RetainedJob & { files: { workDir: string } }>,
+  now = Date.now(),
 ): Promise<number> => {
   let cleaned = 0;
 
@@ -179,7 +180,7 @@ export const cleanupExpiredJobs = async (
     // holds can protect them. The legacy queue retention must never race it.
     if (job.kind === 'compose' && job.status === 'completed') continue;
     if ((job.status === 'completed' || job.status === 'failed') && job.finishedAt) {
-      if (isManagedJobExpired(job)) {
+      if (isManagedJobExpired(job, now)) {
         await cleanupJobByWorkDir(job.files.workDir, 'expired', job.id);
         cleaned++;
       }

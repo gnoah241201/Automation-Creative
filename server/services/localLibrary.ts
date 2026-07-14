@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { LocalLibraryEntry } from '../../shared/composer-contract.ts';
 import { ComposerJobRecord } from '../types/renderJob.ts';
+import { composerLibraryBytes } from '../metrics.ts';
 
 const RETENTION_MS = 86_400_000;
 const IDENTIFIER = /^[a-zA-Z0-9-]+$/;
@@ -217,6 +218,18 @@ export class LocalLibraryService {
     return this.read(() => [...this.entries!.values()]
       .sort((left, right) => right.completedAt - left.completedAt || left.id.localeCompare(right.id))
       .map(publicEntry));
+  }
+
+  /** Internal cleanup protection; never returned by HTTP routes. */
+  async getRetainedWorkDirs(): Promise<string[]> {
+    return this.read(async () => {
+      const retained: string[] = [];
+      for (const entry of this.entries!.values()) {
+        const directory = await this.resolveStoredDirectory(entry);
+        if (directory) retained.push(directory);
+      }
+      return retained;
+    });
   }
 
   async listUsable(now = this.now()): Promise<LocalLibraryEntry[]> {
@@ -435,11 +448,13 @@ export class LocalLibraryService {
       if (!Array.isArray(parsed)) throw new Error('Local library state is invalid');
       const entries = parsed.filter(this.isStoredEntry);
       this.entries = new Map(entries.map((entry) => [entry.id, structuredClone(entry)]));
+      this.syncBytesMetric();
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
         throw new LocalLibraryStorageError('Local library state could not be loaded');
       }
       this.entries = new Map();
+      this.syncBytesMetric();
     }
   }
 
@@ -504,6 +519,7 @@ export class LocalLibraryService {
       try {
         result = await operation();
         if (shouldPersist(result)) await this.persist();
+        this.syncBytesMetric();
       } catch (error) {
         this.entries = snapshot;
         throw error;
@@ -512,5 +528,11 @@ export class LocalLibraryService {
     this.operationChain = current;
     await current;
     return result;
+  }
+
+  private syncBytesMetric(): void {
+    composerLibraryBytes.set(
+      [...(this.entries?.values() ?? [])].reduce((sum, entry) => sum + entry.byteSize, 0),
+    );
   }
 }

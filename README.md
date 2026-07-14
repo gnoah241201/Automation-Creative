@@ -195,6 +195,18 @@ The `MAX_CONCURRENT_JOBS` setting controls how many videos can render simultaneo
 
 **Note**: Each render job uses significant CPU and memory. Increasing concurrency beyond your machine's capacity will cause jobs to fail or the system to become unresponsive. You can override the default by setting `MAX_CONCURRENT_JOBS` environment variable.
 
+## Hook Composer
+
+Hook Composer accepts 1-10 vertical originals and 1-10 vertical hooks, creates a cross-product of selected pairs, and stores final `1080x1920` outputs in Local Library for 24 hours. Sources with another ratio must be cropped to `9:16`. Exact previews are rendered on demand at `360x640`; final and preview jobs share `MAX_CONCURRENT_JOBS`.
+
+Local Library outputs can be selected and sent to Resize without downloading and re-uploading them. Composer drafts, previews, and outputs use the existing `temp_superpowers/native-renders` managed storage root.
+
+The backend checks composer retention every five minutes. It removes expired drafts, exact previews, unreferenced source assets, final outputs, and orphaned composer job folders. Outputs held by an active Resize job and exact previews still being rendered are protected until they are released or finish. The cleanup timer is unreferenced, does not overlap cycles, and does not keep the process alive.
+
+Operational counters and the retained-library byte gauge are available from `/metrics` and `/api/metrics` with the `resize_video_composer_` prefix. Metric labels are limited to fixed `mode`, `status`, and cache `result` values.
+
+For a release check using generated local media, follow [the Hook Composer smoke checklist](docs/superpowers/verification/hook-composer-smoke-checklist.md). The automated checks do not require browser uploads and clean their managed temporary files when they finish.
+
 ## Encoder Mode (CPU vs NVIDIA NVENC)
 
 By default, the backend uses CPU encoding (`libx264`). You can optionally enable NVIDIA NVENC for faster GPU-accelerated encoding.

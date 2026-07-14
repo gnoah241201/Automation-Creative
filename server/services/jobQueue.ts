@@ -13,6 +13,8 @@ import { DiskCapacityGuard, LocalLibraryService } from './localLibrary.ts';
 import {
   activeJobs,
   cancelledJobs,
+  composerJobsCompleted,
+  composerJobsCreated,
   failedJobs,
   jobsCompleted,
   jobsCreated,
@@ -65,6 +67,7 @@ type QueueDeps = {
     'registerFromCompletedJob' | 'cleanupExpired' | 'reconcileHolds'
   >;
   diskCapacityGuard?: Pick<DiskCapacityGuard, 'requireCapacity'>;
+  scheduleCleanup?: boolean;
 };
 
 export class JobQueueService {
@@ -80,6 +83,7 @@ export class JobQueueService {
   private readonly determineProgressModeImpl: typeof determineProgressMode;
   private readonly localLibrary?: QueueDeps['localLibrary'];
   private readonly diskCapacityGuard?: QueueDeps['diskCapacityGuard'];
+  private readonly scheduleCleanup: boolean;
 
   constructor(private readonly maxConcurrentJobs: number, deps: QueueDeps = {}) {
     this.tempRoot = deps.tempRoot ?? path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
@@ -89,6 +93,7 @@ export class JobQueueService {
     this.determineProgressModeImpl = deps.determineProgressMode ?? determineProgressMode;
     this.localLibrary = deps.localLibrary;
     this.diskCapacityGuard = deps.diskCapacityGuard;
+    this.scheduleCleanup = deps.scheduleCleanup ?? true;
   }
 
   async init() {
@@ -100,7 +105,7 @@ export class JobQueueService {
     await this.localLibrary?.cleanupExpired();
     
     // Start periodic cleanup of expired jobs
-    this.startCleanupScheduler();
+    if (this.scheduleCleanup) this.startCleanupScheduler();
   }
 
   /**
@@ -209,36 +214,9 @@ export class JobQueueService {
 
     this.cleanupInterval = setInterval(async () => {
       try {
-        const jobsToCheck = Array.from(this.jobs.values()).filter(
-          (job) => job.status === 'completed' || job.status === 'failed',
-        );
-
-        // Perform cleanup (fileStore deletes expired workDirs)
-        await this.reconcileLibraryHolds();
-        await cleanupExpiredJobs(jobsToCheck);
-        await this.localLibrary?.cleanupExpired();
-
-        // Remove expired jobs from memory and persist
-        const expiredIds = jobsToCheck
-          .filter((job) => {
-            return isManagedJobExpired({
-              ...job,
-              status: job.status as 'completed' | 'failed',
-            });
-          })
-          .map((job) => job.id);
-
-        for (const id of expiredIds) {
-          this.jobs.delete(id);
-        }
-
-        if (expiredIds.length > 0) {
-          await this.persistAll();
-          this.syncQueueMetrics();
-          console.log(`[jobQueue] Removed ${expiredIds.length} expired jobs from persistence`);
-        }
+        await this.runCleanupCycle();
       } catch (error) {
-        console.error('[jobQueue] Error during cleanup:', error);
+        console.error('[jobQueue] Cleanup cycle failed');
       }
     }, CLEANUP_INTERVAL_MS);
 
@@ -334,6 +312,29 @@ export class JobQueueService {
     return job;
   }
 
+  async runCleanupCycle(now = Date.now()): Promise<{ expiredJobIds: string[] }> {
+    const jobsToCheck = Array.from(this.jobs.values()).filter(
+      (job) => job.status === 'completed' || job.status === 'failed',
+    );
+    await this.reconcileLibraryHolds();
+    await cleanupExpiredJobs(jobsToCheck, now);
+    await this.localLibrary?.cleanupExpired(now);
+
+    const expiredIds = jobsToCheck
+      .filter((job) => isManagedJobExpired({
+        ...job,
+        status: job.status as 'completed' | 'failed',
+      }, now))
+      .map((job) => job.id);
+    for (const id of expiredIds) this.jobs.delete(id);
+    if (expiredIds.length > 0) {
+      await this.persistAll();
+      this.syncQueueMetrics();
+      console.log(`[jobQueue] Removed ${expiredIds.length} expired jobs from persistence`);
+    }
+    return { expiredJobIds: expiredIds };
+  }
+
   private async reconcileLibraryHolds(): Promise<void> {
     if (!this.localLibrary) return;
     const activeResizeReferences = this.getAllJobs()
@@ -392,6 +393,7 @@ export class JobQueueService {
     this.pending.push(id);
     await this.persistAll();
     jobsCreated.inc({ status: 'queued' });
+    composerJobsCreated.inc({ mode: job.kind === 'compose-preview' ? 'preview' : 'final' });
     this.syncQueueMetrics();
     this.schedule();
     return job;
@@ -583,6 +585,7 @@ export class JobQueueService {
         // Use centralized cleanup with actual workDir path
         await cleanupJobByWorkDir(job.files.workDir, 'cancelled', job.id);
         cancelledJobs.inc();
+        if (isComposerJob(job)) composerJobsCompleted.inc({ status: 'cancelled' });
       } else {
         job.status = 'completed';
         job.progress = 100;
@@ -595,6 +598,7 @@ export class JobQueueService {
         }
         // Note: completed jobs retain their workDir for download (handled by retention policy)
         jobsCompleted.inc({ status: 'completed' });
+        if (isComposerJob(job)) composerJobsCompleted.inc({ status: 'completed' });
       }
     } catch (error) {
       wasCancelling = isCancelling(job);
@@ -603,11 +607,13 @@ export class JobQueueService {
         // Use centralized cleanup with actual workDir path
         await cleanupJobByWorkDir(job.files.workDir, 'cancelled', job.id);
         cancelledJobs.inc();
+        if (isComposerJob(job)) composerJobsCompleted.inc({ status: 'cancelled' });
       } else {
         job.status = 'failed';
         job.error = error instanceof Error ? error.message : 'Render failed';
         // Note: failed jobs retain their workDir briefly for debugging (handled by retention policy)
         failedJobs.inc();
+        if (isComposerJob(job)) composerJobsCompleted.inc({ status: 'failed' });
       }
     } finally {
       job.finishedAt ??= Date.now();

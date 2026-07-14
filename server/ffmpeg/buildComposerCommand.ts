@@ -160,8 +160,8 @@ export const buildComposerCommand = (params: ComposerCommandParams): string[] =>
 
   return [
     '-y',
-    '-autorotate', '-i', params.originalPath,
-    '-autorotate', '-i', params.hookPath,
+    '-autorotate', '1', '-i', params.originalPath,
+    '-autorotate', '1', '-i', params.hookPath,
     '-filter_complex', filters.join(';'),
     '-map', '[final_v]',
     '-map', '[final_a]',
