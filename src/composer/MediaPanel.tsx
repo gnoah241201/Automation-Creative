@@ -19,7 +19,7 @@ interface UploadItem {
 interface MediaPanelProps {
   originals: ComposerAsset[];
   hooks: ComposerAsset[];
-  onAssetUploaded: (asset: ComposerAsset) => void;
+  onAssetUploaded: (asset: ComposerAsset, file: File) => void;
   onAssetRemoved: (assetId: string) => void;
   onCropRequested: (asset: ComposerAsset) => void;
   onContinue: () => void;
@@ -79,7 +79,7 @@ export function MediaPanel({
       });
       if (!mounted.current) return;
       assetFingerprints.current.set(asset.id, item.fingerprint);
-      onAssetUploaded(asset);
+      onAssetUploaded(asset, item.file);
       setUploads((current) => current.filter((entry) => entry.id !== item.id));
     } catch (error) {
       if (!mounted.current) return;

@@ -4,6 +4,7 @@ import {
   ComposerBatchDraft,
   ComposerCrop,
   ComposerVariantConfig,
+  ExactPreviewResponse,
 } from '../../shared/composer-contract.ts';
 
 const API_BASE = '/api/composer';
@@ -117,3 +118,27 @@ export const saveComposerConfiguration = (
     signal,
   },
 ).then(json<ComposerBatchDraft>);
+
+export const requestExactPreview = (
+  batchId: string,
+  configurationId: string,
+  representativeHookId: string,
+  signal?: AbortSignal,
+): Promise<ExactPreviewResponse> => fetch(`${API_BASE}/batches/${encodeURIComponent(batchId)}/preview`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ configurationId, representativeHookId }),
+  signal,
+}).then(json<ExactPreviewResponse>);
+
+export const getExactPreviewStatus = (
+  previewId: string,
+  signal?: AbortSignal,
+): Promise<ExactPreviewResponse> => fetch(
+  `${API_BASE}/previews/${encodeURIComponent(previewId)}/status`,
+  { credentials: 'include', signal },
+).then(json<ExactPreviewResponse>);
+
+export const exactPreviewUrl = (previewId: string) =>
+  `${API_BASE}/previews/${encodeURIComponent(previewId)}`;
