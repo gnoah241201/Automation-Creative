@@ -10,8 +10,14 @@ export interface ComposerAsset {
   kind: ComposerAssetKind;
   originalFilename: string;
   duration: number;
+  /** Display-space dimensions after sample/display aspect ratio and rotation metadata. */
   width: number;
   height: number;
+  codedWidth: number;
+  codedHeight: number;
+  sampleAspectRatio: number;
+  displayAspectRatio: number;
+  rotation: number;
   frameRate: number;
   hasAudio: boolean;
   status: ComposerAssetStatus;

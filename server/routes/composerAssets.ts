@@ -6,22 +6,41 @@ import { randomUUID } from 'node:crypto';
 import { ComposerAssetStore } from '../services/composerAssetStore.ts';
 import { composerRoot } from '../services/composerPaths.ts';
 
-const incomingRoot = path.join(composerRoot, 'incoming');
-const upload = multer({
-  storage: multer.diskStorage({
-    destination: async (_req, _file, callback) => {
-      try {
-        await fs.mkdir(incomingRoot, { recursive: true });
-        callback(null, incomingRoot);
-      } catch (error) {
-        callback(error as Error, '');
-      }
-    },
-    filename: (_req, _file, callback) => callback(null, randomUUID()),
-  }),
-});
+const configuredMaxUploadBytes = Number(process.env.COMPOSER_MAX_UPLOAD_BYTES);
+export const DEFAULT_COMPOSER_MAX_UPLOAD_BYTES =
+  Number.isFinite(configuredMaxUploadBytes) && configuredMaxUploadBytes > 0
+    ? configuredMaxUploadBytes
+    : 2 * 1024 * 1024 * 1024;
 
-export const buildComposerAssetsRouter = (assets: ComposerAssetStore) => {
+interface ComposerAssetsRouterOptions {
+  incomingRoot?: string;
+  maxUploadBytes?: number;
+}
+
+export const buildComposerAssetsRouter = (
+  assets: ComposerAssetStore,
+  options: ComposerAssetsRouterOptions = {},
+) => {
+  const managedIncomingRoot = options.incomingRoot ?? path.join(composerRoot, 'incoming');
+  const maxUploadBytes = options.maxUploadBytes ?? DEFAULT_COMPOSER_MAX_UPLOAD_BYTES;
+  if (!Number.isFinite(maxUploadBytes) || maxUploadBytes <= 0) {
+    throw new Error('Composer upload limit must be a finite positive number');
+  }
+
+  const upload = multer({
+    limits: { fileSize: maxUploadBytes },
+    storage: multer.diskStorage({
+      destination: async (_req, _file, callback) => {
+        try {
+          await fs.mkdir(managedIncomingRoot, { recursive: true });
+          callback(null, managedIncomingRoot);
+        } catch (error) {
+          callback(error as Error, '');
+        }
+      },
+      filename: (_req, _file, callback) => callback(null, randomUUID()),
+    }),
+  });
   const router = express.Router();
 
   router.post('/assets', upload.single('file'), async (req, res) => {
@@ -70,6 +89,21 @@ export const buildComposerAssetsRouter = (assets: ComposerAssetStore) => {
         message: 'Thumbnail not found',
       });
     }
+  });
+
+  router.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (!(error instanceof multer.MulterError)) {
+      next(error);
+      return;
+    }
+
+    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+    res.status(tooLarge ? 413 : 400).json({
+      error: tooLarge ? 'UploadTooLarge' : 'UploadError',
+      message: tooLarge
+        ? `File exceeds the ${maxUploadBytes}-byte upload limit`
+        : error.message,
+    });
   });
 
   return router;

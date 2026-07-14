@@ -16,6 +16,8 @@ const sourceExtension = (filename: string): string => {
 };
 
 export class ComposerAssetStore {
+  private readonly writeChains = new Map<string, Promise<void>>();
+
   constructor(
     private readonly root: string,
     private readonly probe: ProbeMedia = probeMedia,
@@ -126,10 +128,27 @@ export class ComposerAssetStore {
   }
 
   private async writeAsset(assetDir: string, asset: ComposerAsset): Promise<void> {
+    const previous = this.writeChains.get(assetDir) ?? Promise.resolve();
+    const write = previous.catch(() => {}).then(() => this.writeAssetAtomically(assetDir, asset));
+    this.writeChains.set(assetDir, write);
+    try {
+      await write;
+    } finally {
+      if (this.writeChains.get(assetDir) === write) {
+        this.writeChains.delete(assetDir);
+      }
+    }
+  }
+
+  private async writeAssetAtomically(assetDir: string, asset: ComposerAsset): Promise<void> {
     const target = path.join(assetDir, 'metadata.json');
-    const temporary = `${target}.tmp`;
-    await fs.writeFile(temporary, JSON.stringify(asset, null, 2), 'utf8');
-    await fs.rename(temporary, target);
+    const temporary = `${target}.${randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(temporary, JSON.stringify(asset, null, 2), 'utf8');
+      await fs.rename(temporary, target);
+    } finally {
+      await fs.rm(temporary, { force: true }).catch(() => {});
+    }
   }
 
   private static async createThumbnail(sourcePath: string, outputPath: string): Promise<void> {
