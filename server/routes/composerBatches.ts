@@ -12,6 +12,7 @@ import {
 } from '../services/composerBatchRenderer.ts';
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
+class InvalidPreviewRequestError extends Error {}
 
 const sendNotFound = (res: express.Response) => res.status(404).json({
   error: 'NotFound', message: 'Composer batch not found',
@@ -124,17 +125,23 @@ export const buildComposerBatchesRouter = (
           ? req.body.representativeHookId
           : '';
         const configuration = draft.configurations[configurationId];
-        if (!configuration) throw new Error('Preview configuration was not found');
+        if (!configuration) throw new InvalidPreviewRequestError('Preview configuration was not found');
         const group = draft.durationGroups.find((item) => item.id === configuration.durationGroupId);
         if (!group?.hookIds.includes(representativeHookId)) {
-          throw new Error('Representative hook does not belong to the preview configuration');
+          throw new InvalidPreviewRequestError('Representative hook does not belong to the preview configuration');
         }
-        const [original, hook] = await Promise.all([
-          assets.requireReadyAsset(configuration.originalId, 'original'),
-          assets.requireReadyAsset(representativeHookId, 'hook'),
-        ]);
+        let original;
+        let hook;
+        try {
+          [original, hook] = await Promise.all([
+            assets.requireReadyAsset(configuration.originalId, 'original'),
+            assets.requireReadyAsset(representativeHookId, 'hook'),
+          ]);
+        } catch {
+          throw new InvalidPreviewRequestError('Preview source is unavailable');
+        }
         const validation = validateComposerConfiguration(draft, configuration, original.duration);
-        if ('message' in validation) throw new Error(validation.message);
+        if ('message' in validation) throw new InvalidPreviewRequestError(validation.message);
         const request: PreviewRequest = {
           batchId: draft.id,
           draftExpiresAt: draft.expiresAt,
@@ -149,7 +156,13 @@ export const buildComposerBatchesRouter = (
         };
         res.status(202).json(await previews.requestPreview(request));
       } catch (error) {
-        res.status(400).json({ error: 'InvalidPreview', message: toMessage(error) });
+        if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else if (error instanceof InvalidPreviewRequestError) {
+          res.status(400).json({ error: 'InvalidPreview', message: error.message });
+        } else {
+          console.error('[composerBatches] Exact preview failure:', error);
+          res.status(500).json({ error: 'PreviewUnavailable', message: 'Exact preview could not be created' });
+        }
       }
     });
 

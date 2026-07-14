@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { flushComposerConfigurationKeepalive } from '../src/composer/api.ts';
+import { composerAssetSourceUrl, flushComposerConfigurationKeepalive, getComposerAsset } from '../src/composer/api.ts';
 import type { ComposerVariantConfig } from '../shared/composer-contract.ts';
 
 test('unmount flush uses an authenticated keepalive request', async (t) => {
@@ -22,4 +22,20 @@ test('unmount flush uses an authenticated keepalive request', async (t) => {
   assert.equal(observed?.init?.credentials, 'include');
   assert.equal(observed?.init?.keepalive, true);
   assert.equal(observed?.init?.method, 'PUT');
+});
+
+test('draft restore loads authenticated asset metadata and uses an encoded managed source URL', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let observed: { input: string; init?: RequestInit } | undefined;
+  globalThis.fetch = (async (input, init) => {
+    observed = { input: String(input), init };
+    return new Response(JSON.stringify({ id: 'asset-1' }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  await getComposerAsset('asset 1');
+
+  assert.equal(observed?.input, '/api/composer/assets/asset%201');
+  assert.equal(observed?.init?.credentials, 'include');
+  assert.equal(composerAssetSourceUrl('asset 1'), '/api/composer/assets/asset%201/source');
 });

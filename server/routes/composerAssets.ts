@@ -3,7 +3,7 @@ import multer from 'multer';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ComposerAssetStore } from '../services/composerAssetStore.ts';
+import { ComposerAssetStore, ComposerInvalidMediaError, ComposerProbeUnavailableError } from '../services/composerAssetStore.ts';
 import { composerRoot } from '../services/composerPaths.ts';
 
 const configuredMaxUploadBytes = Number(process.env.COMPOSER_MAX_UPLOAD_BYTES);
@@ -59,9 +59,17 @@ export const buildComposerAssetsRouter = (
       res.status(201).json(asset);
     } catch (error) {
       await fs.rm(req.file.path, { force: true }).catch(() => {});
-      res.status(400).json({
-        error: 'InvalidMedia',
-        message: error instanceof Error ? error.message : 'Invalid media',
+      if (error instanceof ComposerInvalidMediaError) {
+        console.warn('[composerAssets] Rejected unreadable media:', error);
+        res.status(400).json({ error: 'InvalidMedia', message: 'The selected file is not a readable video' });
+        return;
+      }
+      console.error('[composerAssets] Failed to inspect uploaded media:', error);
+      res.status(500).json({
+        error: error instanceof ComposerProbeUnavailableError ? 'ProbeUnavailable' : 'InternalError',
+        message: error instanceof ComposerProbeUnavailableError
+          ? 'The video could not be inspected right now'
+          : 'The uploaded video could not be processed',
       });
     }
   });
@@ -74,6 +82,24 @@ export const buildComposerAssetsRouter = (
         error: 'InvalidCrop',
         message: error instanceof Error ? error.message : 'Invalid crop',
       });
+    }
+  });
+
+  router.get('/assets/:id', async (req, res) => {
+    try {
+      res.json(await assets.requireAsset(req.params.id));
+    } catch {
+      res.status(404).json({ error: 'NotFound', message: 'Composer asset not found' });
+    }
+  });
+
+  router.get('/assets/:id/source', async (req, res) => {
+    try {
+      const asset = await assets.requireAsset(req.params.id);
+      await fs.access(assets.getSourcePath(asset.id, asset.originalFilename));
+      res.sendFile(assets.getSourcePath(asset.id, asset.originalFilename));
+    } catch {
+      res.status(404).json({ error: 'NotFound', message: 'Composer source not found' });
     }
   });
 

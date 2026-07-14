@@ -90,7 +90,15 @@ export function CropEditor({ asset, sourceUrl, onSave, onClose }: CropEditorProp
               width: `min(100%, calc(65vh * ${asset.width / asset.height}))`,
             }}
           >
-            <img src={sourceUrl} alt={`Crop preview for ${asset.originalFilename}`} className="h-full w-full select-none object-fill" draggable={false} />
+            <video
+              src={sourceUrl}
+              aria-label={`Video crop preview for ${asset.originalFilename}`}
+              muted
+              playsInline
+              controls
+              preload="metadata"
+              className="h-full w-full select-none object-fill"
+            />
             <div className="pointer-events-none absolute inset-0 bg-black/35" aria-hidden="true" />
             <CropSelection
               crop={crop}

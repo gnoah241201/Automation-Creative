@@ -131,6 +131,7 @@ export class ComposerBatchRenderer {
       return {
         spec: {
           batchId: batch.id, originalId: original.id, hookId: hook.id,
+          originalName: original.originalFilename, hookName: hook.originalFilename,
           insertAt: configuration.insertAt, trimStart: configuration.trimStart, trimEnd: configuration.trimEnd,
           transition: configuration.transition,
           outputFilename: buildComposerOutputFilename(original.originalFilename, hook.originalFilename), mode: 'final',

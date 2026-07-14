@@ -33,3 +33,12 @@ The real-media test creates short generated videos, renders start/middle/end ins
 ## Interactive verification still required
 
 The first two import/crop checks require observing the browser workflow. The exact-preview comparison also requires comparing the rendered preview with the browser preview. Leave those boxes unchecked when the in-app browser harness is unavailable; service-level checks are not a substitute for a visual confirmation.
+
+## Final hardening evidence (2026-07-14)
+
+- Automated component coverage verifies that the crop editor renders uploaded MP4 media with a real `<video>` element while keeping the accessible crop overlay.
+- Automated restore coverage verifies persisted batch lookup, restored asset crop metadata, stale draft removal, safe local identifier persistence, and the visible restore affordance.
+- Route regressions verify that upload probing, exact-preview creation, Resize job status/debug responses, and trim submission do not expose managed paths or FFmpeg diagnostics.
+- The full test command now includes both `.test.ts` and `.test.tsx` files and runs serially to avoid Windows file-rename contention in storage tests.
+
+The in-app browser harness remained unavailable during final hardening. No browser-only checkbox above was changed.

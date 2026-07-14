@@ -167,3 +167,43 @@ test('download route returns gone when completed output file is missing', async 
     await harness.close();
   }
 });
+
+test('job status and queue diagnostics never expose internal render paths or FFmpeg stderr', async () => {
+  const harness = await createDownloadHarness();
+  try {
+    const job = harness.queue.getJob(harness.jobId);
+    assert.ok(job);
+    job.status = 'failed';
+    job.error = `ffmpeg stderr: failed to read ${path.join(os.tmpdir(), 'private', 'foreground.mp4')}`;
+
+    const status = await fetch(`${harness.baseUrl}/api/jobs/${harness.jobId}`);
+    const statusBody = await status.json();
+    assert.equal((statusBody as { error?: string }).error, 'Render failed. Retry the job or check the source media.');
+    assert.doesNotMatch(JSON.stringify(statusBody), /ffmpeg|stderr|foreground\.mp4|private/);
+
+    const debug = await fetch(`${harness.baseUrl}/api/jobs/debug/queue`);
+    const debugBody = await debug.json();
+    assert.doesNotMatch(JSON.stringify(debugBody), /ffmpeg|stderr|foreground\.mp4|private/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('trim submission conceals unexpected internal diagnostics', async (t) => {
+  const queue = {
+    createTrimJob: async () => { throw new Error('ffmpeg failed at D:\\private\\trim-source.mp4: stderr'); },
+  } as unknown as JobQueueService;
+  const app = express(); app.use('/api/jobs', buildJobsRouter(queue));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address() as AddressInfo;
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/jobs/trim`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sourceJobId: 'job-1', spec: { duration: 1 } }),
+  });
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body, { error: 'InternalError', message: 'Failed to create trim job' });
+  assert.doesNotMatch(JSON.stringify(body), /private|trim-source|ffmpeg|stderr/);
+});

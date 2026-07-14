@@ -26,6 +26,14 @@ export function LibrarySelectionCheckbox({
   return <input type="checkbox" aria-label={`Select ${entry.filename}`} checked={checked} onChange={onChange} className="absolute left-3 top-3 h-5 w-5" />;
 }
 
+export function LibrarySourceNames({ entry }: { entry: LocalLibraryEntry }) {
+  return (
+    <p className="text-xs text-neutral-400">
+      Original {entry.originalName || 'source'} &middot; Hook {entry.hookName || 'source'}
+    </p>
+  );
+}
+
 const bytes = (value: number): string => value >= 1_000_000
   ? `${(value / 1_000_000).toFixed(1)} MB`
   : `${Math.max(1, Math.round(value / 1_000))} KB`;
@@ -166,7 +174,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
               </label>
               <div className="space-y-2 p-4">
                 <h2 title={entry.filename} className="truncate font-medium">{entry.filename}</h2>
-                <p className="text-xs text-neutral-400">Original {entry.originalId} · Hook {entry.hookId}</p>
+                <LibrarySourceNames entry={entry} />
                 <p className="text-xs text-neutral-400">{entry.duration.toFixed(1)}s · {bytes(entry.byteSize)} · {remaining(entry.expiresAt, now)}</p>
                 <div className="flex gap-2 pt-2">
                   <a href={libraryDownloadUrl(entry.id)} download={entry.filename} className="flex-1 rounded-lg bg-neutral-800 px-3 py-2 text-center text-xs"><Download className="mr-1 inline h-3.5 w-3.5" /> Download</a>

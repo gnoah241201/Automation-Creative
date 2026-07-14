@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
 import { ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig } from '../../shared/composer-contract.ts';
 import { deriveComposerMatrix, estimateComposerOutputBytes } from '../../shared/composerTimeline.ts';
 import {
-  createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getExactPreviewStatus, requestExactPreview,
+  composerAssetSourceUrl, createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getComposerAsset,
+  getComposerBatch, getExactPreviewStatus, requestExactPreview,
   saveComposerConfiguration, saveComposerCrop, renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
 } from './api.ts';
 import { ComposerPreview } from './ComposerPreview.tsx';
@@ -14,6 +15,7 @@ import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets
 import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
 import { ReviewMatrix } from './ReviewMatrix.tsx';
 import { useJobPolling } from '../render/useJobPolling.ts';
+import { clearPersistedComposerBatchId, persistComposerBatchId, restorePersistedComposerDraft } from './restoreDraft.ts';
 
 const stages: Array<{ id: ComposerStage; step: number; label: string; description: string }> = [
   { id: 'sources', step: 1, label: 'Sources', description: 'Choose original videos and hooks' },
@@ -49,12 +51,15 @@ export function HookComposerPage() {
   const [renderJobs, setRenderJobs] = useState<ComposerBatchJob[]>([]);
   const [rendering, setRendering] = useState(false);
   const [renderError, setRenderError] = useState<string>();
+  const [restoreStatus, setRestoreStatus] = useState<string>();
   const sourceAssetsRef = useRef<ComposerAsset[]>([]);
   const sourceRevision = useRef(0);
   const createRequest = useRef<AbortController | undefined>(undefined);
   const saveRequest = useRef<AbortController | undefined>(undefined);
   const previewRequest = useRef<AbortController | undefined>(undefined);
   const renderRequest = useRef<AbortController | undefined>(undefined);
+  const restoreRequest = useRef<AbortController | undefined>(undefined);
+  const restoreRevision = useRef(0);
   const configRevision = useRef(0);
   const latestBatchId = useRef<string | undefined>(undefined);
   const latestConfiguration = useRef<ComposerVariantConfig | undefined>(undefined);
@@ -77,6 +82,7 @@ export function HookComposerPage() {
       saveRequest.current?.abort();
       previewRequest.current?.abort();
       renderRequest.current?.abort();
+      restoreRequest.current?.abort();
       unmountFlushTimer.current = window.setTimeout(() => {
         const batchId = latestBatchId.current;
         const configuration = latestConfiguration.current;
@@ -89,6 +95,52 @@ export function HookComposerPage() {
       }, 0);
     };
   }, []);
+
+  const restoreDraft = useCallback(async (manual = false) => {
+    const revision = ++restoreRevision.current;
+    const controller = new AbortController();
+    restoreRequest.current?.abort();
+    restoreRequest.current = controller;
+    if (manual) setRestoreStatus('Đang khôi phục bản nháp…');
+    try {
+      const result = await restorePersistedComposerDraft({
+        storage: window.localStorage,
+        getBatch: getComposerBatch,
+        getAsset: getComposerAsset,
+        signal: controller.signal,
+      });
+      if (controller.signal.aborted || revision !== restoreRevision.current) return;
+      if (result.status === 'none') {
+        if (manual) setRestoreStatus('Không có bản nháp nào để khôi phục.');
+        return;
+      }
+      if (result.status === 'missing') {
+        setRestoreStatus('Bản nháp cũ đã hết hạn hoặc không còn tồn tại.');
+        return;
+      }
+      sourceAssetsRef.current = result.assets;
+      sourceRevision.current += 1;
+      setSourceAssets(result.assets);
+      setSourceUrls(Object.fromEntries(result.assets.map((asset) => [asset.id, composerAssetSourceUrl(asset.id)])));
+      dispatch({
+        type: 'assetsLoaded',
+        originals: result.assets.filter((asset) => asset.kind === 'original'),
+        hooks: result.assets.filter((asset) => asset.kind === 'hook'),
+      });
+      dispatch({ type: 'batchCreated', batch: result.batch });
+      setRestoreStatus('Đã khôi phục bản nháp. Hãy kiểm tra lại trước khi xuất video.');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setRestoreStatus(error instanceof Error ? `Không thể khôi phục bản nháp: ${error.message}` : 'Không thể khôi phục bản nháp.');
+    } finally {
+      if (restoreRequest.current === controller) restoreRequest.current = undefined;
+    }
+  }, []);
+
+  useEffect(() => {
+    void restoreDraft(false);
+    return () => restoreRequest.current?.abort();
+  }, [restoreDraft]);
 
   useEffect(() => {
     renderRequest.current?.abort();
@@ -157,6 +209,8 @@ export function HookComposerPage() {
   }, [editingConfig, state.batchId, state.stage]);
 
   const updateSourceAssets = (change: ComposerSourceChange) => {
+    restoreRevision.current += 1;
+    restoreRequest.current?.abort();
     const result = reduceComposerSourceAssets(sourceAssetsRef.current, change, Boolean(state.batchId));
     if (result.assets === sourceAssetsRef.current) return;
     sourceAssetsRef.current = result.assets;
@@ -165,6 +219,7 @@ export function HookComposerPage() {
     setSourceAssets(result.assets);
     setContinueError(undefined);
     if (result.invalidateBatch) {
+      clearPersistedComposerBatchId(window.localStorage);
       dispatch({
         type: 'assetsLoaded',
         originals: result.assets.filter((asset) => asset.kind === 'original'),
@@ -229,6 +284,7 @@ export function HookComposerPage() {
       if (controller.signal.aborted || revision !== sourceRevision.current) return;
       dispatch({ type: 'assetsLoaded', originals: readyOriginals, hooks: readyHooks });
       dispatch({ type: 'batchCreated', batch });
+      persistComposerBatchId(window.localStorage, batch.id);
     } catch (error) {
       if (controller.signal.aborted) return;
       setContinueError(error instanceof Error ? error.message : 'The batch could not be created');
@@ -374,6 +430,12 @@ export function HookComposerPage() {
         <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400 sm:text-base">
           Build vertical 9:16 combinations in three clear stages. Your large preview stays available while you edit.
         </p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <button type="button" onClick={() => void restoreDraft(true)} className="rounded-lg border border-neutral-700 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800">
+            Khôi phục bản nháp
+          </button>
+          <p aria-live="polite" className="text-sm text-neutral-400">{restoreStatus}</p>
+        </div>
       </header>
 
       <ol aria-label="Composer stages" className="mb-6 grid gap-2 sm:grid-cols-3">

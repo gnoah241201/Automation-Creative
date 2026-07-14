@@ -4,11 +4,14 @@ import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { ComposerAsset, ComposerAssetKind, ComposerCrop } from '../../shared/composer-contract.ts';
 import { getFfmpegPath } from './encoderConfig.ts';
-import { MediaProbe, probeMedia } from './mediaProbe.ts';
+import { InvalidMediaProbeError, MediaProbe, MediaProbeUnavailableError, probeMedia } from './mediaProbe.ts';
 import { resolveComposerChild } from './composerPaths.ts';
 
 type ProbeMedia = (filePath: string) => MediaProbe | Promise<MediaProbe>;
 type CreateThumbnail = (sourcePath: string, outputPath: string) => Promise<void>;
+
+export class ComposerInvalidMediaError extends Error {}
+export class ComposerProbeUnavailableError extends Error {}
 
 const sourceExtension = (filename: string): string => {
   const extension = path.extname(filename).toLowerCase();
@@ -36,7 +39,14 @@ export class ComposerAssetStore {
 
     try {
       await fs.rename(uploadedPath, sourcePath);
-      const metadata = await this.probe(sourcePath);
+      let metadata: MediaProbe;
+      try {
+        metadata = await this.probe(sourcePath);
+      } catch (error) {
+        if (error instanceof InvalidMediaProbeError) throw new ComposerInvalidMediaError('Media is not readable');
+        if (error instanceof MediaProbeUnavailableError) throw new ComposerProbeUnavailableError('Media probe is unavailable');
+        throw error;
+      }
       const ready = Math.abs(metadata.width / metadata.height - 9 / 16) <= 0.002;
       const thumbnailPath = path.join(assetDir, 'thumbnail.jpg');
       await this.thumbnailer(sourcePath, thumbnailPath);

@@ -11,6 +11,12 @@ import {
 
 const API_BASE = '/api/composer';
 
+export class ComposerApiError extends Error {
+  constructor(message: string, public readonly status: number) {
+    super(message);
+  }
+}
+
 const getErrorMessage = async (response: Response): Promise<string> => {
   const body = await response.text();
   const contentType = response.headers.get('content-type');
@@ -26,7 +32,7 @@ const getErrorMessage = async (response: Response): Promise<string> => {
 };
 
 const json = async <T>(response: Response): Promise<T> => {
-  if (!response.ok) throw new Error(await getErrorMessage(response));
+  if (!response.ok) throw new ComposerApiError(await getErrorMessage(response), response.status);
   return response.json() as Promise<T>;
 };
 
@@ -85,6 +91,18 @@ export const saveComposerCrop = (
   body: JSON.stringify(crop),
   signal,
 }).then(json<ComposerAsset>);
+
+export const getComposerAsset = (
+  assetId: string,
+  signal?: AbortSignal,
+): Promise<ComposerAsset> => fetch(`${API_BASE}/assets/${encodeURIComponent(assetId)}`, {
+  credentials: 'include',
+  signal,
+}).then(json<ComposerAsset>);
+
+export const composerAssetSourceUrl = (assetId: string): string => (
+  `${API_BASE}/assets/${encodeURIComponent(assetId)}/source`
+);
 
 export const createComposerBatch = (
   originalIds: string[],

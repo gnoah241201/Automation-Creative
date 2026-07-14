@@ -318,3 +318,36 @@ test('preview route derives a trusted snapshot and rejects mismatched representa
   assert.equal(streamed.status, 200);
   assert.equal(await streamed.text(), 'preview');
 });
+
+test('preview route conceals unexpected renderer paths and diagnostics', async (t) => {
+  const harness = await createHarness();
+  const drafts = new ComposerDraftStore(harness.root);
+  const draft = await drafts.create(['original-1'], ['hook-1']);
+  draft.durationGroups = [{ id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['hook-1'] }];
+  draft.configurations['original-1:g-3.000'] = {
+    id: 'original-1:g-3.000', originalId: 'original-1', durationGroupId: 'g-3.000',
+    representativeHookId: 'hook-1', insertAt: 2, trimStart: 0, trimEnd: 13,
+    transition: 'cut', reviewed: false,
+  };
+  await drafts.save(draft);
+  const previews = {
+    requestPreview: async () => { throw new Error('ffmpeg failed at D:\\private\\preview.mp4: stderr'); },
+  } as unknown as ComposerPreviewService;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter(harness.assets, drafts, previews));
+  const server = app.listen(0);
+  t.after(async () => {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await fs.rm(harness.root, { recursive: true, force: true });
+  });
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/composer/batches/${draft.id}/preview`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configurationId: 'original-1:g-3.000', representativeHookId: 'hook-1' }),
+  });
+  assert.equal(response.status, 500);
+  const body = await response.json();
+  assert.deepEqual(body, { error: 'PreviewUnavailable', message: 'Exact preview could not be created' });
+  assert.doesNotMatch(JSON.stringify(body), /private|preview\.mp4|ffmpeg|stderr/);
+});

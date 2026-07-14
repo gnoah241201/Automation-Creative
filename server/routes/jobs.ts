@@ -88,6 +88,11 @@ export const buildJobsRouter = (
   deps?: { library: LocalLibraryService },
 ) => {
   const router = express.Router();
+  const publicJobError = (job: { status: string; error?: string }): string | undefined => (
+    job.status === 'failed' && job.error
+      ? 'Render failed. Retry the job or check the source media.'
+      : undefined
+  );
 
   router.post('/uploads/from-library', express.json(), async (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -218,7 +223,7 @@ export const buildJobsRouter = (
         console.error(error);
         res.status(500).json({
           error: 'InternalError',
-          message: error instanceof Error ? error.message : 'Failed to create upload session',
+          message: 'Failed to create upload session',
         });
       }
     },
@@ -406,7 +411,9 @@ export const buildJobsRouter = (
         : 500;
       res.status(statusCode).json({
         error: statusCode === 404 ? 'NotFound' : statusCode === 409 ? 'NotReady' : 'InternalError',
-        message: error instanceof Error ? error.message : 'Failed to create trim job',
+        message: statusCode === 404 ? 'Source job not found'
+          : statusCode === 409 ? 'Source job is not completed'
+            : 'Failed to create trim job',
       });
     }
   });
@@ -435,7 +442,7 @@ export const buildJobsRouter = (
       status: job.status,
       progress: job.progress,
       progressMode: job.progressMode,
-      error: job.error,
+      error: publicJobError(job),
       outputFilename: job.outputFilename,
       downloadUrl,
     });
@@ -451,7 +458,7 @@ export const buildJobsRouter = (
       progressMode: job.progressMode,
       startedAt: job.startedAt,
       finishedAt: job.finishedAt,
-      error: job.error,
+      error: publicJobError(job),
     }));
     res.json({ stats, jobs });
   });

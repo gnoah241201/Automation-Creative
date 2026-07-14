@@ -72,6 +72,8 @@ export interface ComposerRenderSpec {
   batchId: string;
   originalId: string;
   hookId: string;
+  originalName?: string;
+  hookName?: string;
   insertAt: number;
   trimStart: number;
   trimEnd: number;
@@ -107,6 +109,8 @@ export interface LocalLibraryEntry {
   jobId: string;
   originalId: string;
   hookId: string;
+  originalName?: string;
+  hookName?: string;
   filename: string;
   duration: number;
   width: 1080;

@@ -21,6 +21,8 @@ export interface RegisterLibraryOutput {
   jobId: string;
   originalId: string;
   hookId: string;
+  originalName?: string;
+  hookName?: string;
   filename: string;
   duration: number;
   outputPath: string;
@@ -178,6 +180,8 @@ export class LocalLibraryService {
         jobId: input.jobId,
         originalId: input.originalId,
         hookId: input.hookId,
+        ...(input.originalName ? { originalName: input.originalName } : {}),
+        ...(input.hookName ? { hookName: input.hookName } : {}),
         filename: input.filename,
         duration: input.duration,
         width: 1080,
@@ -206,6 +210,8 @@ export class LocalLibraryService {
       jobId: job.id,
       originalId: job.spec.originalId,
       hookId: job.spec.hookId,
+      originalName: job.spec.originalName,
+      hookName: job.spec.hookName,
       filename: job.spec.outputFilename,
       duration: job.spec.trimEnd - job.spec.trimStart,
       outputPath: job.files.outputPath,
@@ -467,6 +473,8 @@ export class LocalLibraryService {
       && typeof entry.jobId === 'string' && IDENTIFIER.test(entry.jobId)
       && typeof entry.originalId === 'string' && IDENTIFIER.test(entry.originalId)
       && typeof entry.hookId === 'string' && IDENTIFIER.test(entry.hookId)
+      && (entry.originalName === undefined || typeof entry.originalName === 'string')
+      && (entry.hookName === undefined || typeof entry.hookName === 'string')
       && typeof entry.filename === 'string' && entry.filename === path.basename(entry.filename)
       && typeof entry.duration === 'number' && Number.isFinite(entry.duration) && entry.duration > 0
       && entry.width === 1080 && entry.height === 1920

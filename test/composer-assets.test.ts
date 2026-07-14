@@ -177,3 +177,39 @@ test('composer upload is auth-gated and returns structured file-size errors', as
   });
   assert.equal(createCalls, 0);
 });
+
+test('composer upload redacts probe paths while preserving a typed invalid-media response', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-route-redaction-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const secret = path.join(root, 'private-input.mp4');
+  let mode: 'invalid' | 'internal' = 'invalid';
+  const assets = {
+    createAsset: async () => {
+      if (mode === 'invalid') {
+        const { ComposerInvalidMediaError } = await import('../server/services/composerAssetStore.ts');
+        throw new ComposerInvalidMediaError(`ffprobe rejected ${secret}`);
+      }
+      const { ComposerProbeUnavailableError } = await import('../server/services/composerAssetStore.ts');
+      throw new ComposerProbeUnavailableError(`spawn ffprobe ENOENT for ${secret}`);
+    },
+  } as unknown as ComposerAssetStore;
+  const app = express();
+  app.use('/api/composer', buildComposerAssetsRouter(assets, { incomingRoot: root }));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const endpoint = `http://127.0.0.1:${address.port}/api/composer/assets`;
+  const upload = () => { const body = new FormData(); body.append('kind', 'hook'); body.append('file', new Blob(['x']), 'bad.mp4'); return body; };
+
+  const invalid = await fetch(endpoint, { method: 'POST', body: upload() });
+  assert.equal(invalid.status, 400);
+  assert.deepEqual(await invalid.json(), { error: 'InvalidMedia', message: 'The selected file is not a readable video' });
+
+  mode = 'internal';
+  const internal = await fetch(endpoint, { method: 'POST', body: upload() });
+  assert.equal(internal.status, 500);
+  const body = await internal.json();
+  assert.deepEqual(body, { error: 'ProbeUnavailable', message: 'The video could not be inspected right now' });
+  assert.doesNotMatch(JSON.stringify(body), /private-input|ffprobe|ENOENT/);
+});

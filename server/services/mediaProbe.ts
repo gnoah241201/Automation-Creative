@@ -1,6 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 
+export class InvalidMediaProbeError extends Error {}
+export class MediaProbeUnavailableError extends Error {}
+
 export interface MediaProbe {
   duration: number;
   width: number;
@@ -102,10 +105,21 @@ export const parseMediaProbe = (raw: string): MediaProbe => {
 };
 
 export const probeMedia = (filePath: string): MediaProbe => {
-  const raw = execFileSync(
-    ffprobeInstaller.path,
-    ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', filePath],
-    { encoding: 'utf8', timeout: 15_000 },
-  );
-  return parseMediaProbe(raw);
+  let raw: string;
+  try {
+    raw = execFileSync(
+      ffprobeInstaller.path,
+      ['-v', 'error', '-show_streams', '-show_format', '-of', 'json', filePath],
+      { encoding: 'utf8', timeout: 15_000 },
+    );
+  } catch (error) {
+    const status = (error as { status?: unknown }).status;
+    if (typeof status === 'number') throw new InvalidMediaProbeError('ffprobe rejected the media');
+    throw new MediaProbeUnavailableError('ffprobe could not be executed');
+  }
+  try {
+    return parseMediaProbe(raw);
+  } catch {
+    throw new InvalidMediaProbeError('ffprobe returned unreadable media metadata');
+  }
 };
