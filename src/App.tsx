@@ -19,6 +19,8 @@ import {
   DEFAULT_BUTTON_Y,
 } from './render/overlayDefaults';
 import { createDefaultButtonState, createDefaultLogoState } from './render/resetState';
+import { AppShell, AppTab } from './app/AppShell';
+import { HookComposerPage } from './composer/HookComposerPage';
 import {
   getAnchorCenteredCropWindow,
   getOutputFrameDimensions,
@@ -491,6 +493,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authUsername, setAuthUsername] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<AppTab>('resize');
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
@@ -1473,6 +1476,10 @@ export default function App() {
   }
 
   return (
+    <AppShell activeTab={activeTab} onTabChange={setActiveTab}>
+      {activeTab === 'composer' ? (
+        <HookComposerPage />
+      ) : (
     <div className="min-h-screen bg-neutral-950 text-neutral-50 p-4 md:p-8 font-sans selection:bg-blue-500/30">
       <div className="w-full max-w-[1800px] mx-auto grid grid-cols-1 xl:grid-cols-[minmax(0,1.45fr)_minmax(420px,0.85fr)] gap-8 xl:gap-10 2xl:gap-14">
 
@@ -2126,5 +2133,7 @@ export default function App() {
         </button>
       )}
     </div>
+      )}
+    </AppShell>
   );
 }
