@@ -37,6 +37,39 @@ const parseProgress = (line: string): number | null => {
   return toSeconds(match[1]);
 };
 
+export const observeFfmpegProcess = (
+  child: ChildProcessWithoutNullStreams,
+  effectiveDuration: number | null,
+  onProgress: (progress: RenderProgress) => void,
+  label: string,
+): { child: ChildProcessWithoutNullStreams; completion: Promise<void> } => {
+  const progressMode = effectiveDuration && effectiveDuration > 0 ? 'determinate' : 'indeterminate';
+  let stderrOutput = '';
+
+  child.stderr.on('data', (buffer) => {
+    const line = buffer.toString();
+    stderrOutput += line;
+    if (progressMode === 'indeterminate') return;
+    const current = parseProgress(line);
+    if (current === null || !effectiveDuration) return;
+    const ratio = Math.max(0, Math.min(1, current / effectiveDuration));
+    onProgress({ progress: Math.round(ratio * 100), mode: 'determinate' });
+  });
+
+  const completion = new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', (code) => {
+      if (code === 0) {
+        onProgress({ progress: 100, mode: progressMode });
+        resolve();
+        return;
+      }
+      reject(new Error(`${label} exited with code ${code}. ${stderrOutput}`));
+    });
+  });
+  return { child, completion };
+};
+
 /**
  * Try to get duration from input file using ffprobe
  * Returns duration in seconds, or null if unable to determine
@@ -115,46 +148,7 @@ export const runRenderJob = (
     }
   }
 
-  // Determine progress mode
-  const progressMode: 'determinate' | 'indeterminate' = effectiveDuration ? 'determinate' : 'indeterminate';
-
-  let stderrOutput = '';
-
-  child.stderr.on('data', (buffer) => {
-    const line = buffer.toString();
-    stderrOutput += line;
-
-    if (progressMode === 'indeterminate') {
-      // For indeterminate jobs (no duration), progress is already set to -1 in jobQueue
-      // We don't emit repeated updates since there's nothing to track
-      return;
-    }
-
-    // For determinate jobs with known duration
-    const current = parseProgress(line);
-    if (current === null || !effectiveDuration || effectiveDuration <= 0) {
-      return;
-    }
-
-    const ratio = Math.max(0, Math.min(1, current / effectiveDuration));
-    const normalized = Math.round(ratio * 100);
-    onProgress({ progress: normalized, mode: 'determinate' });
-  });
-
-  const completion = new Promise<void>((resolve, reject) => {
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        // Always emit 100% on completion
-        onProgress({ progress: 100, mode: progressMode });
-        resolve();
-        return;
-      }
-      reject(new Error(`FFmpeg exited with code ${code}. ${stderrOutput}`));
-    });
-  });
-
-  return { child, completion };
+  return observeFfmpegProcess(child, effectiveDuration, onProgress, 'FFmpeg');
 };
 
 /**
@@ -173,33 +167,5 @@ export const runTrimJob = (
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  let stderrOutput = '';
-
-  child.stderr.on('data', (buffer) => {
-    const line = buffer.toString();
-    stderrOutput += line;
-
-    const current = parseProgress(line);
-    if (current === null || duration <= 0) {
-      return;
-    }
-
-    const ratio = Math.max(0, Math.min(1, current / duration));
-    const normalized = Math.round(ratio * 100);
-    onProgress({ progress: normalized, mode: 'determinate' });
-  });
-
-  const completion = new Promise<void>((resolve, reject) => {
-    child.on('error', reject);
-    child.on('close', (code) => {
-      if (code === 0) {
-        onProgress({ progress: 100, mode: 'determinate' });
-        resolve();
-        return;
-      }
-      reject(new Error(`FFmpeg trim exited with code ${code}. ${stderrOutput}`));
-    });
-  });
-
-  return { child, completion };
+  return observeFfmpegProcess(child, duration, onProgress, 'FFmpeg trim');
 };

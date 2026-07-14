@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { RenderJobRecord } from '../types/renderJob';
+import { NativeJobRecord } from '../types/renderJob';
 
 const STATE_FILE = 'queue-state.json';
 
@@ -14,7 +14,6 @@ const STATE_FILE = 'queue-state.json';
 export class JobStore {
   private statePath: string;
   private writePromise: Promise<void> = Promise.resolve();
-  private pendingData: RenderJobRecord[] | null = null;
 
   constructor(tempRoot: string) {
     this.statePath = path.join(tempRoot, STATE_FILE);
@@ -24,7 +23,7 @@ export class JobStore {
    * Load persisted jobs from disk.
    * Returns empty array if no state file exists.
    */
-  async load(): Promise<RenderJobRecord[]> {
+  async load(): Promise<NativeJobRecord[]> {
     try {
       const exists = await this.fileExists(this.statePath);
       if (!exists) {
@@ -33,10 +32,12 @@ export class JobStore {
       }
 
       const content = await fs.readFile(this.statePath, 'utf-8');
-      const data = JSON.parse(content) as RenderJobRecord[];
+      const data = JSON.parse(content) as Array<NativeJobRecord & { kind?: NativeJobRecord['kind'] }>;
       
       console.log(`[jobStore] Loaded ${data.length} persisted jobs`);
-      return data;
+      return data.map((job) => job.kind
+        ? job as NativeJobRecord
+        : { ...job, kind: 'trimFromJobId' in job.spec && job.spec.trimFromJobId ? 'trim' : 'resize' } as NativeJobRecord);
     } catch (error) {
       console.error('[jobStore] Failed to load persisted state:', error);
       // If state is corrupted, start fresh but log the issue
@@ -49,7 +50,7 @@ export class JobStore {
    * Uses a promise chain to serialize writes - never drops writes.
    * Each call queues after the previous write completes.
    */
-  async save(jobs: RenderJobRecord[]): Promise<void> {
+  async save(jobs: NativeJobRecord[]): Promise<void> {
     // Capture the data to save at the time of this call
     const dataToSave = [...jobs];
     

@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { RenderSpec } from '../../shared/render-contract';
+import { ComposerRenderSpec } from '../../shared/composer-contract';
 import { ensureTempRoot, cleanupJobByWorkDir, cleanupExpiredJobs, isJobExpired } from './fileStore';
 import { runRenderJob, runTrimJob, RenderProgress, determineProgressMode } from './renderRunner';
-import { RenderJobRecord } from '../types/renderJob';
+import { ComposerJobRecord, JobFiles, NativeJobRecord, RenderJobRecord } from '../types/renderJob';
+import { runComposerJob } from './composerRunner';
 import { JobStore } from './jobStore';
 import {
   activeJobs,
@@ -26,16 +28,19 @@ type InputUploadPaths = {
 
 const FINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
-const RECOVERABLE_STATES = new Set(['queued', 'completed', 'failed', 'cancelled']);
 
 /**
  * Cleanup interval: check for expired jobs every 5 minutes
  */
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
-const isCancelling = (job: RenderJobRecord) => {
+const isCancelling = (job: NativeJobRecord) => {
   return (job.status as string) === 'cancelling';
 };
+
+const isComposerJob = (job: NativeJobRecord): job is ComposerJobRecord => (
+  job.kind === 'compose' || job.kind === 'compose-preview'
+);
 
 /**
  * RESTART RECOVERY POLICY:
@@ -52,11 +57,12 @@ const RESTART_ERROR_MESSAGE = 'Interrupted by server restart';
 type QueueDeps = {
   tempRoot?: string;
   runRenderJob?: typeof runRenderJob;
+  runComposerJob?: typeof runComposerJob;
   determineProgressMode?: typeof determineProgressMode;
 };
 
 export class JobQueueService {
-  private readonly jobs = new Map<string, RenderJobRecord>();
+  private readonly jobs = new Map<string, NativeJobRecord>();
   private readonly pending: string[] = [];
   private readonly activeProcesses = new Map<string, ChildProcessWithoutNullStreams>();
   private activeCount = 0;
@@ -64,12 +70,14 @@ export class JobQueueService {
   private readonly jobStore: JobStore;
   private readonly tempRoot: string;
   private readonly runRenderJobImpl: typeof runRenderJob;
+  private readonly runComposerJobImpl: typeof runComposerJob;
   private readonly determineProgressModeImpl: typeof determineProgressMode;
 
   constructor(private readonly maxConcurrentJobs: number, deps: QueueDeps = {}) {
     this.tempRoot = deps.tempRoot ?? path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
     this.jobStore = new JobStore(this.tempRoot);
     this.runRenderJobImpl = deps.runRenderJob ?? runRenderJob;
+    this.runComposerJobImpl = deps.runComposerJob ?? runComposerJob;
     this.determineProgressModeImpl = deps.determineProgressMode ?? determineProgressMode;
   }
 
@@ -244,6 +252,7 @@ export class JobQueueService {
 
     const job: RenderJobRecord = {
       id,
+      kind: 'resize',
       spec,
       files: {
         foregroundPath: uploads.foregroundPath,
@@ -292,6 +301,7 @@ export class JobQueueService {
 
     const job: RenderJobRecord = {
       id,
+      kind: 'trim',
       spec: { ...spec, trimFromJobId: sourceJobId },
       files: {
         foregroundPath: sourceJob.files.outputPath, // Use source output as input
@@ -311,14 +321,44 @@ export class JobQueueService {
     return job;
   }
 
-  getJob(jobId: string): RenderJobRecord | undefined {
+  async createComposerJob(
+    spec: ComposerRenderSpec,
+    files: JobFiles,
+    composer: ComposerJobRecord['composer'],
+  ): Promise<ComposerJobRecord> {
+    if (!files.backgroundVideoPath) {
+      throw new Error('Composer hook path is required');
+    }
+    const id = randomUUID();
+    const job: ComposerJobRecord = {
+      id,
+      kind: spec.mode === 'preview' ? 'compose-preview' : 'compose',
+      spec: structuredClone(spec),
+      files: structuredClone(files),
+      composer: structuredClone(composer),
+      status: 'queued',
+      progress: 0,
+      progressMode: 'determinate',
+      outputFilename: spec.outputFilename,
+    };
+
+    this.jobs.set(id, job);
+    this.pending.push(id);
+    await this.persistAll();
+    jobsCreated.inc({ status: 'queued' });
+    this.syncQueueMetrics();
+    this.schedule();
+    return job;
+  }
+
+  getJob(jobId: string): NativeJobRecord | undefined {
     return this.jobs.get(jobId);
   }
 
   /**
    * Get all jobs (for cleanup scheduler)
    */
-  getAllJobs(): RenderJobRecord[] {
+  getAllJobs(): NativeJobRecord[] {
     return Array.from(this.jobs.values());
   }
 
@@ -362,6 +402,7 @@ export class JobQueueService {
       // restart will find the job as 'cancelled' (not 'queued' with missing files)
       job.status = 'cancelled';
       await this.persistAll();
+      this.syncQueueMetrics();
       // Now cleanup the files - if this fails after persist, recovery will handle it
       await cleanupJobByWorkDir(job.files.workDir, 'cancelled', jobId);
       return true;
@@ -374,6 +415,7 @@ export class JobQueueService {
     }
     // Persist after state change
     await this.persistAll();
+    this.syncQueueMetrics();
     return true;
   }
 
@@ -408,7 +450,7 @@ export class JobQueueService {
     }
   }
 
-  private async execute(job: RenderJobRecord) {
+  private async execute(job: NativeJobRecord) {
     this.activeCount += 1;
     job.status = 'processing';
     job.startedAt = Date.now();
@@ -417,9 +459,9 @@ export class JobQueueService {
     await this.persistAll();
     
     // Check if this is a trim-only job
-    const isTrimJob = !!job.spec.trimFromJobId;
+    const isTrimJob = job.kind === 'trim';
     
-    if (isTrimJob) {
+    if (isTrimJob || isComposerJob(job)) {
       // Trim jobs are always determinate (we know the target duration)
       job.progressMode = 'determinate';
     } else {
@@ -440,27 +482,30 @@ export class JobQueueService {
       let child: import('node:child_process').ChildProcessWithoutNullStreams;
       let completion: Promise<void>;
 
-      if (isTrimJob && job.spec.duration) {
+      const updateProgress = (renderProgress: RenderProgress) => {
+        if (!wasCancelling && !isCancelling(job)) {
+          job.progress = renderProgress.progress;
+          job.progressMode = renderProgress.mode;
+        }
+      };
+
+      if (isComposerJob(job)) {
+        const result = this.runComposerJobImpl(job, updateProgress);
+        child = result.child;
+        completion = result.completion;
+      } else if (isTrimJob && job.spec.duration) {
         // Run trim job (stream copy, no re-encode)
         const result = runTrimJob(
           job.files.foregroundPath, // This is the source output path
           job.spec.duration,
           job.files.outputPath,
-          (renderProgress: RenderProgress) => {
-            if (!wasCancelling) {
-              job.progress = renderProgress.progress;
-            }
-          },
+          updateProgress,
         );
         child = result.child;
         completion = result.completion;
       } else {
         // Run full render job
-        const result = this.runRenderJobImpl(job, (renderProgress: RenderProgress) => {
-          if (!wasCancelling) {
-            job.progress = renderProgress.progress;
-          }
-        });
+        const result = this.runRenderJobImpl(job, updateProgress);
         child = result.child;
         completion = result.completion;
       }
