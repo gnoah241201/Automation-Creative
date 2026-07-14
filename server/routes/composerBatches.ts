@@ -5,6 +5,7 @@ import {
 } from '../services/composerDraftStore.ts';
 import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
 import { validateComposerConfiguration } from '../services/composerValidation.ts';
+import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
 
@@ -19,6 +20,7 @@ const sendInternalError = (res: express.Response, message: string) => res.status
 export const buildComposerBatchesRouter = (
   assets: ComposerAssetStore,
   drafts: ComposerDraftStore,
+  previews?: ComposerPreviewService,
 ) => {
   const router = express.Router();
 
@@ -105,6 +107,65 @@ export const buildComposerBatchesRouter = (
       else sendInternalError(res, 'Unable to restore composer batch');
     }
   });
+
+  if (previews) {
+    router.post('/batches/:batchId/preview', express.json(), async (req, res) => {
+      try {
+        const draft = await drafts.require(req.params.batchId);
+        const configurationId = typeof req.body?.configurationId === 'string'
+          ? req.body.configurationId
+          : '';
+        const representativeHookId = typeof req.body?.representativeHookId === 'string'
+          ? req.body.representativeHookId
+          : '';
+        const configuration = draft.configurations[configurationId];
+        if (!configuration) throw new Error('Preview configuration was not found');
+        const group = draft.durationGroups.find((item) => item.id === configuration.durationGroupId);
+        if (!group?.hookIds.includes(representativeHookId)) {
+          throw new Error('Representative hook does not belong to the preview configuration');
+        }
+        const [original, hook] = await Promise.all([
+          assets.requireReadyAsset(configuration.originalId, 'original'),
+          assets.requireReadyAsset(representativeHookId, 'hook'),
+        ]);
+        const validation = validateComposerConfiguration(draft, configuration, original.duration);
+        if ('message' in validation) throw new Error(validation.message);
+        const request: PreviewRequest = {
+          batchId: draft.id,
+          draftExpiresAt: draft.expiresAt,
+          originalId: original.id,
+          hookId: hook.id,
+          originalCrop: original.crop,
+          hookCrop: hook.crop,
+          insertAt: validation.config.insertAt,
+          trimStart: validation.config.trimStart,
+          trimEnd: validation.config.trimEnd,
+          transition: validation.config.transition,
+        };
+        res.status(202).json(await previews.requestPreview(request));
+      } catch (error) {
+        res.status(400).json({ error: 'InvalidPreview', message: toMessage(error) });
+      }
+    });
+
+    router.get('/previews/:previewId/status', async (req, res) => {
+      const status = await previews.getStatus(req.params.previewId);
+      if (!status) {
+        res.status(410).json({ error: 'Expired', message: 'Preview is unavailable' });
+        return;
+      }
+      res.json(status);
+    });
+
+    router.get('/previews/:previewId', async (req, res) => {
+      const preview = await previews.getUsable(req.params.previewId);
+      if (!preview) {
+        res.status(410).json({ error: 'Expired', message: 'Preview is unavailable' });
+        return;
+      }
+      res.sendFile(preview.outputPath);
+    });
+  }
 
   return router;
 };

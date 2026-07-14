@@ -11,6 +11,7 @@ import { ComposerAssetStore } from './services/composerAssetStore';
 import { composerRoot } from './services/composerPaths';
 import { ComposerDraftStore } from './services/composerDraftStore';
 import { buildComposerBatchesRouter } from './routes/composerBatches';
+import { ComposerPreviewService } from './services/composerPreviewService';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -243,6 +244,11 @@ const start = async () => {
   const queue = new JobQueueService(maxConcurrentJobs);
   const composerAssetStore = new ComposerAssetStore(composerRoot);
   const composerDraftStore = new ComposerDraftStore(composerRoot);
+  const composerPreviewService = new ComposerPreviewService({
+    root: composerRoot,
+    assets: composerAssetStore,
+    queue,
+  });
   await queue.init();
   let metricsInitialized = false;
 
@@ -366,7 +372,11 @@ const start = async () => {
 
   app.use('/api/jobs', requireAuth, buildJobsRouter(queue));
   app.use('/api/composer', requireAuth, buildComposerAssetsRouter(composerAssetStore));
-  app.use('/api/composer', requireAuth, buildComposerBatchesRouter(composerAssetStore, composerDraftStore));
+  app.use('/api/composer', requireAuth, buildComposerBatchesRouter(
+    composerAssetStore,
+    composerDraftStore,
+    composerPreviewService,
+  ));
 
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);
