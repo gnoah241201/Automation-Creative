@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import path from 'path';
 import {defineConfig, loadEnv} from 'vite';
 
+export const devWatchIgnored = ['**/temp_superpowers/**'];
+
 export default defineConfig(({mode}) => {
   const env = loadEnv(mode, '.', '');
   
@@ -26,6 +28,9 @@ export default defineConfig(({mode}) => {
     },
     server: {
       host: devHost,
+      watch: {
+        ignored: devWatchIgnored,
+      },
       headers: {
         "Cross-Origin-Opener-Policy": "same-origin",
         "Cross-Origin-Embedder-Policy": "require-corp",
