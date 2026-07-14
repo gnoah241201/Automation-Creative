@@ -6,6 +6,9 @@ import test from 'node:test';
 import { JobQueueService } from '../server/services/jobQueue.ts';
 import { ComposerCleanupCoordinator } from '../server/services/composerCleanupCoordinator.ts';
 import { LocalLibraryService } from '../server/services/localLibrary.ts';
+import { ComposerAsset } from '../shared/composer-contract.ts';
+import { ComposerPreviewService } from '../server/services/composerPreviewService.ts';
+import { ComposerAssetStore } from '../server/services/composerAssetStore.ts';
 
 test('cleanup exposes one testable cycle for coordinated composer retention', () => {
   const queue = new JobQueueService(1, { tempRoot: 'unused' });
@@ -52,10 +55,71 @@ test('concurrent cleanup triggers share one non-overlapping cycle', async () => 
   const first = coordinator.runCleanupCycle(1_000);
   const second = coordinator.runCleanupCycle(2_000);
   assert.equal(first, second);
+  const deadline = Date.now() + 1_000;
+  while (queueCalls === 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   assert.equal(queueCalls, 1);
   release();
   await first;
   await fs.rm(root, { recursive: true, force: true });
+});
+
+test('extended completed preview lifetime governs queue and file cleanup', async () => {
+  const managedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-preview-retention-'));
+  const root = path.join(managedRoot, 'composer');
+  const sourceRoot = path.join(root, 'fixture-sources');
+  await fs.mkdir(sourceRoot, { recursive: true });
+  const base = Date.now();
+  let serviceNow = base;
+  const readyAsset = (id: string, kind: 'original' | 'hook', duration: number): ComposerAsset => ({
+    id, kind, originalFilename: `${id}.mp4`, duration, width: 1080, height: 1920,
+    codedWidth: 1080, codedHeight: 1920, sampleAspectRatio: 1, displayAspectRatio: 9 / 16,
+    rotation: 0, frameRate: 30, hasAudio: true, status: 'ready', createdAt: base, lastAccessedAt: base,
+  });
+  const assetMap = new Map([
+    ['original-1', readyAsset('original-1', 'original', 2)],
+    ['hook-1', readyAsset('hook-1', 'hook', 1)],
+  ]);
+  for (const id of assetMap.keys()) await fs.writeFile(path.join(sourceRoot, `${id}.mp4`), id);
+  const assets = {
+    requireReadyAsset: async (id: string, kind: 'original' | 'hook') => {
+      const asset = assetMap.get(id);
+      if (!asset || asset.kind !== kind) throw new Error('Fixture asset mismatch');
+      return structuredClone(asset);
+    },
+    getSourcePath: (id: string) => path.join(sourceRoot, `${id}.mp4`),
+  } as unknown as ComposerAssetStore;
+  const queue = new JobQueueService(0, { tempRoot: root, scheduleCleanup: false });
+  const previews = new ComposerPreviewService({ root, assets, queue, now: () => serviceNow });
+  const first = await previews.requestPreview({
+    batchId: 'batch-1', originalId: 'original-1', hookId: 'hook-1', insertAt: 1,
+    trimStart: 0, trimEnd: 3, transition: 'cut', draftExpiresAt: base + 24 * 60 * 60 * 1_000,
+  });
+  const job = queue.getJob(first.jobId!)!;
+  job.status = 'completed';
+  job.finishedAt = base;
+  await fs.writeFile(job.files.outputPath, 'preview');
+  serviceNow = base + 23 * 60 * 60 * 1_000;
+  const reused = await previews.requestPreview({
+    batchId: 'batch-2', originalId: 'original-1', hookId: 'hook-1', insertAt: 1,
+    trimStart: 0, trimEnd: 3, transition: 'cut', draftExpiresAt: base + 47 * 60 * 60 * 1_000,
+  });
+  assert.equal(reused.cacheHit, true);
+  const coordinator = new ComposerCleanupCoordinator({
+    root,
+    queue,
+    library: { cleanupExpired: async () => [], getRetainedWorkDirs: async () => [] },
+  });
+
+  await coordinator.runCleanupCycle(base + 24 * 60 * 60 * 1_000 + 1);
+  assert.equal(await pathExists(job.files.outputPath), true, 'hour-23 reuse extending to hour 47 protects output at hour 24');
+  assert.ok(queue.getJob(job.id), 'extended preview remains in queue persistence');
+
+  await coordinator.runCleanupCycle(base + 47 * 60 * 60 * 1_000 + 1);
+  assert.equal(await pathExists(path.join(root, 'previews', first.previewId)), false);
+  assert.equal(queue.getJob(job.id), undefined);
+  await fs.rm(managedRoot, { recursive: true, force: true });
 });
 
 test('cleanup keeps held output, removes expired composer data and orphans, then updates persistence after release', async () => {

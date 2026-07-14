@@ -312,16 +312,19 @@ export class JobQueueService {
     return job;
   }
 
-  async runCleanupCycle(now = Date.now()): Promise<{ expiredJobIds: string[] }> {
+  async runCleanupCycle(
+    now = Date.now(),
+    protectedJobIds: ReadonlySet<string> = new Set(),
+  ): Promise<{ expiredJobIds: string[] }> {
     const jobsToCheck = Array.from(this.jobs.values()).filter(
       (job) => job.status === 'completed' || job.status === 'failed',
     );
     await this.reconcileLibraryHolds();
-    await cleanupExpiredJobs(jobsToCheck, now);
+    await cleanupExpiredJobs(jobsToCheck, now, protectedJobIds);
     await this.localLibrary?.cleanupExpired(now);
 
     const expiredIds = jobsToCheck
-      .filter((job) => isManagedJobExpired({
+      .filter((job) => !protectedJobIds.has(job.id) && isManagedJobExpired({
         ...job,
         status: job.status as 'completed' | 'failed',
       }, now))
@@ -450,6 +453,8 @@ export class JobQueueService {
       // restart will find the job as 'cancelled' (not 'queued' with missing files)
       job.status = 'cancelled';
       await this.persistAll();
+      cancelledJobs.inc();
+      if (isComposerJob(job)) composerJobsCompleted.inc({ status: 'cancelled' });
       await this.reconcileLibraryHolds();
       await this.localLibrary?.cleanupExpired();
       this.syncQueueMetrics();

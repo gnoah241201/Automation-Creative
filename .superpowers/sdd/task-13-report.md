@@ -29,7 +29,7 @@
 Run from `D:\Videcode\ResizeVideo1\.worktrees\hook-composer` on 2026-07-14:
 
 - `npm.cmd test`
-  - PASS: 172 tests, 0 failed, 0 skipped, exit 0.
+  - PASS: 174 tests, 0 failed, 0 skipped, exit 0 after review fixes.
   - Includes the generated real-media test (about 3.3 seconds in the final run).
 - `npm.cmd run lint`
   - PASS: TypeScript `tsc --noEmit`, exit 0.
@@ -65,3 +65,12 @@ Verified items are checked in `docs/superpowers/verification/hook-composer-smoke
 - comparing exact preview segment order side-by-side with the browser preview.
 
 The in-app browser harness is unavailable in this session (`Cannot redefine property: process`, including after reset). Service-level and FFmpeg checks were not represented as visual browser verification.
+
+## Review fixes
+
+Two independent review findings were reproduced with failing tests before implementation:
+
+1. A completed exact preview reused at hour 23 and extended to hour 47 was deleted by queue retention at hour 24. The cleanup coordinator now reads preview metadata before queue cleanup and passes a bounded set of protected preview job IDs through the queue to file cleanup. The regression uses `ComposerPreviewService` to perform the real cross-batch cache reuse, confirms the file and queue record survive hour 24, then confirms both are removed after hour 47.
+2. Direct queued-to-cancelled composer jobs did not increment cancellation metrics. The queued branch now increments both the global cancelled counter and `resize_video_composer_jobs_completed_total{status="cancelled"}` after its terminal state is persisted. A regression cancels queued and running composer jobs twice each and verifies exactly one increment per job.
+
+Fresh post-review verification: focused tests PASS (14/14), full suite PASS (174/174), lint PASS, production build PASS, and `git diff --check` PASS. The full suite includes the real-media smoke test, which remains green.

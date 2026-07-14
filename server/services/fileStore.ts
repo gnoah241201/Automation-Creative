@@ -172,10 +172,12 @@ export const getRetentionDescription = (
 export const cleanupExpiredJobs = async (
   jobs: Array<RetainedJob & { files: { workDir: string } }>,
   now = Date.now(),
+  protectedJobIds: ReadonlySet<string> = new Set(),
 ): Promise<number> => {
   let cleaned = 0;
 
   for (const job of jobs) {
+    if (protectedJobIds.has(job.id)) continue;
     // Final composer outputs are owned by LocalLibraryService so active Resize
     // holds can protect them. The legacy queue retention must never race it.
     if (job.kind === 'compose' && job.status === 'completed') continue;

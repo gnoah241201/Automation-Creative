@@ -8,7 +8,7 @@ const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MANAGED_NAME = /^[a-zA-Z0-9-]+$/;
 
 type CleanupQueue = {
-  runCleanupCycle(now?: number): Promise<{ expiredJobIds: string[] }>;
+  runCleanupCycle(now?: number, protectedJobIds?: ReadonlySet<string>): Promise<{ expiredJobIds: string[] }>;
   getAllJobs(): NativeJobRecord[];
 };
 
@@ -63,7 +63,9 @@ export class ComposerCleanupCoordinator {
 
   private async runOnce(now: number): Promise<ComposerCleanupResult> {
     if (!Number.isFinite(now) || now < 0) throw new Error('Cleanup time must be a finite timestamp');
-    await this.queue.runCleanupCycle(now);
+    const jobsBeforeCleanup = this.queue.getAllJobs();
+    const protectedPreviewJobIds = await this.getProtectedPreviewJobIds(now, jobsBeforeCleanup);
+    await this.queue.runCleanupCycle(now, protectedPreviewJobIds);
     await this.library.cleanupExpired(now);
 
     const activeAssetIds = new Set<string>();
@@ -89,6 +91,30 @@ export class ComposerCleanupCoordinator {
       console.log(`[composerCleanup] Removed drafts=${drafts} previews=${previews} assets=${assets} orphans=${orphanJobs}`);
     }
     return result;
+  }
+
+  private async getProtectedPreviewJobIds(now: number, jobs: NativeJobRecord[]): Promise<Set<string>> {
+    const protectedIds = new Set<string>();
+    const root = path.join(this.root, 'previews');
+    const jobsById = new Map(jobs.map((job) => [job.id, job]));
+    for (const id of await this.readManagedDirectories(root)) {
+      const previewDirectory = path.join(root, id);
+      const record = await this.readRecord(path.join(previewDirectory, 'metadata.json'));
+      const jobId = typeof record?.jobId === 'string' ? record.jobId : null;
+      const expiresAt = typeof record?.expiresAt === 'number' ? record.expiresAt : Number.NaN;
+      const job = jobId ? jobsById.get(jobId) : undefined;
+      const attemptId = typeof record?.attemptId === 'string' ? record.attemptId : null;
+      const trustedRecord = record?.id === id
+        && record.cacheKey === id
+        && job?.kind === 'compose-preview'
+        && attemptId === path.basename(job.files.workDir)
+        && path.resolve(path.dirname(job.files.workDir)) === path.resolve(previewDirectory, 'attempts');
+      const active = job && ['queued', 'processing', 'cancelling'].includes(job.status);
+      if (jobId && trustedRecord && (active || (Number.isFinite(expiresAt) && now <= expiresAt))) {
+        protectedIds.add(jobId);
+      }
+    }
+    return protectedIds;
   }
 
   private async cleanupJsonDirectories(

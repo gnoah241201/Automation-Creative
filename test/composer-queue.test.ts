@@ -7,6 +7,7 @@ import { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { ComposerRenderSpec } from '../shared/composer-contract.ts';
 import { JobQueueService } from '../server/services/jobQueue.ts';
 import { ComposerJobRecord, JobFiles, RenderJobRecord } from '../server/types/renderJob.ts';
+import { cancelledJobs, composerJobsCompleted } from '../server/metrics.ts';
 
 type ControlledRun = { resolve: () => void; reject: (error: Error) => void };
 
@@ -212,6 +213,36 @@ test('cancelling an active composer job frees the shared slot exactly once', asy
   harness.queue.stopCleanupScheduler();
 });
 
+test('queued and running composer cancellation metrics increment exactly once each', async () => {
+  const harness = await createHarness(1);
+  const beforeCancelled = metricValue(await cancelledJobs.get());
+  const beforeComposerCancelled = metricValue(await composerJobsCompleted.get(), 'status', 'cancelled');
+  const running = await harness.queue.createComposerJob(
+    composerSpec(), await createFiles(harness.tempRoot, 'metrics-running'), composerMetadata(),
+  );
+  const queued = await harness.queue.createComposerJob(
+    composerSpec('preview'), await createFiles(harness.tempRoot, 'metrics-queued'), composerMetadata(),
+  );
+  await waitFor(() => harness.queue.getJob(running.id)?.status === 'processing'
+    && harness.queue.getJob(queued.id)?.status === 'queued');
+
+  await Promise.all([harness.queue.cancelJob(queued.id), harness.queue.cancelJob(queued.id)]);
+  assert.equal(metricValue(await cancelledJobs.get()) - beforeCancelled, 1);
+  assert.equal(
+    metricValue(await composerJobsCompleted.get(), 'status', 'cancelled') - beforeComposerCancelled,
+    1,
+  );
+
+  await Promise.all([harness.queue.cancelJob(running.id), harness.queue.cancelJob(running.id)]);
+  await waitFor(() => harness.queue.getJob(running.id)?.status === 'cancelled');
+  assert.equal(metricValue(await cancelledJobs.get()) - beforeCancelled, 2);
+  assert.equal(
+    metricValue(await composerJobsCompleted.get(), 'status', 'cancelled') - beforeComposerCancelled,
+    2,
+  );
+  harness.queue.stopCleanupScheduler();
+});
+
 test('composer progress callbacks cannot advance a job after cancellation begins', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-cancel-progress-'));
   let emitProgress!: (progress: { progress: number; mode: 'determinate' }) => void;
@@ -238,3 +269,11 @@ test('composer progress callbacks cannot advance a job after cancellation begins
   await waitFor(() => queue.getJob(job.id)?.status === 'cancelled');
   queue.stopCleanupScheduler();
 });
+
+const metricValue = (
+  metric: { values: Array<{ value: number; labels: Record<string, string | number> }> },
+  label?: string,
+  expected?: string,
+): number => metric.values
+  .filter((value) => !label || value.labels[label] === expected)
+  .reduce((sum, value) => sum + value.value, 0);
