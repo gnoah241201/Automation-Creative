@@ -14,6 +14,18 @@ interface LocalLibraryPageProps {
   onSendToResize: (sources: ResizeBatchSource[]) => void;
 }
 
+export function LibrarySelectionCheckbox({
+  entry,
+  checked,
+  onChange,
+}: {
+  entry: LocalLibraryEntry;
+  checked: boolean;
+  onChange: () => void;
+}) {
+  return <input type="checkbox" aria-label={`Select ${entry.filename}`} checked={checked} onChange={onChange} className="absolute left-3 top-3 h-5 w-5" />;
+}
+
 const bytes = (value: number): string => value >= 1_000_000
   ? `${(value / 1_000_000).toFixed(1)} MB`
   : `${Math.max(1, Math.round(value / 1_000))} KB`;
@@ -149,7 +161,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
               <label className="block cursor-pointer">
                 <div className="relative aspect-[9/16] bg-black">
                   <video src={libraryDownloadUrl(entry.id)} preload="metadata" muted className="h-full w-full object-cover" />
-                  <input type="checkbox" checked={selected.includes(entry.id)} onChange={() => toggle(entry.id)} className="absolute left-3 top-3 h-5 w-5" />
+                  <LibrarySelectionCheckbox entry={entry} checked={selected.includes(entry.id)} onChange={() => toggle(entry.id)} />
                 </div>
               </label>
               <div className="space-y-2 p-4">

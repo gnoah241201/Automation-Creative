@@ -23,9 +23,20 @@ import { useJobPolling } from './render/useJobPolling';
 import { AppShell, AppTab } from './app/AppShell';
 import { HookComposerPage } from './composer/HookComposerPage';
 import { LocalLibraryPage } from './library/LocalLibraryPage';
+import { libraryDownloadUrl } from './library/api';
 import { ResizeBatchPanel } from './render/ResizeBatchPanel';
 import { ResizeBatchSource } from './render/librarySources';
 import { submitResizeBatch } from './render/submitResizeBatch';
+import {
+  applyResizeBatchResult,
+  canMutateBrowserForeground,
+  clearResizeBatch,
+  createResizeBatchState,
+  deriveResizeInput,
+  removeResizeBatchSource,
+  replaceResizeBatch,
+  snapshotResizeBatch,
+} from './render/resizeBatchState';
 import {
   getAnchorCenteredCropWindow,
   getOutputFrameDimensions,
@@ -499,7 +510,8 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authUsername, setAuthUsername] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<AppTab>('resize');
-  const [resizeBatchSources, setResizeBatchSources] = useState<ResizeBatchSource[]>([]);
+  const [resizeBatchState, setResizeBatchState] = useState(createResizeBatchState);
+  const resizeBatchSources = resizeBatchState.sources;
   const [isBatchSubmitting, setIsBatchSubmitting] = useState(false);
   const [loginUsername, setLoginUsername] = useState('admin');
   const [loginPassword, setLoginPassword] = useState('');
@@ -684,7 +696,13 @@ export default function App() {
     }
   };
 
-  const outputs = deriveOutputs(inputRatio, fgDuration);
+  const activeResizeInput = deriveResizeInput(resizeBatchState, { inputRatio, duration: fgDuration });
+  const activeInputRatio = activeResizeInput.inputRatio;
+  const activeFgDuration = activeResizeInput.duration;
+  const activeFgVideo = resizeBatchSources.length > 0
+    ? libraryDownloadUrl(resizeBatchSources[0].libraryId ?? resizeBatchSources[0].localId)
+    : fgVideo;
+  const outputs = deriveOutputs(activeInputRatio, activeFgDuration);
 
   const handleOpenDownloadModal = () => {
     setSelectedDownloads(outputs.map(o => o.id));
@@ -703,6 +721,7 @@ export default function App() {
     const bitrate = parsedBitrate && parsedBitrate > 0 ? parsedBitrate : undefined;
 
     if (resizeBatchSources.length > 0) {
+      const batchSnapshot = snapshotResizeBatch(resizeBatchState);
       const missingPrimary = selectedOutputs.find((output) => output.trimFrom
         && !selectedOutputs.some((candidate) => candidate.id === output.trimFrom));
       if (missingPrimary) {
@@ -726,8 +745,8 @@ export default function App() {
         return localId;
       };
       try {
-        await submitResizeBatch({
-          sources: resizeBatchSources,
+        const batchResult = await submitResizeBatch({
+          sources: batchSnapshot.sources,
           outputs: selectedOutputs,
           config: {
             inputRatio: '9:16', bitrate, fgPosition, bgType, backgroundImageMode, blurAmount,
@@ -784,7 +803,14 @@ export default function App() {
             }
           },
         });
-        setResizeBatchSources([]);
+        const acceptedSourceIds = batchResult.outcomes
+          .filter((outcome) => outcome.accepted)
+          .map((outcome) => outcome.sourceId);
+        setResizeBatchState((current) => applyResizeBatchResult(current, batchSnapshot, acceptedSourceIds));
+        const failures = batchResult.outcomes.flatMap((outcome) => outcome.errors);
+        if (failures.length > 0) {
+          window.alert(`${failures.length} Resize output${failures.length === 1 ? '' : 's'} could not be submitted. Safe sources remain selected for retry.`);
+        }
       } catch (cause) {
         window.alert(cause instanceof Error ? cause.message : 'Batch submission failed');
       } finally {
@@ -1286,6 +1312,7 @@ export default function App() {
   };
 
   const applyForegroundFile = (file: File) => {
+    if (!canMutateBrowserForeground(resizeBatchState)) return;
     setFgVideo(URL.createObjectURL(file));
     setFgFile(file);
     const tempUrl = URL.createObjectURL(file);
@@ -1542,9 +1569,7 @@ export default function App() {
         <HookComposerPage />
       ) : activeTab === 'library' ? (
         <LocalLibraryPage onSendToResize={(sources) => {
-          setResizeBatchSources(sources);
-          setInputRatio('9:16');
-          setFgDuration(Math.max(...sources.map((source) => source.duration)));
+          setResizeBatchState((current) => replaceResizeBatch(current, sources));
           setActiveTab('resize');
         }} />
       ) : (
@@ -1565,8 +1590,8 @@ export default function App() {
           {resizeBatchSources.length > 0 && (
             <ResizeBatchPanel
               sources={resizeBatchSources}
-              onRemove={(localId) => setResizeBatchSources((current) => current.filter((source) => source.localId !== localId))}
-              onClear={() => setResizeBatchSources([])}
+              onRemove={(localId) => setResizeBatchState((current) => removeResizeBatchSource(current, localId))}
+              onClear={() => setResizeBatchState((current) => clearResizeBatch(current))}
             />
           )}
 
@@ -1585,7 +1610,7 @@ export default function App() {
                     key={ratio}
                     onClick={() => { setInputRatio(ratio); }}
                     disabled={resizeBatchSources.length > 0}
-                    className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors ${inputRatio === ratio ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
+                    className={`flex-1 text-sm font-medium py-2 rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${activeInputRatio === ratio ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'
                       }`}
                   >
                     {ratio}
@@ -1661,8 +1686,8 @@ export default function App() {
                 <div className="text-xs text-neutral-300 font-mono break-all">
                   {buildOutputFilename(
                     { gameName: gameName || 'untitled', version: version || 'v1', suffix },
-                    inputRatio === '16:9' ? '9:16' : '16:9',
-                    fgDuration
+                    activeInputRatio === '16:9' ? '9:16' : '16:9',
+                    activeFgDuration
                   )}
                 </div>
               </div>
@@ -1670,7 +1695,7 @@ export default function App() {
           </div>
 
 
-          {inputRatio === '9:16' && (
+          {activeInputRatio === '9:16' && (
             <div className="mt-4 pt-4 border-t border-neutral-800">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-medium text-neutral-300">Foreground Position (16:9 Output)</h3>
@@ -1698,23 +1723,25 @@ export default function App() {
                 </div>
                 Foreground Video
               </h2>
-              <span className="text-xs font-medium px-2.5 py-1 bg-neutral-800 text-neutral-300 rounded-full">{inputRatio}</span>
+              <span className="text-xs font-medium px-2.5 py-1 bg-neutral-800 text-neutral-300 rounded-full">{activeInputRatio}</span>
             </div>
             <label
-              className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all group ${activeDropZone === 'foreground' ? 'border-blue-500 bg-blue-500/10' : 'border-neutral-700 hover:bg-neutral-800/80 hover:border-blue-500/50'}`}
+              className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl transition-all group ${resizeBatchSources.length > 0 ? 'cursor-not-allowed border-neutral-800 opacity-50' : activeDropZone === 'foreground' ? 'cursor-pointer border-blue-500 bg-blue-500/10' : 'cursor-pointer border-neutral-700 hover:bg-neutral-800/80 hover:border-blue-500/50'}`}
               onDragOver={handleDragOver}
-              onDragEnter={handleDragEnter('foreground')}
-              onDragLeave={handleDragLeave('foreground')}
-              onDrop={handleDrop('foreground')}
+              onDragEnter={resizeBatchSources.length > 0 ? undefined : handleDragEnter('foreground')}
+              onDragLeave={resizeBatchSources.length > 0 ? undefined : handleDragLeave('foreground')}
+              onDrop={resizeBatchSources.length > 0 ? undefined : handleDrop('foreground')}
             >
               <div className="flex flex-col items-center justify-center pt-5 pb-6">
                 <Upload className={`w-8 h-8 mb-3 transition-colors ${activeDropZone === 'foreground' ? 'text-blue-400' : 'text-neutral-500 group-hover:text-blue-400'}`} />
                 <p className="mb-2 text-sm text-neutral-400"><span className="font-semibold text-neutral-200">Click to upload</span> or drag and drop</p>
                 <p className="text-xs text-neutral-500">MP4, WebM, or OGG</p>
               </div>
-              <input type="file" className="hidden" accept="video/*" onChange={handleFgUpload} />
+              <input type="file" disabled={resizeBatchSources.length > 0} className="hidden" accept="video/*" onChange={handleFgUpload} />
             </label>
-            {fgVideo && <p className="mt-3 text-sm text-green-400 flex items-center gap-2">✓ Foreground video loaded</p>}
+            {resizeBatchSources.length > 0
+              ? <p className="mt-3 text-sm text-blue-400">Using {resizeBatchSources.length} Local Library output{resizeBatchSources.length === 1 ? '' : 's'}</p>
+              : fgVideo && <p className="mt-3 text-sm text-green-400 flex items-center gap-2">✓ Foreground video loaded</p>}
           </div>
 
           {/* Background Upload */}
@@ -1726,7 +1753,7 @@ export default function App() {
                 </div>
                 Background
               </h2>
-              <span className="text-xs font-medium px-2.5 py-1 bg-neutral-800 text-neutral-300 rounded-full">{inputRatio}</span>
+              <span className="text-xs font-medium px-2.5 py-1 bg-neutral-800 text-neutral-300 rounded-full">{activeInputRatio}</span>
             </div>
 
             <div className="flex bg-neutral-800 p-1 rounded-lg mb-4">
@@ -2006,11 +2033,11 @@ export default function App() {
           {outputs.filter(o => o.showPreview !== false).map((output) => (
             <PreviewBox
               key={output.id}
-              inputRatio={inputRatio}
+              inputRatio={activeInputRatio}
               outputRatio={output.ratio}
               duration={output.duration}
               label={output.label}
-              fgVideo={fgVideo}
+              fgVideo={activeFgVideo}
               fgPosition={fgPosition}
               bgType={bgType}
               bgVideo={bgVideo}

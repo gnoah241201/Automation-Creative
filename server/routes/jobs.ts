@@ -324,6 +324,10 @@ export const buildJobsRouter = (
         });
 
         if (validationErrors.length > 0) {
+          if (stagedWorkDir) {
+            await cleanupTempDir(stagedWorkDir);
+            stagedWorkDir = undefined;
+          }
           await cleanupTempDir(req.tempWorkDir);
           res.status(400).json(validationErrors[0]);
           return;
@@ -362,7 +366,7 @@ export const buildJobsRouter = (
         console.error(error);
         res.status(500).json({
           error: 'InternalError',
-          message: error instanceof Error ? error.message : 'Failed to create job',
+          message: 'Failed to create job',
         });
       }
     },

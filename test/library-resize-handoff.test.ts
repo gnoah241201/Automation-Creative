@@ -7,6 +7,7 @@ import express from 'express';
 import { buildJobsRouter } from '../server/routes/jobs.ts';
 import { JobQueueService } from '../server/services/jobQueue.ts';
 import { LocalLibraryService, ResolvedLibraryOutput } from '../server/services/localLibrary.ts';
+import { managedRenderRoot } from '../server/services/fileStore.ts';
 
 const listen = async (app: express.Express) => {
   const server = app.listen(0);
@@ -153,6 +154,61 @@ test('library upload session combines its trusted foreground with current Resize
     const response = await fetch(url.replace('/uploads/from-library', ''), { method: 'POST', body: form });
     assert.equal(response.status, 200);
     assert.equal(capturedBackground, 'shared-background');
+  } finally {
+    await close(server);
+    await fs.rm(sourceRoot, { recursive: true, force: true });
+  }
+});
+
+test('job submission conceals internal paths and removes staged copies on validation failure', async () => {
+  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_superpowers', 'handoff-cleanup-'));
+  const foreground = path.join(sourceRoot, 'entry-1.mp4');
+  await fs.writeFile(foreground, 'foreground');
+  const secretPath = 'D:\\private\\managed\\resize-output.mp4';
+  const queue = {
+    createJob: async () => { throw new Error(`EACCES ${secretPath}`); },
+  } as unknown as JobQueueService;
+  const library = {
+    hold: async () => {}, release: async () => true,
+    resolveUsablePath: async (id: string) => id === 'entry-1' ? resolved(id, foreground) : null,
+  } as unknown as LocalLibraryService;
+  const app = express();
+  app.use('/api/jobs', buildJobsRouter(queue, { library }));
+  const { server, url } = await listen(app);
+
+  const createSession = async () => {
+    const response = await fetch(url, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ids: ['entry-1'] }),
+    });
+    return (await response.json() as { sessions: Array<{ uploadId: string }> }).sessions[0].uploadId;
+  };
+  const resizeSpec = (buttonText: string) => ({
+    inputRatio: '9:16', outputRatio: '16:9', duration: 4, bitrate: 6000,
+    fgPosition: 'center', bgType: 'video', backgroundImageMode: 'clean', blurAmount: 24,
+    logoX: 0, logoY: 0, logoSize: 100, buttonType: 'text', buttonText,
+    buttonX: 0, buttonY: 0, buttonSize: 100,
+    naming: { gameName: 'entry-1', version: 'v1', suffix: '' }, outputFilename: 'entry-1.mp4',
+  });
+  const submit = async (uploadId: string, buttonText: string) => {
+    const form = new FormData();
+    form.append('uploadId', uploadId);
+    form.append('backgroundVideo', new Blob(['background'], { type: 'video/mp4' }), 'background.mp4');
+    form.append('spec', JSON.stringify(resizeSpec(buttonText)));
+    return fetch(url.replace('/uploads/from-library', ''), { method: 'POST', body: form });
+  };
+
+  try {
+    const before = new Set(await fs.readdir(managedRenderRoot));
+    const invalid = await submit(await createSession(), '');
+    assert.equal(invalid.status, 400);
+    const afterInvalid = (await fs.readdir(managedRenderRoot)).filter((name) => !before.has(name) && name.startsWith('upload-'));
+    assert.deepEqual(afterInvalid, []);
+
+    const failed = await submit(await createSession(), 'Play');
+    assert.equal(failed.status, 500);
+    const body = await failed.text();
+    assert.equal(body.includes(secretPath), false);
+    assert.match(body, /Failed to create job/);
   } finally {
     await close(server);
     await fs.rm(sourceRoot, { recursive: true, force: true });

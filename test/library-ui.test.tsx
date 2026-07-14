@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { LocalLibraryEntry } from '../shared/composer-contract.ts';
 import { createLibraryUploadSessions, listLibraryEntries } from '../src/library/api.ts';
-import { LocalLibraryPage } from '../src/library/LocalLibraryPage.tsx';
+import { LibrarySelectionCheckbox, LocalLibraryPage } from '../src/library/LocalLibraryPage.tsx';
 import { ResizeBatchPanel } from '../src/render/ResizeBatchPanel.tsx';
 
 test('library API uses authenticated requests and sends IDs instead of video bytes', async () => {
@@ -47,4 +48,14 @@ test('local library and resize batch panels expose the required user actions', (
   assert.match(panel, /1 local output/);
   assert.match(panel, /result\.mp4/);
   assert.match(panel, /Clear all/);
+});
+
+test('library selection checkbox names the output file for assistive technology', () => {
+    const entry: LocalLibraryEntry = {
+        id: 'entry-1', batchId: 'batch-1', jobId: 'job-1', originalId: 'original-1', hookId: 'hook-1',
+        filename: 'named-output.mp4', duration: 4, width: 1080, height: 1920, byteSize: 1000,
+        completedAt: 1, expiresAt: Date.now() + 60_000, holds: [],
+      };
+    const html = renderToStaticMarkup(<LibrarySelectionCheckbox entry={entry} checked={false} onChange={() => {}} />);
+    assert.match(html, /<input[^>]+aria-label="Select named-output\.mp4"/);
 });

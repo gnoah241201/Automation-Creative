@@ -49,7 +49,8 @@ test('resize batch applies one shared output configuration to every library sour
     { id: 'a', ratio: '9:16', bitrate: 6000 },
     { id: 'b', ratio: '9:16', bitrate: 6000 },
   ]);
-  assert.deepEqual(result.map((item) => item.sourceId), ['a', 'b']);
+  assert.deepEqual(result.submitted.map((item) => item.sourceId), ['a', 'b']);
+  assert.deepEqual(result.outcomes.map((item) => item.accepted), [true, true]);
 });
 
 test('resize batch waits for each primary before creating its trim variants', async () => {
@@ -78,7 +79,49 @@ test('resize batch waits for each primary before creating its trim variants', as
   });
 
   assert.deepEqual(events, ['create:16:9', 'wait:primary-job', 'trim:16:9-15s:primary-job']);
-  assert.deepEqual(result.map((item) => item.jobId), ['primary-job', 'trim-job']);
+  assert.deepEqual(result.submitted.map((item) => item.jobId), ['primary-job', 'trim-job']);
+});
+
+test('trim failure for one source does not prevent later independent sources', async () => {
+  const events: string[] = [];
+  const outputs: OutputConfig[] = [
+    { id: '16:9', ratio: '16:9', label: 'full' },
+    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' },
+  ];
+  const result = await submitResizeBatch({
+    sources: [source('a', 40), source('b', 40)], outputs, config: config(),
+    createJob: async ({ source: item }) => ({ jobId: `primary-${item.localId}`, status: 'queued' }),
+    waitForPrimary: async (job) => {
+      events.push(`wait:${job.sourceId}`);
+      if (job.sourceId === 'a') throw new Error('a failed');
+      return job.jobId;
+    },
+    createTrimJob: async ({ source: item }) => {
+      events.push(`trim:${item.localId}`);
+      return { jobId: `trim-${item.localId}`, status: 'queued' };
+    },
+  });
+  assert.deepEqual(events, ['wait:a', 'wait:b', 'trim:b']);
+  assert.equal(result.outcomes.find((item) => item.sourceId === 'a')?.errors.length, 1);
+  assert.equal(result.outcomes.find((item) => item.sourceId === 'b')?.errors.length, 0);
+});
+
+test('source with any accepted job is removed from retry set to avoid duplicate submission', async () => {
+  const outputs: OutputConfig[] = [
+    { id: '16:9', ratio: '16:9', label: 'first' },
+    { id: '9:16', ratio: '9:16', label: 'second' },
+  ];
+  let attempts = 0;
+  const result = await submitResizeBatch({
+    sources: [source('partial')], outputs, config: config(),
+    createJob: async () => {
+      attempts += 1;
+      if (attempts === 2) throw new Error('second failed');
+      return { jobId: 'accepted-job', status: 'queued' };
+    },
+  });
+  assert.equal(result.outcomes[0].accepted, true);
+  assert.equal(result.outcomes[0].errors.length, 1);
 });
 
 test('resize batch submits every primary before entering the trim phase', async () => {
