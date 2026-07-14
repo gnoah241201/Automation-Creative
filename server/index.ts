@@ -9,6 +9,8 @@ import crypto from 'node:crypto';
 import { buildComposerAssetsRouter } from './routes/composerAssets';
 import { ComposerAssetStore } from './services/composerAssetStore';
 import { composerRoot } from './services/composerPaths';
+import { ComposerDraftStore } from './services/composerDraftStore';
+import { buildComposerBatchesRouter } from './routes/composerBatches';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -240,12 +242,13 @@ const start = async () => {
   const app = express();
   const queue = new JobQueueService(maxConcurrentJobs);
   const composerAssetStore = new ComposerAssetStore(composerRoot);
+  const composerDraftStore = new ComposerDraftStore(composerRoot);
   await queue.init();
   let metricsInitialized = false;
 
   app.use((_req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
     if (_req.method === 'OPTIONS') {
@@ -363,6 +366,7 @@ const start = async () => {
 
   app.use('/api/jobs', requireAuth, buildJobsRouter(queue));
   app.use('/api/composer', requireAuth, buildComposerAssetsRouter(composerAssetStore));
+  app.use('/api/composer', requireAuth, buildComposerBatchesRouter(composerAssetStore, composerDraftStore));
 
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);

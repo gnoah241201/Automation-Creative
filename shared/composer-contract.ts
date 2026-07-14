@@ -47,6 +47,17 @@ export interface ComposerVariantConfig {
   reviewed: boolean;
 }
 
+export interface ComposerBatchDraft {
+  id: string;
+  originalIds: string[];
+  hookIds: string[];
+  durationGroups: HookDurationGroup[];
+  configurations: Record<string, ComposerVariantConfig>;
+  createdAt: number;
+  updatedAt: number;
+  expiresAt: number;
+}
+
 export interface ComposerMatrixCell {
   originalId: string;
   hookId: string;
