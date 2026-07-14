@@ -59,7 +59,7 @@ export function ReviewMatrix(props: Props) {
       <p className="mt-2 text-xs capitalize text-neutral-400">{job.status} · {Math.max(0, job.progress)}%</p>
       <div className="mt-2 h-1.5 overflow-hidden rounded bg-neutral-800"><div className="h-full bg-blue-500" style={{ width: `${Math.max(0, job.progress)}%` }} /></div>
       {job.error && <p className="mt-2 text-xs text-red-300">{job.error}</p>}
-      {job.status === 'failed' && <button type="button" onClick={() => props.onRetry(job.jobId)} className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-blue-300"><RotateCcw className="h-3 w-3" />Retry</button>}
+      {job.status === 'failed' && job.retryable && <button type="button" onClick={() => props.onRetry(job.jobId)} className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-blue-300"><RotateCcw className="h-3 w-3" />Retry</button>}
       {job.status === 'completed' && <div className="mt-3 flex gap-3 text-xs font-semibold"><span className="text-emerald-300">Ready in Local Library</span><a href={`/api/jobs/${encodeURIComponent(job.jobId)}/download`} className="text-blue-300 hover:text-blue-200">Download</a></div>}
     </article>)}</div>}
   </div>;

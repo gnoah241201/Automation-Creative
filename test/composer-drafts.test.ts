@@ -9,7 +9,7 @@ import { ComposerDraftStore } from '../server/services/composerDraftStore.ts';
 import { validateDraftForRender } from '../server/services/composerValidation.ts';
 import { buildComposerBatchesRouter } from '../server/routes/composerBatches.ts';
 import { ComposerAssetStore } from '../server/services/composerAssetStore.ts';
-import { ComposerBatchActiveError } from '../server/services/composerBatchRenderer.ts';
+import { ComposerBatchActiveError, ComposerRetrySupersededError } from '../server/services/composerBatchRenderer.ts';
 
 const draftFixture = (reviewed: boolean): ComposerBatchDraft => ({
   id: 'batch-1',
@@ -411,4 +411,18 @@ test('render route maps an active batch collision to a safe typed conflict', asy
   });
   assert.equal(response.status, 409);
   assert.deepEqual(await response.json(), { error: 'BatchActive', message: 'This composer batch already has active render jobs' });
+});
+
+test('retry route maps a superseded attempt to a safe typed conflict', async (t) => {
+  const drafts = { require: async () => draftFixture(true) } as unknown as ComposerDraftStore;
+  const renderer = { retry: async () => { throw new ComposerRetrySupersededError('job/path chronology detail'); } } as any;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter({} as ComposerAssetStore, drafts, undefined, renderer));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/composer/batches/batch-1/jobs/old/retry`, { method: 'POST' });
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), { error: 'RetryConflict', message: 'A newer render attempt already exists for this output' });
 });

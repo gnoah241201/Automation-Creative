@@ -91,6 +91,22 @@ test('restored active jobs keep the review render action disabled', () => {
   assert.match(html, /Cancel active/);
 });
 
+test('review matrix offers Retry only for the latest retryable failed attempt', () => {
+  const original = { ...asset('o1', 'original', { x: 0, y: 0, width: 1, height: 1 }), width: 1080, height: 1920 };
+  const hook = { ...asset('h1', 'hook', { x: 0, y: 0, width: 1, height: 1 }), width: 1080, height: 1920 };
+  const html = renderToStaticMarkup(<ReviewMatrix
+    originals={[original]} hooks={[hook]}
+    cells={[{ originalId: 'o1', hookId: 'h1', durationGroupId: 'g-4.000', configurationId: 'o1:g-4.000', outputFilename: 'o1__h1.mp4', selected: true, valid: true }]}
+    selectedIds={['o1:h1']} estimatedDuration={8} estimatedBytes={1000}
+    jobs={[
+      { jobId: 'old', status: 'failed', outputFilename: 'o1__h1.mp4', progress: 0, retryable: false },
+      { jobId: 'latest', status: 'failed', outputFilename: 'o1__h1.mp4', progress: 0, retryable: true },
+    ]}
+    rendering={false} onToggle={() => {}} onSelectAll={() => {}} onRender={() => {}} onCancel={() => {}} onRetry={() => {}}
+  />);
+  assert.equal((html.match(/>Retry<\/button>/g) ?? []).length, 1);
+});
+
 test('composer draft persistence accepts only managed identifiers and tolerates unavailable storage', () => {
   const values = new Map<string, string>();
   const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => values.set(key, value), removeItem: (key: string) => values.delete(key) };

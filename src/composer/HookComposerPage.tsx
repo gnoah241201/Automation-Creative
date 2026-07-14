@@ -542,7 +542,16 @@ export function HookComposerPage() {
             onSelectAll={(cellIds) => dispatch({ type: 'setCellSelection', cellIds })}
             onRender={() => void submitRender()}
             onCancel={() => state.batchId && void cancelComposerBatch(state.batchId).then(() => getComposerBatchJobs(state.batchId!)).then((response) => setRenderJobs(response.jobs)).catch((error) => setRenderError(error instanceof Error ? error.message : 'Could not cancel jobs'))}
-            onRetry={(jobId) => state.batchId && void retryComposerJob(state.batchId, jobId).then((job) => setRenderJobs((current) => [...current, job])).catch((error) => setRenderError(error instanceof Error ? error.message : 'Could not retry job'))}
+            onRetry={(jobId) => {
+              const batchId = state.batchId;
+              if (!batchId) return;
+              void retryComposerJob(batchId, jobId)
+                .then(() => getComposerBatchJobs(batchId))
+                .then((response) => {
+                  if (latestBatchId.current === batchId && response.batchId === batchId) setRenderJobs(response.jobs);
+                })
+                .catch((error) => setRenderError(error instanceof Error ? error.message : 'Could not retry job'));
+            }}
           />
         ) : (
           <div className="flex min-h-64 items-center justify-center rounded-xl border border-dashed border-neutral-700 bg-neutral-950/50 px-6 text-center text-sm text-neutral-500">

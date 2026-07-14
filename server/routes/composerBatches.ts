@@ -8,7 +8,7 @@ import { validateComposerConfiguration } from '../services/composerValidation.ts
 import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
 import {
   ComposerBatchActiveError, ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
-  ComposerPartialSubmissionError, ComposerRetrySourceGoneError, ComposerStorageError,
+  ComposerPartialSubmissionError, ComposerRetrySourceGoneError, ComposerRetrySupersededError, ComposerStorageError,
 } from '../services/composerBatchRenderer.ts';
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
@@ -232,6 +232,9 @@ export const buildComposerBatchesRouter = (
       } catch (error) {
         if (error instanceof ComposerBatchActiveError) res.status(409).json({
           error: 'BatchActive', message: 'This composer batch already has a render update in progress',
+        });
+        else if (error instanceof ComposerRetrySupersededError) res.status(409).json({
+          error: 'RetryConflict', message: 'A newer render attempt already exists for this output',
         });
         else if (error instanceof ComposerJobNotFoundError) res.status(404).json({ error: 'NotFound', message: error.message });
         else if (error instanceof ComposerInvalidRetryError) res.status(409).json({ error: 'InvalidRetry', message: error.message });

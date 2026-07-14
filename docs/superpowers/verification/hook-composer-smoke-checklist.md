@@ -41,5 +41,6 @@ The first two import/crop checks require observing the browser workflow. The exa
 - Route regressions verify that upload probing, exact-preview creation, Resize job status/debug responses, and trim submission do not expose managed paths or FFmpeg diagnostics.
 - The full test command now includes both `.test.ts` and `.test.tsx` files and runs serially to avoid Windows file-rename contention in storage tests.
 - Reload coverage restores active batch jobs before exposing the review flow; server coverage proves duplicate and concurrent batch submissions are rejected atomically with a safe conflict response.
+- Retry-lineage coverage proves only the latest unresolved failed attempt per original/hook cell can be retried, while historical cards lose their Retry action and distinct cells remain independent.
 
 The in-app browser harness remained unavailable during final hardening. No browser-only checkbox above was changed.

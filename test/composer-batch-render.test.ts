@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { ComposerAsset, ComposerBatchDraft, ComposerVariantConfig } from '../shared/composer-contract.ts';
-import { allocateComposerOutputFilenames, ComposerBatchActiveError, ComposerBatchRenderer, ComposerRetrySourceGoneError } from '../server/services/composerBatchRenderer.ts';
+import { allocateComposerOutputFilenames, ComposerBatchActiveError, ComposerBatchRenderer, ComposerInvalidRetryError, ComposerRetrySourceGoneError, ComposerRetrySupersededError } from '../server/services/composerBatchRenderer.ts';
 import { estimateComposerOutputBytes } from '../shared/composerTimeline.ts';
 
 const asset = (id: string, kind: 'original' | 'hook', filename = `${id}.mp4`, duration = 3): ComposerAsset => ({
@@ -99,7 +99,7 @@ test('retry uses immutable snapshot and is limited to failed jobs in its batch',
   const retried = await f.renderer.retry('batch-1', old.id);
   assert.equal(retried.spec.insertAt, old.spec.insertAt);
   old.status = 'completed';
-  await assert.rejects(() => f.renderer.retry('batch-1', old.id), /failed/);
+  await assert.rejects(() => f.renderer.retry('batch-1', old.id), ComposerRetrySupersededError);
   await assert.rejects(() => f.renderer.retry('other-batch', old.id), /not found/);
 });
 
@@ -150,4 +150,82 @@ test('concurrent submissions atomically allow only one batch submission', async 
   const rejected = [left, right].find((result): result is PromiseRejectedResult => result.status === 'rejected');
   assert.ok(rejected?.reason instanceof ComposerBatchActiveError);
   assert.equal(f.calls.length, 1);
+});
+
+test('a failed attempt cannot be retried twice after its replacement is queued or completed', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const original = f.jobs.get(submitted.jobs[0].jobId); original.status = 'failed';
+  const replacement = await f.renderer.retry('batch-1', original.id);
+
+  await assert.rejects(() => f.renderer.retry('batch-1', original.id), ComposerRetrySupersededError);
+  replacement.status = 'completed';
+  await assert.rejects(() => f.renderer.retry('batch-1', original.id), ComposerRetrySupersededError);
+});
+
+test('a latest completed cell is never retryable', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const completed = f.jobs.get(submitted.jobs[0].jobId); completed.status = 'completed';
+  await assert.rejects(() => f.renderer.retry('batch-1', completed.id), ComposerInvalidRetryError);
+  assert.equal(f.renderer.listBatchJobs('batch-1')[0].retryable, false);
+});
+
+test('a cell with any completed attempt never exposes retry for a later failed duplicate', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const first = await f.renderer.submit(draft(), ['o1:h1']);
+  f.jobs.get(first.jobs[0].jobId).status = 'completed';
+  const duplicate = await f.renderer.submit(draft(), ['o1:h1']);
+  const failed = f.jobs.get(duplicate.jobs[0].jobId); failed.status = 'failed';
+  assert.equal(f.renderer.listBatchJobs('batch-1').find((job) => job.jobId === failed.id)?.retryable, false);
+  await assert.rejects(() => f.renderer.retry('batch-1', failed.id), ComposerInvalidRetryError);
+});
+
+test('a cancelled replacement does not permanently supersede the prior failed attempt', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const original = f.jobs.get(submitted.jobs[0].jobId); original.status = 'failed';
+  const replacement = await f.renderer.retry('batch-1', original.id); replacement.status = 'cancelled';
+  assert.equal(f.renderer.listBatchJobs('batch-1').find((job) => job.jobId === original.id)?.retryable, true);
+  const next = await f.renderer.retry('batch-1', original.id);
+  assert.equal(next.spec.hookId, 'h1');
+});
+
+test('only the latest failed attempt for a cell is retryable', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const original = f.jobs.get(submitted.jobs[0].jobId); original.status = 'failed';
+  const replacement = await f.renderer.retry('batch-1', original.id); replacement.status = 'failed';
+
+  await assert.rejects(() => f.renderer.retry('batch-1', original.id), ComposerRetrySupersededError);
+  const latest = f.renderer.listBatchJobs('batch-1');
+  assert.equal(latest.find((job) => job.jobId === original.id)?.retryable, false);
+  assert.equal(latest.find((job) => job.jobId === replacement.id)?.retryable, true);
+  const next = await f.renderer.retry('batch-1', replacement.id);
+  assert.equal(next.spec.insertAt, replacement.spec.insertAt);
+});
+
+test('failed cells can be retried independently', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1', 'o1:h2']);
+  const first = f.jobs.get(submitted.jobs[0].jobId); first.status = 'failed';
+  const second = f.jobs.get(submitted.jobs[1].jobId); second.status = 'failed';
+
+  const firstRetry = await f.renderer.retry('batch-1', first.id);
+  const secondRetry = await f.renderer.retry('batch-1', second.id);
+  assert.equal(firstRetry.spec.hookId, 'h1');
+  assert.equal(secondRetry.spec.hookId, 'h2');
+});
+
+test('concurrent retries of the same failed attempt allow only one replacement', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  const submitted = await f.renderer.submit(draft(), ['o1:h1']);
+  const failed = f.jobs.get(submitted.jobs[0].jobId); failed.status = 'failed';
+  const results = await Promise.allSettled([
+    f.renderer.retry('batch-1', failed.id),
+    f.renderer.retry('batch-1', failed.id),
+  ]);
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(results.filter((result) => result.status === 'rejected').length, 1);
+  assert.equal(f.calls.length, 2);
 });

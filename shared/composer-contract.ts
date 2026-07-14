@@ -101,6 +101,7 @@ export interface ComposerBatchJob {
   outputFilename: string;
   progress: number;
   error?: string;
+  retryable?: boolean;
 }
 
 export interface LocalLibraryEntry {

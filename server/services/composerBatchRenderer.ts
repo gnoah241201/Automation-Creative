@@ -49,13 +49,15 @@ export class ComposerInvalidRetryError extends Error {}
 export class ComposerRetrySourceGoneError extends Error {}
 export class ComposerStorageError extends Error {}
 export class ComposerBatchActiveError extends Error {}
+export class ComposerRetrySupersededError extends Error {}
 
-const jobResponse = (job: ComposerJobRecord) => ({
+const jobResponse = (job: ComposerJobRecord, retryable = false) => ({
   jobId: job.id,
   status: job.status,
   outputFilename: job.spec.outputFilename,
   progress: job.progress,
   error: job.error ? 'Render failed. Retry this output or check the source media.' : undefined,
+  retryable,
 });
 
 export const allocateComposerOutputFilenames = (filenames: string[]): string[] => {
@@ -205,13 +207,24 @@ export class ComposerBatchRenderer {
       console.error('[composerBatchRenderer] Partial enqueue failure:', error);
       throw new ComposerPartialSubmissionError(created.map((job) => job.id));
     }
-    return { batchId: batch.id, jobs: created.map(jobResponse) };
+    return { batchId: batch.id, jobs: created.map((job) => jobResponse(job)) };
   }
 
   listBatchJobs(batchId: string) {
-    return this.queue.getAllJobs()
-      .filter((job): job is ComposerJobRecord => (job.kind === 'compose' && job.spec.batchId === batchId))
-      .map(jobResponse);
+    const jobs = this.queue.getAllJobs()
+      .filter((job): job is ComposerJobRecord => (job.kind === 'compose' && job.spec.batchId === batchId));
+    const latestByCell = new Map<string, string>();
+    const completedCells = new Set<string>();
+    for (const job of jobs) {
+      if (job.status === 'completed') completedCells.add(this.cellKey(job));
+      if (job.status !== 'cancelled') latestByCell.set(this.cellKey(job), job.id);
+    }
+    return jobs.map((job) => jobResponse(
+      job,
+      job.status === 'failed'
+        && !completedCells.has(this.cellKey(job))
+        && latestByCell.get(this.cellKey(job)) === job.id,
+    ));
   }
 
   async cancelBatch(batchId: string) {
@@ -237,6 +250,19 @@ export class ComposerBatchRenderer {
   private async retryClaimed(batchId: string, jobId: string): Promise<ComposerJobRecord> {
     const source = this.queue.getJob(jobId);
     if (!source || source.kind !== 'compose' || source.spec.batchId !== batchId) throw new ComposerJobNotFoundError('Composer job was not found in this batch');
+    const cellJobs = this.queue.getAllJobs().filter((job): job is ComposerJobRecord => (
+      job.kind === 'compose'
+      && job.spec.batchId === batchId
+      && job.spec.originalId === source.spec.originalId
+      && job.spec.hookId === source.spec.hookId
+    ));
+    const latest = cellJobs.filter((job) => job.status !== 'cancelled').at(-1);
+    if (latest?.id !== source.id) {
+      throw new ComposerRetrySupersededError('A newer composer attempt already exists for this output');
+    }
+    if (cellJobs.some((job) => job.status === 'completed')) {
+      throw new ComposerInvalidRetryError('A completed composer output cannot be retried');
+    }
     if (source.status !== 'failed') throw new ComposerInvalidRetryError('Only failed composer jobs can be retried');
     try { await Promise.all([fs.access(source.files.foregroundPath), fs.access(source.files.backgroundVideoPath!)]); }
     catch { throw new ComposerRetrySourceGoneError('Composer retry sources are no longer available'); }
@@ -264,6 +290,10 @@ export class ComposerBatchRenderer {
       && job.spec.batchId === batchId
       && ['queued', 'processing', 'cancelling'].includes(job.status)
     ));
+  }
+
+  private cellKey(job: ComposerJobRecord): string {
+    return `${job.spec.batchId}\u0000${job.spec.originalId}\u0000${job.spec.hookId}`;
   }
 
   private validateDraftGroups(batch: ComposerBatchDraft, hooks: ComposerAsset[]) {
