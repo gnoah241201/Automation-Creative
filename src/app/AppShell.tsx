@@ -22,15 +22,12 @@ export function AppShell({ activeTab, onTabChange, children }: AppShellProps) {
       >
         <div className="mx-auto flex max-w-[1800px] items-center gap-2 overflow-x-auto">
           <span className="mr-2 shrink-0 font-bold sm:mr-4">ResizeVideo</span>
-          <div role="tablist" aria-label="Video tools" className="flex gap-2">
+          <div aria-label="Video tools" className="flex gap-2">
             {visibleTabs.map((tab) => (
               <button
                 key={tab.id}
-                id={`app-tab-${tab.id}`}
-                role="tab"
                 type="button"
-                aria-controls="app-workspace"
-                aria-selected={activeTab === tab.id}
+                aria-current={activeTab === tab.id ? 'page' : undefined}
                 onClick={() => onTabChange(tab.id)}
                 className={activeTab === tab.id
                   ? 'shrink-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white'
@@ -42,11 +39,7 @@ export function AppShell({ activeTab, onTabChange, children }: AppShellProps) {
           </div>
         </div>
       </nav>
-      <main
-        id="app-workspace"
-        role="tabpanel"
-        aria-labelledby={`app-tab-${activeTab}`}
-      >
+      <main id="app-workspace">
         {children}
       </main>
     </div>

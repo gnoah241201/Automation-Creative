@@ -14,7 +14,7 @@ export function HookComposerPage() {
     <div className="mx-auto min-h-[calc(100vh-65px)] max-w-[1800px] px-4 py-6 sm:px-6 lg:px-8">
       <header className="mb-6">
         <p className="mb-2 text-xs font-semibold uppercase tracking-[0.22em] text-blue-400">Hook Composer</p>
-        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Create every original × hook variation</h1>
+        <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Create every original &times; hook variation</h1>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-neutral-400 sm:text-base">
           Build vertical 9:16 combinations in three clear stages. Your large preview stays available while you edit.
         </p>

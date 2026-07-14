@@ -35,7 +35,7 @@ export type ComposerAction =
   | { type: 'assetsLoaded'; originals: ComposerAsset[]; hooks: ComposerAsset[] }
   | { type: 'batchCreated'; batch: ComposerBatchDraft }
   | { type: 'selectVariant'; originalId: string; durationGroupId: string }
-  | { type: 'configurationSaved'; configuration: ComposerVariantConfig }
+  | { type: 'configurationSaved'; batchId: string; configuration: ComposerVariantConfig }
   | { type: 'toggleCellSelection'; cellId: string }
   | { type: 'setTool'; tool: ComposerTool }
   | { type: 'setStage'; stage: ComposerStage };
@@ -54,19 +54,30 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
         activeVariant: undefined,
         selectedCellIds: [],
       };
-    case 'batchCreated':
+    case 'batchCreated': {
+      const originalIds = new Set(action.batch.originalIds);
+      const hookIds = new Set(action.batch.hookIds);
+      const originals = state.originals.filter((original) => originalIds.has(original.id));
+      const hooks = state.hooks.filter((hook) => hookIds.has(hook.id));
+      const retainedHookIds = new Set(hooks.map((hook) => hook.id));
+      const durationGroups = action.batch.durationGroups
+        .map((group) => ({
+          ...group,
+          hookIds: group.hookIds.filter((hookId) => retainedHookIds.has(hookId)),
+        }))
+        .filter((group) => group.hookIds.length > 0);
       return {
         ...state,
         batchId: action.batch.id,
         stage: 'edit',
-        durationGroups: action.batch.durationGroups.map((group) => ({
-          ...group,
-          hookIds: [...group.hookIds],
-        })),
+        originals,
+        hooks,
+        durationGroups,
         configurations: { ...action.batch.configurations },
         activeVariant: undefined,
         selectedCellIds: [],
       };
+    }
     case 'selectVariant': {
       const hasOriginal = state.originals.some((original) => original.id === action.originalId);
       const hasGroup = state.durationGroups.some((group) => group.id === action.durationGroupId);
@@ -74,14 +85,25 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
         ? { ...state, activeVariant: { originalId: action.originalId, durationGroupId: action.durationGroupId } }
         : state;
     }
-    case 'configurationSaved':
+    case 'configurationSaved': {
+      const configuration = action.configuration;
+      const group = state.durationGroups.find((item) => item.id === configuration.durationGroupId);
+      const isCurrentBatch = state.batchId === action.batchId;
+      const hasOriginal = state.originals.some((original) => original.id === configuration.originalId);
+      const hasRepresentative = Boolean(
+        group?.hookIds.includes(configuration.representativeHookId)
+        && state.hooks.some((hook) => hook.id === configuration.representativeHookId),
+      );
+      const hasCanonicalId = configuration.id === `${configuration.originalId}:${configuration.durationGroupId}`;
+      if (!isCurrentBatch || !hasOriginal || !group || !hasRepresentative || !hasCanonicalId) return state;
       return {
         ...state,
         configurations: {
           ...state.configurations,
-          [action.configuration.id]: action.configuration,
+          [configuration.id]: configuration,
         },
       };
+    }
     case 'toggleCellSelection':
       return {
         ...state,
