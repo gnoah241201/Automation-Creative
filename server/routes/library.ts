@@ -12,6 +12,34 @@ import {
   LibraryDownloadBundleService,
 } from '../services/libraryDownloadBundles.ts';
 
+type JsonBodyError = Error & {
+  status?: number;
+  type?: string;
+};
+
+type BundleFinalizeReason = 'completed' | 'aborted' | 'error';
+type BundleFinalizeOutcome = BundleFinalizeReason | 'release-failed';
+
+const bundleJsonParser = express.json();
+const parseBundleJson: express.RequestHandler = (req, res, next) => {
+  bundleJsonParser(req, res, (error?: unknown) => {
+    if (!error) {
+      next();
+      return;
+    }
+    const bodyError = error as JsonBodyError;
+    if (bodyError.type === 'entity.too.large' || bodyError.status === 413) {
+      res.status(413).json({ error: 'RequestTooLarge', message: 'Request body is too large' });
+      return;
+    }
+    if (bodyError.type === 'entity.parse.failed' || (bodyError instanceof SyntaxError && bodyError.status === 400)) {
+      res.status(400).json({ error: 'InvalidJson', message: 'Request body must be valid JSON' });
+      return;
+    }
+    next(error);
+  });
+};
+
 const sendError = (res: express.Response, error: unknown): void => {
   if (error instanceof LocalLibraryValidationError) {
     res.status(400).json({ error: 'ValidationError', message: error.message });
@@ -42,7 +70,7 @@ export const buildLibraryRouter = (
     }
   });
 
-  router.post('/download-bundles', express.json(), async (req, res) => {
+  router.post('/download-bundles', parseBundleJson, async (req, res) => {
     try {
       const owner = res.locals.authUsername as string;
       const prepared = await bundles.prepare(req.body?.ids, owner);
@@ -69,15 +97,17 @@ export const buildLibraryRouter = (
     }
 
     const bundle = claim.bundle;
-    let released = false;
-    const release = async () => {
-      if (released) return;
-      released = true;
-      try {
-        await bundles.complete(bundle.token);
-      } catch {
-        console.error('[library] Failed to release ZIP bundle holds');
-      }
+    let releasePromise: Promise<BundleFinalizeOutcome> | null = null;
+    const finalize = (reason: BundleFinalizeReason): Promise<BundleFinalizeOutcome> => {
+      if (releasePromise) return releasePromise;
+      releasePromise = bundles.complete(bundle.token).then(
+        () => reason,
+        () => {
+          console.error('[library] Failed to release ZIP bundle holds');
+          return 'release-failed';
+        },
+      );
+      return releasePromise;
     };
     try {
       res.attachment(bundle.filename).type('application/zip');
@@ -89,24 +119,24 @@ export const buildLibraryRouter = (
         streamFailed = true;
         console.error('[library] ZIP stream failed');
         archive.abort();
-        void release();
+        void finalize('error');
         res.destroy();
       };
       archive.on('error', failStream);
       archive.on('warning', failStream);
       res.once('close', () => {
         if (!responseFinished) archive.abort();
-        void release();
+        void finalize(responseFinished ? 'completed' : 'aborted');
       });
       res.once('finish', () => {
         responseFinished = true;
-        void release();
+        void finalize('completed');
       });
       archive.pipe(res);
       for (const entry of bundle.entries) archive.file(entry.path, { name: entry.archiveName });
       await archive.finalize();
     } catch (error) {
-      await release();
+      await finalize('error');
       if (res.headersSent) res.destroy();
       else sendError(res, error);
     }

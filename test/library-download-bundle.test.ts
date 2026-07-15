@@ -53,6 +53,61 @@ const readZipNames = (body: Buffer): string[] => {
   return names;
 };
 
+const requestRawBundlePreparation = async (body: string) => {
+  const harness = await createHarness();
+  const bundles = new LibraryDownloadBundleService(harness.library);
+  const app = express();
+  app.use('/api/library', (_req, res, next) => {
+    res.locals.authUsername = 'admin';
+    next();
+  }, buildLibraryRouter(harness.library, bundles));
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/library/download-bundles`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    });
+    return {
+      status: response.status,
+      contentType: response.headers.get('content-type'),
+      body: await response.text(),
+      managedRoot: harness.managedRoot,
+    };
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await fs.rm(harness.managedRoot, { recursive: true, force: true });
+  }
+};
+
+test('bundle preparation maps malformed JSON to a safe typed response', async () => {
+  const response = await requestRawBundlePreparation('{');
+
+  assert.equal(response.status, 400);
+  assert.match(response.contentType ?? '', /^application\/json/);
+  assert.deepEqual(JSON.parse(response.body), {
+    error: 'InvalidJson',
+    message: 'Request body must be valid JSON',
+  });
+  assert.equal(response.body.includes(response.managedRoot), false);
+  assert.equal(response.body.includes('SyntaxError'), false);
+});
+
+test('bundle preparation maps oversized JSON to a safe typed response', async () => {
+  const response = await requestRawBundlePreparation(JSON.stringify({ ids: ['x'.repeat(110 * 1_024)] }));
+
+  assert.equal(response.status, 413);
+  assert.match(response.contentType ?? '', /^application\/json/);
+  assert.deepEqual(JSON.parse(response.body), {
+    error: 'RequestTooLarge',
+    message: 'Request body is too large',
+  });
+  assert.equal(response.body.includes(response.managedRoot), false);
+  assert.equal(response.body.includes('PayloadTooLargeError'), false);
+});
+
 test('bundle preparation holds every selected usable output atomically', async () => {
   const harness = await createHarness();
   const entries = [await harness.register('job-a', 'a.mp4'), await harness.register('job-b', 'b.mp4')];
