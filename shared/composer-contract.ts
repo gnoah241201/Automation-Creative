@@ -54,6 +54,8 @@ export interface ComposerVariantConfig {
 
 export interface ComposerBatchDraft {
   id: string;
+  revision: number;
+  assetRevisions: Record<string, number>;
   originalIds: string[];
   hookIds: string[];
   durationGroups: HookDurationGroup[];

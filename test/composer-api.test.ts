@@ -5,6 +5,7 @@ import {
   flushComposerConfigurationKeepalive,
   getComposerAsset,
   saveComposerCrop,
+  saveComposerConfiguration,
   saveComposerSourceTrim,
 } from '../src/composer/api.ts';
 import type { ComposerVariantConfig } from '../shared/composer-contract.ts';
@@ -22,12 +23,13 @@ test('unmount flush uses an authenticated keepalive request', async (t) => {
     insertAt: 2, trimStart: 0, trimEnd: 13, transition: 'cut', reviewed: false,
   };
 
-  await flushComposerConfigurationKeepalive('batch 1', configuration);
+  await flushComposerConfigurationKeepalive('batch 1', configuration, 4);
 
   assert.equal(observed?.input, '/api/composer/batches/batch%201/configurations/o1%3Ag1');
   assert.equal(observed?.init?.credentials, 'include');
   assert.equal(observed?.init?.keepalive, true);
   assert.equal(observed?.init?.method, 'PUT');
+  assert.equal(observed?.init?.body, JSON.stringify({ configuration, expectedRevision: 4 }));
 });
 
 test('draft restore loads authenticated asset metadata and uses an encoded managed source URL', async (t) => {
@@ -80,4 +82,25 @@ test('source trim and crop saves are authenticated and carry the expected asset 
       body: JSON.stringify({ crop: { x: 0, y: 0, width: 1, height: 1 }, expectedRevision: 7 }),
     },
   ]);
+});
+
+test('configuration saves carry the expected draft revision', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let observed: { input: string; init?: RequestInit } | undefined;
+  globalThis.fetch = (async (input, init) => {
+    observed = { input: String(input), init };
+    return new Response(JSON.stringify({ id: 'batch-1', revision: 8 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const configuration: ComposerVariantConfig = {
+    id: 'o1:g1', originalId: 'o1', durationGroupId: 'g1', representativeHookId: 'h1',
+    insertAt: 2, trimStart: 0, trimEnd: 13, transition: 'cut', reviewed: false,
+  };
+
+  await saveComposerConfiguration('batch-1', configuration, 7);
+
+  assert.equal(observed?.init?.body, JSON.stringify({ configuration, expectedRevision: 7 }));
 });

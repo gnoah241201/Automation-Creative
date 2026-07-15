@@ -20,6 +20,7 @@ const config = (originalId: string, groupId = 'g-3.000', reviewed = true): Compo
 
 const draft = (reviewed = true): ComposerBatchDraft => ({
   id: 'batch-1', originalIds: ['o1', 'o2'], hookIds: ['h1', 'h2'],
+  revision: 1, assetRevisions: { o1: 1, o2: 1, h1: 1, h2: 1 },
   durationGroups: [{ id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['h1', 'h2'] }],
   configurations: { 'o1:g-3.000': config('o1', 'g-3.000', reviewed), 'o2:g-3.000': config('o2') },
   createdAt: 1, updatedAt: 1, expiresAt: Date.now() + 1000,

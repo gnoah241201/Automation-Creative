@@ -13,6 +13,8 @@ import { ComposerBatchActiveError, ComposerRetrySupersededError } from '../serve
 
 const draftFixture = (reviewed: boolean): ComposerBatchDraft => ({
   id: 'batch-1',
+  revision: 1,
+  assetRevisions: { o1: 1, h1: 1 },
   originalIds: ['o1'],
   hookIds: ['h1'],
   durationGroups: [{ id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['h1'] }],
@@ -58,7 +60,7 @@ test('draft persists configurations atomically and restores them', async (t) => 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new ComposerDraftStore(root);
-  const draft = await store.create(['o1'], ['h1']);
+  const draft = await store.create(['o1'], ['h1'], { o1: 1, h1: 1 });
 
   await store.putConfiguration(draft.id, {
     id: 'o1:g-3.000',
@@ -70,7 +72,7 @@ test('draft persists configurations atomically and restores them', async (t) => 
     trimEnd: 13,
     transition: 'cut',
     reviewed: true,
-  });
+  }, draft.revision);
 
   const restored = await store.get(draft.id);
   assert.equal(restored?.configurations['o1:g-3.000'].reviewed, true);
@@ -78,44 +80,100 @@ test('draft persists configurations atomically and restores them', async (t) => 
   assert.deepEqual(files, ['draft.json']);
 });
 
+test('draft stores asset revisions and increments revision for each configuration mutation', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ComposerDraftStore(root);
+  const draft = await store.create(['o1'], ['h1'], { o1: 3, h1: 7 });
+
+  assert.equal(draft.revision, 1);
+  assert.deepEqual(draft.assetRevisions, { o1: 3, h1: 7 });
+  const updated = await store.putConfiguration(draft.id, {
+    id: 'o1:g-3.000', originalId: 'o1', durationGroupId: 'g-3.000', representativeHookId: 'h1',
+    insertAt: 0, trimStart: 0, trimEnd: 13, transition: 'cut', reviewed: true,
+  }, draft.revision);
+  assert.equal(updated.revision, 2);
+});
+
+test('configuration mutations reject a stale draft revision', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ComposerDraftStore(root);
+  const draft = await store.create(['o1'], ['h1'], { o1: 1, h1: 1 });
+  const configuration = {
+    id: 'o1:g-3.000', originalId: 'o1', durationGroupId: 'g-3.000', representativeHookId: 'h1',
+    insertAt: 0, trimStart: 0, trimEnd: 13, transition: 'cut' as const, reviewed: true,
+  };
+
+  await store.putConfiguration(draft.id, configuration, draft.revision);
+  await assert.rejects(
+    store.putConfiguration(draft.id, configuration, draft.revision),
+    /stale draft revision/i,
+  );
+});
+
+test('legacy drafts normalize revision and asset revisions once', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ComposerDraftStore(root);
+  const draft = await store.create(['o1'], ['h1'], { o1: 4, h1: 5 });
+  const legacy = { ...draft } as Partial<ComposerBatchDraft>;
+  delete legacy.revision;
+  delete legacy.assetRevisions;
+  await fs.writeFile(
+    path.join(root, 'drafts', draft.id, 'draft.json'),
+    JSON.stringify(legacy),
+    'utf8',
+  );
+
+  const restored = await store.require(draft.id);
+  assert.equal(restored.revision, 1);
+  assert.deepEqual(restored.assetRevisions, {});
+});
+
 test('batch creation requires between one and ten assets of each kind', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new ComposerDraftStore(root);
 
-  await assert.rejects(store.create([], ['h1']), /1-10 originals and 1-10 hooks/);
+  await assert.rejects(store.create([], ['h1'], {}), /1-10 originals and 1-10 hooks/);
   await assert.rejects(
-    store.create(['o1'], Array.from({ length: 11 }, (_, index) => `h${index}`)),
+    store.create(['o1'], Array.from({ length: 11 }, (_, index) => `h${index}`), {}),
     /1-10 originals and 1-10 hooks/,
   );
-  await assert.rejects(store.create(['o1', 'o1'], ['h1']), /duplicate asset IDs/);
-  await assert.rejects(store.create(['o1'], ['h1', 'h1']), /duplicate asset IDs/);
+  await assert.rejects(store.create(['o1', 'o1'], ['h1'], {}), /duplicate asset IDs/);
+  await assert.rejects(store.create(['o1'], ['h1', 'h1'], {}), /duplicate asset IDs/);
 
-  const minimum = await store.create(['minimum-original'], ['minimum-hook']);
+  const minimum = await store.create(['minimum-original'], ['minimum-hook'], {
+    'minimum-original': 1, 'minimum-hook': 1,
+  });
   assert.equal(minimum.originalIds.length, 1);
   assert.equal(minimum.hookIds.length, 1);
   const maximum = await store.create(
     Array.from({ length: 10 }, (_, index) => `o${index}`),
     Array.from({ length: 10 }, (_, index) => `h${index}`),
+    Object.fromEntries(Array.from({ length: 10 }, (_, index) => [[`o${index}`, 1], [`h${index}`, 1]]).flat()),
   );
   assert.equal(maximum.originalIds.length, 10);
   assert.equal(maximum.hookIds.length, 10);
 });
 
-test('concurrent configuration updates preserve both keys', async (t) => {
+test('sequential revision-aware configuration updates preserve both keys', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new ComposerDraftStore(root);
-  const draft = await store.create(['o1'], ['h1']);
+  const draft = await store.create(['o1'], ['h1'], { o1: 1, h1: 1 });
   const base = {
     originalId: 'o1', durationGroupId: 'g-3.000', representativeHookId: 'h1',
     insertAt: 0, trimStart: 0, trimEnd: 13, transition: 'cut' as const, reviewed: true,
   };
 
-  await Promise.all([
-    store.putConfiguration(draft.id, { ...base, id: 'o1:g-3.000' }),
-    store.putConfiguration(draft.id, { ...base, id: 'o1:g-3.050', durationGroupId: 'g-3.050' }),
-  ]);
+  const first = await store.putConfiguration(draft.id, { ...base, id: 'o1:g-3.000' }, draft.revision);
+  await store.putConfiguration(
+    draft.id,
+    { ...base, id: 'o1:g-3.050', durationGroupId: 'g-3.050' },
+    first.revision,
+  );
 
   const restored = await store.require(draft.id);
   assert.deepEqual(Object.keys(restored.configurations).sort(), ['o1:g-3.000', 'o1:g-3.050']);
@@ -152,12 +210,17 @@ test('batch routes create, restore, and update a draft', async (t) => {
   const originals = [readyAsset('o1', 'original', 10)];
   const hooks = [readyAsset('h1', 'hook', 3), readyAsset('h2', 'hook', 3.05)];
   const assets = {
+    requireAsset: async (id: string) => {
+      const asset = [...originals, ...hooks].find((candidate) => candidate.id === id);
+      if (!asset) throw new Error(`Composer asset ${id} was not found`);
+      return asset;
+    },
     requireReadyAsset: async (id: string, kind: 'original' | 'hook') => {
       const asset = [...originals, ...hooks].find((candidate) => candidate.id === id);
       if (!asset || asset.kind !== kind) throw new Error(`Composer asset ${id} is not a ready ${kind}`);
       return asset;
     },
-  } as ComposerAssetStore;
+  } as unknown as ComposerAssetStore;
   const drafts = new ComposerDraftStore(root);
   const app = express();
   app.use('/api/composer', buildComposerBatchesRouter(assets, drafts));
@@ -193,14 +256,67 @@ test('batch routes create, restore, and update a draft', async (t) => {
   const updateResponse = await fetch(`${baseUrl}/${created.id}/configurations/${configuration.id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(configuration),
+    body: JSON.stringify({ configuration, expectedRevision: created.revision }),
   });
   assert.equal(updateResponse.status, 200);
+  const staleUpdateResponse = await fetch(`${baseUrl}/${created.id}/configurations/${configuration.id}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configuration, expectedRevision: created.revision }),
+  });
+  assert.equal(staleUpdateResponse.status, 409);
+  assert.equal((await staleUpdateResponse.json()).error, 'DraftConflict');
 
   const getResponse = await fetch(`${baseUrl}/${created.id}`);
   assert.equal(getResponse.status, 200);
   const restored = await getResponse.json() as ComposerBatchDraft;
   assert.deepEqual(restored.configurations[configuration.id], configuration);
+});
+
+test('another tab cannot configure, preview, or render after a source revision changes', async (t) => {
+  const staleDraft = {
+    ...draftFixture(true),
+    revision: 2,
+    assetRevisions: { o1: 1, h1: 1 },
+  };
+  const currentAssets = [readyAsset('o1', 'original', 10), { ...readyAsset('h1', 'hook', 3), revision: 2 }];
+  const assets = {
+    requireAsset: async (id: string) => currentAssets.find((asset) => asset.id === id),
+    requireReadyAsset: async (id: string) => currentAssets.find((asset) => asset.id === id),
+  } as unknown as ComposerAssetStore;
+  const drafts = { require: async () => staleDraft } as unknown as ComposerDraftStore;
+  const previews = { requestPreview: async () => ({ status: 'queued' }) } as any;
+  const renderer = { submit: async () => ({ jobs: [] }) } as any;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter(assets, drafts, previews, renderer));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}/api/composer/batches/batch-1`;
+
+  const [preview, render] = await Promise.all([
+    fetch(`${base}/preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ configurationId: 'o1:g-3.000', representativeHookId: 'h1' }),
+    }),
+    fetch(`${base}/render`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ selectedCellIds: ['o1:h1'] }),
+    }),
+  ]);
+  const configuration = staleDraft.configurations['o1:g-3.000'];
+  const save = await fetch(`${base}/configurations/${configuration.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configuration, expectedRevision: staleDraft.revision }),
+  });
+  assert.equal(preview.status, 409);
+  assert.equal(render.status, 409);
+  assert.equal(save.status, 409);
+  assert.equal((await preview.json()).error, 'DraftStale');
+  assert.equal((await render.json()).error, 'DraftStale');
+  assert.equal((await save.json()).error, 'DraftStale');
 });
 
 test('configuration route rejects an ID mismatch', async (t) => {
@@ -236,9 +352,14 @@ test('configuration route rejects an ID mismatch', async (t) => {
 test('configuration route rejects invalid identity, membership, types, and timeline bounds', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-draft-route-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
-  const original = readyAsset('o1', 'original', 10);
+  const original = { ...readyAsset('o1', 'original', 10), sourceTrimStart: 2, sourceTrimEnd: 8 };
   const hook = readyAsset('h1', 'hook', 3);
   const assets = {
+    requireAsset: async (id: string) => {
+      const asset = [original, hook].find((item) => item.id === id);
+      if (!asset) throw new Error(`Composer asset ${id} was not found`);
+      return asset;
+    },
     requireReadyAsset: async (id: string, kind: 'original' | 'hook') => {
       const asset = [original, hook].find((item) => item.id === id && item.kind === kind);
       if (!asset) throw new Error(`Composer asset ${id} is not a ready ${kind}`);
@@ -246,7 +367,7 @@ test('configuration route rejects invalid identity, membership, types, and timel
     },
   } as ComposerAssetStore;
   const drafts = new ComposerDraftStore(root);
-  const draft = await drafts.create(['o1'], ['h1']);
+  const draft = await drafts.create(['o1'], ['h1'], { o1: 1, h1: 1 });
   draft.durationGroups = [{ id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['h1'] }];
   await drafts.save(draft);
   const app = express();
@@ -281,7 +402,7 @@ test('configuration route rejects invalid identity, membership, types, and timel
     const response = await fetch(`${endpoint}/${String(config.id)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(config),
+      body: JSON.stringify({ configuration: config, expectedRevision: draft.revision }),
     });
     assert.equal(response.status, 400, `expected rejection for ${JSON.stringify(config)}`);
   }
@@ -291,6 +412,12 @@ test('configuration route rejects invalid identity, membership, types, and timel
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: nonFiniteJson,
   });
   assert.equal(nonFinite.status, 400);
+  const outsideEffectiveOriginal = { ...valid, insertAt: 7, trimEnd: 10 };
+  const effectiveDurationResponse = await fetch(`${endpoint}/${valid.id}`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configuration: outsideEffectiveOriginal, expectedRevision: draft.revision }),
+  });
+  assert.equal(effectiveDurationResponse.status, 400);
   assert.deepEqual((await drafts.require(draft.id)).configurations, {});
 });
 
@@ -313,11 +440,11 @@ test('batch routes distinguish missing drafts from storage failures', async (t) 
   assert.equal(missingGet.status, 404);
   const missingPut = await fetch(`${base}/configurations/o1:g-3.000`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: 'o1:g-3.000' }),
+    body: JSON.stringify({ configuration: { id: 'o1:g-3.000' }, expectedRevision: 1 }),
   });
   assert.equal(missingPut.status, 404);
 
-  const corrupt = await realDrafts.create(['o1'], ['h1']);
+  const corrupt = await realDrafts.create(['o1'], ['h1'], { o1: 1, h1: 1 });
   await fs.writeFile(path.join(root, 'drafts', corrupt.id, 'draft.json'), '{invalid', 'utf8');
   const corruptResponse = await fetch(
     `http://127.0.0.1:${address.port}/api/composer/batches/${corrupt.id}`,
@@ -331,7 +458,7 @@ test('batch routes distinguish missing drafts from storage failures', async (t) 
     `http://127.0.0.1:${address.port}/api/composer/batches/${corrupt.id}/configurations/o1:g-3.000`,
     {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: 'o1:g-3.000' }),
+      body: JSON.stringify({ configuration: { id: 'o1:g-3.000' }, expectedRevision: 1 }),
     },
   );
   assert.equal(corruptUpdate.status, 500);
@@ -389,7 +516,7 @@ test('batch routes conceal invalid managed batch IDs as not found', async (t) =>
 
     const putResponse = await fetch(`${base}/${invalidId}/configurations/o1:g-3.000`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: 'o1:g-3.000' }),
+      body: JSON.stringify({ configuration: { id: 'o1:g-3.000' }, expectedRevision: 1 }),
     });
     assert.equal(putResponse.status, 404, `PUT should conceal ${invalidId}`);
     assert.deepEqual(await putResponse.json(), {
@@ -402,7 +529,10 @@ test('render route maps an active batch collision to a safe typed conflict', asy
   const drafts = { require: async () => draftFixture(true) } as unknown as ComposerDraftStore;
   const renderer = { submit: async () => { throw new ComposerBatchActiveError('internal active claim detail'); } } as any;
   const app = express();
-  app.use('/api/composer', buildComposerBatchesRouter({} as ComposerAssetStore, drafts, undefined, renderer));
+  const assets = {
+    requireAsset: async (id: string) => readyAsset(id, id === 'o1' ? 'original' : 'hook', id === 'o1' ? 10 : 3),
+  } as ComposerAssetStore;
+  app.use('/api/composer', buildComposerBatchesRouter(assets, drafts, undefined, renderer));
   const server = app.listen(0);
   t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
   await new Promise<void>((resolve) => server.once('listening', resolve));

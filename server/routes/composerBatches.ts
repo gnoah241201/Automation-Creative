@@ -1,10 +1,13 @@
 import express from 'express';
 import { ComposerAssetStore } from '../services/composerAssetStore.ts';
 import {
-  ComposerDraftNotFoundError, ComposerDraftStore, ComposerDraftValidationError,
+  ComposerDraftConflictError, ComposerDraftNotFoundError, ComposerDraftStore, ComposerDraftValidationError,
 } from '../services/composerDraftStore.ts';
 import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
-import { validateComposerConfiguration } from '../services/composerValidation.ts';
+import {
+  assertDraftAssetsCurrent, ComposerDraftStaleAssetsError, validateComposerConfiguration,
+} from '../services/composerValidation.ts';
+import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
 import {
   ComposerBatchActiveError, ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
@@ -21,6 +24,26 @@ const sendNotFound = (res: express.Response) => res.status(404).json({
 const sendInternalError = (res: express.Response, message: string) => res.status(500).json({
   error: 'InternalError', message,
 });
+
+const sendDraftStale = (res: express.Response) => res.status(409).json({
+  error: 'DraftStale', message: 'Composer sources changed; reload or create a fresh batch',
+});
+
+const hydrateLegacyAssetRevisions = async (
+  draft: Awaited<ReturnType<ComposerDraftStore['require']>>,
+  assets: ComposerAssetStore,
+  drafts: ComposerDraftStore,
+) => {
+  const ids = [...draft.originalIds, ...draft.hookIds];
+  if (ids.every((id) => Number.isSafeInteger(draft.assetRevisions[id]) && draft.assetRevisions[id] > 0)) {
+    return draft;
+  }
+  const current = await Promise.all(ids.map((id) => assets.requireAsset(id)));
+  return drafts.initializeAssetRevisions(
+    draft.id,
+    Object.fromEntries(current.map((asset) => [asset.id, asset.revision])),
+  );
+};
 
 export const buildComposerBatchesRouter = (
   assets: ComposerAssetStore,
@@ -56,6 +79,7 @@ export const buildComposerBatchesRouter = (
       const draft = await drafts.create(
         originals.map((item) => item.id),
         hooks.map((item) => item.id),
+        Object.fromEntries([...originals, ...hooks].map((item) => [item.id, item.revision])),
       );
       draft.durationGroups = groupHooksByDuration(hooks);
       await drafts.save(draft);
@@ -70,13 +94,19 @@ export const buildComposerBatchesRouter = (
   });
 
   router.put('/batches/:batchId/configurations/:configurationId', express.json(), async (req, res) => {
-    if (req.params.configurationId !== req.body?.id) {
+    if (req.params.configurationId !== req.body?.configuration?.id) {
       res.status(400).json({ error: 'ValidationError', message: 'Configuration ID mismatch' });
       return;
     }
     try {
-      const draft = await drafts.require(req.params.batchId);
-      const structural = validateComposerConfiguration(draft, req.body);
+      const expectedRevision = req.body?.expectedRevision;
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision < 1) {
+        res.status(400).json({ error: 'ValidationError', message: 'Expected draft revision is invalid' });
+        return;
+      }
+      const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
+      await assertDraftAssetsCurrent(draft, assets);
+      const structural = validateComposerConfiguration(draft, req.body.configuration);
       if ('message' in structural) {
         res.status(400).json({ error: 'ValidationError', message: structural.message });
         return;
@@ -91,14 +121,18 @@ export const buildComposerBatchesRouter = (
         res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
         return;
       }
-      const validation = validateComposerConfiguration(draft, structural.config, original.duration);
+      const validation = validateComposerConfiguration(draft, structural.config, getEffectiveSourceDuration(original));
       if ('message' in validation) {
         res.status(400).json({ error: 'ValidationError', message: validation.message });
         return;
       }
-      res.json(await drafts.putConfiguration(req.params.batchId, validation.config));
+      res.json(await drafts.putConfiguration(req.params.batchId, validation.config, expectedRevision));
     } catch (error) {
       if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+      else if (error instanceof ComposerDraftConflictError) res.status(409).json({
+        error: 'DraftConflict', message: 'This draft changed in another tab; reload it before saving',
+      });
+      else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
       else sendInternalError(res, 'Unable to update composer configuration');
     }
   });
@@ -106,7 +140,7 @@ export const buildComposerBatchesRouter = (
   router.get('/batches/:batchId', async (req, res) => {
     try {
       const draft = await drafts.get(req.params.batchId);
-      if (draft) res.json(draft);
+      if (draft) res.json(await hydrateLegacyAssetRevisions(draft, assets, drafts));
       else sendNotFound(res);
     } catch (error) {
       if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
@@ -117,7 +151,8 @@ export const buildComposerBatchesRouter = (
   if (previews) {
     router.post('/batches/:batchId/preview', express.json(), async (req, res) => {
       try {
-        const draft = await drafts.require(req.params.batchId);
+        const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
+        await assertDraftAssetsCurrent(draft, assets);
         const configurationId = typeof req.body?.configurationId === 'string'
           ? req.body.configurationId
           : '';
@@ -157,6 +192,7 @@ export const buildComposerBatchesRouter = (
         res.status(202).json(await previews.requestPreview(request));
       } catch (error) {
         if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
         else if (error instanceof InvalidPreviewRequestError) {
           res.status(400).json({ error: 'InvalidPreview', message: error.message });
         } else {
@@ -189,9 +225,11 @@ export const buildComposerBatchesRouter = (
     router.post('/batches/:batchId/render', express.json(), async (req, res) => {
       let draft;
       try {
-        draft = await drafts.require(req.params.batchId);
+        draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
+        await assertDraftAssetsCurrent(draft, assets);
       } catch (error) {
         if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+        else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
         else {
           console.error('[composerBatches] Draft load failed before render:', error);
           res.status(500).json({ error: 'InternalError', message: 'Unable to load composer batch' });

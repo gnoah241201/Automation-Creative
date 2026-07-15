@@ -18,6 +18,7 @@ const asset = (id: string, kind: 'original' | 'hook', crop?: ComposerAsset['crop
 
 const draft: ComposerBatchDraft = {
   id: 'batch-1', originalIds: ['o1'], hookIds: ['h1'],
+  revision: 1, assetRevisions: { o1: 1, h1: 1 },
   durationGroups: [{ id: 'g-4.000', minDuration: 4, maxDuration: 4, hookIds: ['h1'] }],
   configurations: {}, createdAt: 1, updatedAt: 1, expiresAt: Date.now() + 60_000,
 };

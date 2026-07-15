@@ -85,6 +85,8 @@ test('active preview selection survives tool changes', () => {
 test('restoring a batch replaces stale configuration and selection state', () => {
   const batch: ComposerBatchDraft = {
     id: 'batch-2',
+    revision: 3,
+    assetRevisions: { o1: 1, h1: 1 },
     originalIds: ['o1'],
     hookIds: ['h1'],
     durationGroups: [{ id: 'g1', minDuration: 3, maxDuration: 3, hookIds: ['h1'] }],
@@ -126,6 +128,11 @@ test('restoring another batch drops stale asset metadata and prevents stale vari
       type: 'batchCreated',
       batch: {
         id: 'new-batch',
+        revision: 1,
+        assetRevisions: {
+          'new-original': 1, 'missing-original-metadata': 1,
+          'new-hook': 1, 'missing-hook-metadata': 1,
+        },
         originalIds: ['new-original', 'missing-original-metadata'],
         hookIds: ['new-hook', 'missing-hook-metadata'],
         durationGroups: [{ id: 'new-group', minDuration: 4, maxDuration: 4, hookIds: ['new-hook'] }],
@@ -180,10 +187,15 @@ test('late configuration response from another batch is ignored', () => {
     hooks: [asset('h1', 'hook', 3)],
     durationGroups: [{ id: groupId, minDuration: 3, maxDuration: 3, hookIds: ['h1'] }],
   };
+  const lateDraft: ComposerBatchDraft = {
+    id: 'old-batch', revision: 2, assetRevisions: { o1: 1, h1: 1 },
+    originalIds: ['o1'], hookIds: ['h1'], durationGroups: state.durationGroups,
+    configurations: { [`o1:${groupId}`]: { ...config(`o1:${groupId}`, true), durationGroupId: groupId } },
+    createdAt: 1, updatedAt: 2, expiresAt: 3,
+  };
   const late = composerReducer(state, {
-    type: 'configurationSaved',
-    batchId: 'old-batch',
-    configuration: { ...config(`o1:${groupId}`, true), durationGroupId: groupId },
+    type: 'draftReplaced',
+    draft: lateDraft,
   });
 
   assert.equal(late, state);
@@ -199,17 +211,23 @@ test('configuration response with mismatched canonical identity or representativ
     durationGroups: [{ id: 'g1', minDuration: 3, maxDuration: 3, hookIds: ['h1'] }],
   };
   const wrongId = composerReducer(state, {
-    type: 'configurationSaved',
-    batchId: 'batch-1',
-    configuration: { ...config('wrong-id', true), durationGroupId: 'g1' },
+    type: 'draftReplaced',
+    draft: {
+      id: 'batch-1', revision: 2, assetRevisions: { o1: 1, h1: 1 },
+      originalIds: ['o1'], hookIds: ['h1'], durationGroups: state.durationGroups,
+      configurations: { 'wrong-id': { ...config('wrong-id', true), durationGroupId: 'g1' } },
+      createdAt: 1, updatedAt: 2, expiresAt: 3,
+    },
   });
   const wrongRepresentative = composerReducer(state, {
-    type: 'configurationSaved',
-    batchId: 'batch-1',
-    configuration: {
-      ...config('o1:g1', true),
-      durationGroupId: 'g1',
-      representativeHookId: 'h2',
+    type: 'draftReplaced',
+    draft: {
+      id: 'batch-1', revision: 2, assetRevisions: { o1: 1, h1: 1 },
+      originalIds: ['o1'], hookIds: ['h1'], durationGroups: state.durationGroups,
+      configurations: {
+        'o1:g1': { ...config('o1:g1', true), durationGroupId: 'g1', representativeHookId: 'h2' },
+      },
+      createdAt: 1, updatedAt: 2, expiresAt: 3,
     },
   });
 
@@ -228,12 +246,41 @@ test('valid configuration response merges immutably into the current batch', () 
   };
   const configuration = { ...config('o1:g1', true), durationGroupId: 'g1' };
   const saved = composerReducer(state, {
-    type: 'configurationSaved',
-    batchId: 'batch-1',
-    configuration,
+    type: 'draftReplaced',
+    draft: {
+      id: 'batch-1', revision: 2, assetRevisions: { o1: 1, h1: 1 },
+      originalIds: ['o1'], hookIds: ['h1'], durationGroups: state.durationGroups,
+      configurations: { [configuration.id]: configuration },
+      createdAt: 1, updatedAt: 2, expiresAt: 3,
+    },
   });
 
   assert.notEqual(saved.configurations, state.configurations);
   assert.equal(saved.configurations[configuration.id], configuration);
   assert.deepEqual(selectReviewProgress(saved), { reviewed: 1, total: 1 });
+});
+
+test('canonical draft replacement updates revision, snapshots, and configurations together', () => {
+  const state = {
+    ...initialComposerState,
+    batchId: 'batch-1',
+    draftRevision: 1,
+    assetRevisions: { o1: 1, h1: 1 },
+    originals: [asset('o1', 'original', 10)],
+    hooks: [asset('h1', 'hook', 3)],
+    durationGroups: [{ id: 'g1', minDuration: 3, maxDuration: 3, hookIds: ['h1'] }],
+    configurations: {},
+  };
+  const replacement = {
+    id: 'batch-1', revision: 2, assetRevisions: { o1: 1, h1: 1 },
+    originalIds: ['o1'], hookIds: ['h1'], durationGroups: state.durationGroups,
+    configurations: { 'o1:g1': { ...config('o1:g1', true), durationGroupId: 'g1' } },
+    createdAt: 1, updatedAt: 2, expiresAt: 3,
+  };
+
+  const replaced = composerReducer(state, { type: 'draftReplaced', draft: replacement });
+
+  assert.equal(replaced.draftRevision, 2);
+  assert.deepEqual(replaced.assetRevisions, replacement.assetRevisions);
+  assert.deepEqual(replaced.configurations, replacement.configurations);
 });

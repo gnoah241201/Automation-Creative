@@ -3,7 +3,7 @@ import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
 import { ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig } from '../../shared/composer-contract.ts';
 import { deriveComposerMatrix, estimateComposerOutputBytes } from '../../shared/composerTimeline.ts';
 import {
-  composerAssetSourceUrl, createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getComposerAsset,
+  ComposerApiError, composerAssetSourceUrl, createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getComposerAsset,
   getComposerBatch, getExactPreviewStatus, requestExactPreview,
   saveComposerConfiguration, saveComposerCrop, renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
 } from './api.ts';
@@ -62,13 +62,16 @@ export function HookComposerPage() {
   const restoreRevision = useRef(0);
   const restoredJobsBatchId = useRef<string | undefined>(undefined);
   const configRevision = useRef(0);
+  const configurationConflict = useRef(false);
   const latestBatchId = useRef<string | undefined>(undefined);
+  const latestDraftRevision = useRef<number | undefined>(undefined);
   const latestConfiguration = useRef<ComposerVariantConfig | undefined>(undefined);
   const unmountFlushTimer = useRef<number | undefined>(undefined);
   const mounted = useRef(true);
   const originals = sourceAssets.filter((asset) => asset.kind === 'original');
   const hooks = sourceAssets.filter((asset) => asset.kind === 'hook');
   latestBatchId.current = state.batchId;
+  latestDraftRevision.current = state.draftRevision;
   latestConfiguration.current = editingConfig;
 
   useEffect(() => {
@@ -86,9 +89,10 @@ export function HookComposerPage() {
       restoreRequest.current?.abort();
       unmountFlushTimer.current = window.setTimeout(() => {
         const batchId = latestBatchId.current;
+        const draftRevision = latestDraftRevision.current;
         const configuration = latestConfiguration.current;
-        if (batchId && configuration) {
-          void flushComposerConfigurationKeepalive(batchId, configuration).catch(() => {});
+        if (batchId && draftRevision && configuration) {
+          void flushComposerConfigurationKeepalive(batchId, configuration, draftRevision).catch(() => {});
         }
         sourceUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
         sourceUrlsRef.current.clear();
@@ -132,6 +136,7 @@ export function HookComposerPage() {
         hooks: result.assets.filter((asset) => asset.kind === 'hook'),
       });
       dispatch({ type: 'batchCreated', batch: result.batch });
+      configurationConflict.current = false;
       setRestoreStatus('Đã khôi phục bản nháp. Hãy kiểm tra lại trước khi xuất video.');
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -187,7 +192,10 @@ export function HookComposerPage() {
   }, [activeGroup, activeHooks, activeOriginal, state.activeVariant]);
 
   useEffect(() => {
-    if (!state.batchId || !editingConfig || state.stage !== 'edit') return;
+    if (
+      !state.batchId || !state.draftRevision || !editingConfig
+      || state.stage !== 'edit' || configurationConflict.current
+    ) return;
     const revision = ++configRevision.current;
     const controller = new AbortController();
     saveRequest.current?.abort();
@@ -195,16 +203,24 @@ export function HookComposerPage() {
     setSaveState('saving');
     const timeout = window.setTimeout(async () => {
       try {
-        const batch = await saveComposerConfiguration(state.batchId!, editingConfig, controller.signal);
+        const batch = await saveComposerConfiguration(
+          state.batchId!, editingConfig, state.draftRevision!, controller.signal,
+        );
         if (controller.signal.aborted || revision !== configRevision.current) return;
-        const saved = batch.configurations[editingConfig.id];
-        if (saved) dispatch({ type: 'configurationSaved', batchId: batch.id, configuration: saved });
+        dispatch({ type: 'draftReplaced', draft: batch });
+        configurationConflict.current = false;
         setSaveState('saved');
         setSaveError(undefined);
       } catch (error) {
         if (controller.signal.aborted) return;
         setSaveState('error');
-        setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
+        if (error instanceof ComposerApiError && error.status === 409) {
+          configurationConflict.current = true;
+          setEditingConfig((current) => current?.reviewed ? { ...current, reviewed: false } : current);
+          setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+        } else {
+          setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
+        }
       }
     }, 450);
     return () => {
@@ -289,6 +305,7 @@ export function HookComposerPage() {
       if (controller.signal.aborted || revision !== sourceRevision.current) return;
       dispatch({ type: 'assetsLoaded', originals: readyOriginals, hooks: readyHooks });
       dispatch({ type: 'batchCreated', batch });
+      configurationConflict.current = false;
       persistComposerBatchId(window.localStorage, batch.id);
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -309,24 +326,37 @@ export function HookComposerPage() {
   };
 
   const persistCurrentConfiguration = async (): Promise<boolean> => {
-    if (!state.batchId || !editingConfig) return true;
+    if (!state.batchId || !state.draftRevision || !editingConfig) return true;
+    if (configurationConflict.current) {
+      setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+      return false;
+    }
     const controller = new AbortController();
     saveRequest.current?.abort();
     saveRequest.current = controller;
     setSaveState('saving');
     try {
-      const batch = await saveComposerConfiguration(state.batchId, editingConfig, controller.signal);
+      const batch = await saveComposerConfiguration(
+        state.batchId, editingConfig, state.draftRevision, controller.signal,
+      );
       if (controller.signal.aborted) return false;
       const saved = batch.configurations[editingConfig.id];
       if (!saved) throw new Error('The saved configuration could not be restored');
-      dispatch({ type: 'configurationSaved', batchId: batch.id, configuration: saved });
+      dispatch({ type: 'draftReplaced', draft: batch });
+      configurationConflict.current = false;
       setSaveState('saved');
       setSaveError(undefined);
       return true;
     } catch (error) {
       if (controller.signal.aborted) return false;
       setSaveState('error');
-      setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
+      if (error instanceof ComposerApiError && error.status === 409) {
+        configurationConflict.current = true;
+        setEditingConfig((current) => current?.reviewed ? { ...current, reviewed: false } : current);
+        setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+      } else {
+        setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
+      }
       return false;
     }
   };
@@ -348,7 +378,11 @@ export function HookComposerPage() {
   };
 
   const createExactPreview = async () => {
-    if (!state.batchId || !editingConfig) return;
+    if (!state.batchId || !state.draftRevision || !editingConfig) return;
+    if (configurationConflict.current) {
+      setExactPreview({ error: 'This draft changed. Reload it before creating an exact preview.' });
+      return;
+    }
     const controller = new AbortController();
     previewRequest.current?.abort();
     saveRequest.current?.abort();
@@ -356,11 +390,14 @@ export function HookComposerPage() {
     const revision = configRevision.current;
     setExactPreview({ status: 'Saving configuration…' });
     try {
-      const batch = await saveComposerConfiguration(state.batchId, editingConfig, controller.signal);
+      const batch = await saveComposerConfiguration(
+        state.batchId, editingConfig, state.draftRevision, controller.signal,
+      );
       if (controller.signal.aborted || revision !== configRevision.current) return;
       const saved = batch.configurations[editingConfig.id];
       if (!saved) throw new Error('The saved configuration could not be restored');
-      dispatch({ type: 'configurationSaved', batchId: batch.id, configuration: saved });
+      dispatch({ type: 'draftReplaced', draft: batch });
+      configurationConflict.current = false;
       let response = await requestExactPreview(batch.id, saved.id, saved.representativeHookId, controller.signal);
       while (!controller.signal.aborted && ['queued', 'processing'].includes(response.status)) {
         setExactPreview({ status: response.status === 'queued' ? 'Exact preview queued…' : 'Rendering exact preview…' });
@@ -373,7 +410,13 @@ export function HookComposerPage() {
       setPlayhead(saved.trimStart);
     } catch (error) {
       if (controller.signal.aborted) return;
-      setExactPreview({ error: error instanceof Error ? error.message : 'Exact preview could not be created' });
+      if (error instanceof ComposerApiError && error.status === 409) {
+        configurationConflict.current = true;
+        setEditingConfig((current) => current?.reviewed ? { ...current, reviewed: false } : current);
+        setExactPreview({ error: 'This draft changed. Reload it before creating an exact preview.' });
+      } else {
+        setExactPreview({ error: error instanceof Error ? error.message : 'Exact preview could not be created' });
+      }
     } finally {
       if (previewRequest.current === controller) previewRequest.current = undefined;
     }

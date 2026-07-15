@@ -57,6 +57,11 @@ const createHarness = async (now = 1_000) => {
   ]);
   for (const id of assetsById.keys()) await fs.writeFile(path.join(sources, `${id}.mp4`), id);
   const assets = {
+    requireAsset: async (id: string) => {
+      const asset = assetsById.get(id);
+      if (!asset) throw new Error('missing asset');
+      return structuredClone(asset);
+    },
     requireReadyAsset: async (id: string, kind: 'original' | 'hook') => {
       const asset = assetsById.get(id);
       if (!asset || asset.kind !== kind) throw new Error(`invalid ${kind}`);
@@ -268,7 +273,7 @@ test('missing completed output and failed jobs enqueue a replacement', async (t)
 test('preview route derives a trusted snapshot and rejects mismatched representatives', async (t) => {
   const harness = await createHarness();
   const drafts = new ComposerDraftStore(harness.root);
-  const draft = await drafts.create(['original-1'], ['hook-1']);
+  const draft = await drafts.create(['original-1'], ['hook-1'], { 'original-1': 1, 'hook-1': 1 });
   draft.durationGroups = [{ id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['hook-1'] }];
   draft.configurations['original-1:g-3.000'] = {
     id: 'original-1:g-3.000', originalId: 'original-1', durationGroupId: 'g-3.000',
@@ -322,7 +327,7 @@ test('preview route derives a trusted snapshot and rejects mismatched representa
 test('preview route conceals unexpected renderer paths and diagnostics', async (t) => {
   const harness = await createHarness();
   const drafts = new ComposerDraftStore(harness.root);
-  const draft = await drafts.create(['original-1'], ['hook-1']);
+  const draft = await drafts.create(['original-1'], ['hook-1'], { 'original-1': 1, 'hook-1': 1 });
   draft.durationGroups = [{ id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['hook-1'] }];
   draft.configurations['original-1:g-3.000'] = {
     id: 'original-1:g-3.000', originalId: 'original-1', durationGroupId: 'g-3.000',

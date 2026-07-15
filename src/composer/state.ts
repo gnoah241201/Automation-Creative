@@ -13,6 +13,8 @@ export interface ComposerState {
   stage: ComposerStage;
   tool: ComposerTool;
   batchId?: string;
+  draftRevision?: number;
+  assetRevisions: Record<string, number>;
   originals: ComposerAsset[];
   hooks: ComposerAsset[];
   durationGroups: HookDurationGroup[];
@@ -26,6 +28,7 @@ export const initialComposerState: ComposerState = {
   tool: 'insert',
   originals: [],
   hooks: [],
+  assetRevisions: {},
   durationGroups: [],
   configurations: {},
   selectedCellIds: [],
@@ -34,8 +37,8 @@ export const initialComposerState: ComposerState = {
 export type ComposerAction =
   | { type: 'assetsLoaded'; originals: ComposerAsset[]; hooks: ComposerAsset[] }
   | { type: 'batchCreated'; batch: ComposerBatchDraft }
+  | { type: 'draftReplaced'; draft: ComposerBatchDraft }
   | { type: 'selectVariant'; originalId: string; durationGroupId: string }
-  | { type: 'configurationSaved'; batchId: string; configuration: ComposerVariantConfig }
   | { type: 'toggleCellSelection'; cellId: string }
   | { type: 'setCellSelection'; cellIds: string[] }
   | { type: 'setTool'; tool: ComposerTool }
@@ -48,6 +51,8 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
         ...state,
         stage: 'sources',
         batchId: undefined,
+        draftRevision: undefined,
+        assetRevisions: {},
         originals: [...action.originals],
         hooks: [...action.hooks],
         durationGroups: groupHooksByDuration(action.hooks),
@@ -70,6 +75,8 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
       return {
         ...state,
         batchId: action.batch.id,
+        draftRevision: action.batch.revision,
+        assetRevisions: { ...action.batch.assetRevisions },
         stage: 'edit',
         originals,
         hooks,
@@ -79,31 +86,40 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
         selectedCellIds: [],
       };
     }
+    case 'draftReplaced': {
+      const groups = new Map(action.draft.durationGroups.map((group) => [group.id, group]));
+      const configurationsAreCanonical = Object.entries(action.draft.configurations).every(([id, configuration]) => {
+        const group = groups.get(configuration.durationGroupId);
+        return id === configuration.id
+          && id === `${configuration.originalId}:${configuration.durationGroupId}`
+          && action.draft.originalIds.includes(configuration.originalId)
+          && state.originals.some((original) => original.id === configuration.originalId)
+          && action.draft.hookIds.includes(configuration.representativeHookId)
+          && Boolean(group?.hookIds.includes(configuration.representativeHookId))
+          && state.hooks.some((hook) => hook.id === configuration.representativeHookId);
+      });
+      const assetRevisionsAreValid = [...action.draft.originalIds, ...action.draft.hookIds]
+        .every((id) => Number.isSafeInteger(action.draft.assetRevisions[id]) && action.draft.assetRevisions[id] > 0);
+      if (
+        state.batchId !== action.draft.id
+        || (state.draftRevision !== undefined && action.draft.revision < state.draftRevision)
+        || !configurationsAreCanonical
+        || !assetRevisionsAreValid
+      ) return state;
+      return {
+        ...state,
+        draftRevision: action.draft.revision,
+        assetRevisions: { ...action.draft.assetRevisions },
+        durationGroups: action.draft.durationGroups.map((group) => ({ ...group, hookIds: [...group.hookIds] })),
+        configurations: { ...action.draft.configurations },
+      };
+    }
     case 'selectVariant': {
       const hasOriginal = state.originals.some((original) => original.id === action.originalId);
       const hasGroup = state.durationGroups.some((group) => group.id === action.durationGroupId);
       return hasOriginal && hasGroup
         ? { ...state, activeVariant: { originalId: action.originalId, durationGroupId: action.durationGroupId } }
         : state;
-    }
-    case 'configurationSaved': {
-      const configuration = action.configuration;
-      const group = state.durationGroups.find((item) => item.id === configuration.durationGroupId);
-      const isCurrentBatch = state.batchId === action.batchId;
-      const hasOriginal = state.originals.some((original) => original.id === configuration.originalId);
-      const hasRepresentative = Boolean(
-        group?.hookIds.includes(configuration.representativeHookId)
-        && state.hooks.some((hook) => hook.id === configuration.representativeHookId),
-      );
-      const hasCanonicalId = configuration.id === `${configuration.originalId}:${configuration.durationGroupId}`;
-      if (!isCurrentBatch || !hasOriginal || !group || !hasRepresentative || !hasCanonicalId) return state;
-      return {
-        ...state,
-        configurations: {
-          ...state.configurations,
-          [configuration.id]: configuration,
-        },
-      };
     }
     case 'toggleCellSelection':
       return {

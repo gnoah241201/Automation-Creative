@@ -1,4 +1,19 @@
 import { ComposerBatchDraft, ComposerVariantConfig } from '../../shared/composer-contract.ts';
+import { ComposerAssetStore } from './composerAssetStore.ts';
+
+export class ComposerDraftStaleAssetsError extends Error {}
+
+export const assertDraftAssetsCurrent = async (
+  draft: ComposerBatchDraft,
+  assets: ComposerAssetStore,
+): Promise<void> => {
+  for (const id of [...draft.originalIds, ...draft.hookIds]) {
+    const asset = await assets.requireAsset(id);
+    if (draft.assetRevisions[id] !== asset.revision) {
+      throw new ComposerDraftStaleAssetsError('Composer sources changed; create a fresh batch');
+    }
+  }
+};
 
 export interface ComposerValidationResult {
   valid: boolean;

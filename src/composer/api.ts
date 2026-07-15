@@ -142,6 +142,7 @@ export const getComposerBatch = (
 export const saveComposerConfiguration = (
   batchId: string,
   configuration: ComposerVariantConfig,
+  expectedRevision: number,
   signal?: AbortSignal,
 ): Promise<ComposerBatchDraft> => fetch(
   `${API_BASE}/batches/${encodeURIComponent(batchId)}/configurations/${encodeURIComponent(configuration.id)}`,
@@ -149,7 +150,7 @@ export const saveComposerConfiguration = (
     method: 'PUT',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(configuration),
+    body: JSON.stringify({ configuration, expectedRevision }),
     signal,
   },
 ).then(json<ComposerBatchDraft>);
@@ -157,6 +158,7 @@ export const saveComposerConfiguration = (
 export const flushComposerConfigurationKeepalive = (
   batchId: string,
   configuration: ComposerVariantConfig,
+  expectedRevision: number,
 ): Promise<ComposerBatchDraft> => fetch(
   `${API_BASE}/batches/${encodeURIComponent(batchId)}/configurations/${encodeURIComponent(configuration.id)}`,
   {
@@ -164,7 +166,7 @@ export const flushComposerConfigurationKeepalive = (
     credentials: 'include',
     keepalive: true,
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(configuration),
+    body: JSON.stringify({ configuration, expectedRevision }),
   },
 ).then(json<ComposerBatchDraft>);
 
