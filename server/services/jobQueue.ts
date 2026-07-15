@@ -32,6 +32,11 @@ type InputUploadPaths = {
 const FINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
 
+const canonicalWorkDir = async (workDir: string): Promise<string> => {
+  const resolved = await fs.realpath(workDir).catch(() => path.resolve(workDir));
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+};
+
 /**
  * Cleanup interval: check for expired jobs every 5 minutes
  */
@@ -96,7 +101,7 @@ type QueueDeps = {
   localLibrary?: Pick<
     LocalLibraryService,
     'registerFromCompletedJob' | 'cleanupExpired' | 'reconcileHolds'
-  >;
+  > & Partial<Pick<LocalLibraryService, 'getRetainedWorkDirs'>>;
   diskCapacityGuard?: Pick<DiskCapacityGuard, 'requireCapacity'>;
   scheduleCleanup?: boolean;
 };
@@ -352,11 +357,23 @@ export class JobQueueService {
       (job) => job.status === 'completed' || job.status === 'failed',
     );
     await this.reconcileLibraryHolds(true);
-    await cleanupExpiredJobs(jobsToCheck, now, protectedJobIds);
     await this.localLibrary?.cleanupExpired(now);
+    const retainedWorkDirs = new Set(await Promise.all(
+      (await this.localLibrary?.getRetainedWorkDirs?.() ?? []).map(canonicalWorkDir),
+    ));
+    const jobWorkDirs = new Map(await Promise.all(jobsToCheck.map(async (job) => (
+      [job.id, await canonicalWorkDir(job.files.workDir)] as const
+    ))));
+    const effectiveProtectedJobIds = new Set([
+      ...protectedJobIds,
+      ...jobsToCheck
+        .filter((job) => retainedWorkDirs.has(jobWorkDirs.get(job.id)!))
+        .map((job) => job.id),
+    ]);
+    await cleanupExpiredJobs(jobsToCheck, now, effectiveProtectedJobIds);
 
     const expiredIds = jobsToCheck
-      .filter((job) => !protectedJobIds.has(job.id) && isManagedJobExpired({
+      .filter((job) => !effectiveProtectedJobIds.has(job.id) && isManagedJobExpired({
         ...job,
         status: job.status as 'completed' | 'failed',
       }, now))

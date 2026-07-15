@@ -25,11 +25,17 @@ import { composerBulkApplyMutations } from '../metrics.ts';
 
 type BulkApplyMetricScope = 'row' | 'column' | 'matrix';
 
-const bulkApplyMetricScope = (scope: ComposerBulkApplyScope): BulkApplyMetricScope => (
-  scope.allGroupsForOriginal && scope.groupForAllOriginals
-    ? 'matrix'
-    : scope.allGroupsForOriginal ? 'row' : 'column'
-);
+const classifyBulkApplyMetricScope = (body: unknown): BulkApplyMetricScope | null => {
+  const request = body as Record<string, unknown> | null;
+  const scope = request?.scope as Record<string, unknown> | null;
+  if (
+    typeof scope?.allGroupsForOriginal !== 'boolean'
+    || typeof scope?.groupForAllOriginals !== 'boolean'
+    || (!scope.allGroupsForOriginal && !scope.groupForAllOriginals)
+  ) return null;
+  if (scope.allGroupsForOriginal && scope.groupForAllOriginals) return 'matrix';
+  return scope.allGroupsForOriginal ? 'row' : 'column';
+};
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
 class InvalidPreviewRequestError extends Error {}
@@ -259,10 +265,9 @@ export const buildComposerBatchesRouter = (
   }, sendBulkApplyBodyError);
 
   router.post('/batches/:batchId/apply', express.json(), async (req, res) => {
-    let metricScope: BulkApplyMetricScope | null = null;
+    const metricScope = classifyBulkApplyMetricScope(req.body);
     try {
       const request = parseBulkApplyRequest(req.body, true);
-      metricScope = bulkApplyMetricScope(request.scope);
       const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
       await assertDraftAssetsCurrent(draft, assets);
       const plan = await buildBulkApplyPlan(

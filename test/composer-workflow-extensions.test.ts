@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -20,6 +21,7 @@ import { ComposerCleanupCoordinator } from '../server/services/composerCleanupCo
 import { ComposerDraftStore } from '../server/services/composerDraftStore.ts';
 import { LibraryDownloadBundleService } from '../server/services/libraryDownloadBundles.ts';
 import { LocalLibraryService } from '../server/services/localLibrary.ts';
+import { JobQueueService } from '../server/services/jobQueue.ts';
 import type { ComposerAsset, ComposerBatchDraft } from '../shared/composer-contract.ts';
 
 const counterValue = async (
@@ -63,35 +65,32 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
     createAsset('hook', 'hook-b', 1),
   ]);
   const drafts = new ComposerDraftStore(composerRoot);
-  const jobs = new Map<string, any>();
-  const queue = {
-    createComposerJob: async (spec: any, files: any, composer: any) => {
-      const job = {
-        id: `job-${jobs.size + 1}`, kind: 'compose' as const, spec, files, composer,
-        status: 'completed' as const, progress: 100, createdAt: now, startedAt: now, finishedAt: now,
+  const library = new LocalLibraryService({
+    managedRoot,
+    libraryRoot: path.join(composerRoot, 'library'),
+    now: () => now,
+  });
+  const renderedBytes = new Map<string, Buffer>();
+  const queue = new JobQueueService(4, {
+    tempRoot: composerRoot,
+    localLibrary: library,
+    scheduleCleanup: false,
+    diskCapacityGuard: { requireCapacity: async () => {} },
+    runComposerJob: (job) => {
+      const bytes = Buffer.from(`rendered-${job.spec.originalId}-${job.spec.hookId}`);
+      renderedBytes.set(job.id, bytes);
+      return {
+        child: { kill: () => true } as unknown as ChildProcessWithoutNullStreams,
+        completion: fs.writeFile(job.files.outputPath, bytes),
       };
-      jobs.set(job.id, job);
-      return job;
     },
-    getAllJobs: () => [...jobs.values()],
-    getJob: (id: string) => jobs.get(id),
-    cancelJob: async () => true,
-    runCleanupCycle: async () => {
-      const expiredJobIds = [...jobs.keys()];
-      jobs.clear();
-      return { expiredJobIds };
-    },
-  };
+  });
+  await queue.init();
   const renderer = new ComposerBatchRenderer({
     root: composerRoot,
     assets,
     queue,
     disk: { requireCapacity: async () => {} },
-  });
-  const library = new LocalLibraryService({
-    managedRoot,
-    libraryRoot: path.join(composerRoot, 'library'),
-    now: () => now,
   });
   const bundles = new LibraryDownloadBundleService(library, { now: () => now });
   const app = express();
@@ -110,13 +109,18 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
   const trimBefore = await counterValue(composerSourceTrimMutations, { status: 'success' });
   const trimConflictBefore = await counterValue(composerSourceTrimMutations, { status: 'conflict' });
   const trimInvalidBefore = await counterValue(composerSourceTrimMutations, { status: 'invalid' });
+  const trimErrorBefore = await counterValue(composerSourceTrimMutations, { status: 'error' });
   const applyBefore = await counterValue(composerBulkApplyMutations, { scope: 'matrix', status: 'success' });
   const applyConflictBefore = await counterValue(composerBulkApplyMutations, { scope: 'matrix', status: 'conflict' });
   const applyRowConflictBefore = await counterValue(composerBulkApplyMutations, { scope: 'row', status: 'conflict' });
+  const applyRowInvalidBefore = await counterValue(composerBulkApplyMutations, { scope: 'row', status: 'invalid' });
+  const applyRowErrorBefore = await counterValue(composerBulkApplyMutations, { scope: 'row', status: 'error' });
+  const applyColumnInvalidBefore = await counterValue(composerBulkApplyMutations, { scope: 'column', status: 'invalid' });
   const preparedBefore = await counterValue(composerLibraryBundles, { status: 'prepared' });
   const completedBefore = await counterValue(composerLibraryBundles, { status: 'completed' });
   const expiredBefore = await counterValue(composerLibraryBundles, { status: 'expired' });
   const abortedBefore = await counterValue(composerLibraryBundles, { status: 'aborted' });
+  const bundleErrorBefore = await counterValue(composerLibraryBundles, { status: 'error' });
 
   try {
     const trim = async (asset: ComposerAsset, start: number, end: number) => {
@@ -143,6 +147,14 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
       body: JSON.stringify({ range: { start: 4, end: 1 }, expectedRevision: trimmedOriginal.revision }),
     });
     assert.equal(invalidTrim.status, 400);
+    const setSourceTrim = assets.setSourceTrim.bind(assets);
+    assets.setSourceTrim = async () => { throw new Error('injected trim persistence failure'); };
+    const failedTrim = await fetch(`${baseUrl}/api/composer/assets/${originalA.id}/trim`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ range: { start: 1, end: 4 }, expectedRevision: trimmedOriginal.revision }),
+    });
+    assets.setSourceTrim = setSourceTrim;
+    assert.equal(failedTrim.status, 500);
 
     const createdResponse = await fetch(`${baseUrl}/api/composer/batches`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -210,25 +222,66 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
       }),
     });
     assert.equal(missingSourceApply.status, 409);
+    const invalidApply = await fetch(`${baseUrl}/api/composer/batches/${created.id}/apply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceConfigurationId: '',
+        scope: { allGroupsForOriginal: true, groupForAllOriginals: false },
+        expectedRevision: applied.revision,
+      }),
+    });
+    assert.equal(invalidApply.status, 400);
+    const invalidColumnApply = await fetch(`${baseUrl}/api/composer/batches/${created.id}/apply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceConfigurationId: '',
+        scope: { allGroupsForOriginal: false, groupForAllOriginals: true },
+        expectedRevision: applied.revision,
+      }),
+    });
+    assert.equal(invalidColumnApply.status, 400);
+    const beforeUnclassifiedScope = (await composerBulkApplyMutations.get()).values
+      .reduce((total, value) => total + value.value, 0);
+    const unclassifiedApply = await fetch(`${baseUrl}/api/composer/batches/${created.id}/apply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceConfigurationId: sourceConfiguration.id,
+        scope: { allGroupsForOriginal: false, groupForAllOriginals: false },
+        expectedRevision: applied.revision,
+      }),
+    });
+    assert.equal(unclassifiedApply.status, 400);
+    assert.equal(
+      (await composerBulkApplyMutations.get()).values.reduce((total, value) => total + value.value, 0),
+      beforeUnclassifiedScope,
+      'a structurally invalid scope has no invented metric scope label',
+    );
+    const applyConfigurations = drafts.applyConfigurations.bind(drafts);
+    drafts.applyConfigurations = async () => { throw new Error('injected draft persistence failure'); };
+    const failedApply = await fetch(`${baseUrl}/api/composer/batches/${created.id}/apply`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        sourceConfigurationId: sourceConfiguration.id,
+        scope: { allGroupsForOriginal: true, groupForAllOriginals: false },
+        expectedRevision: applied.revision,
+      }),
+    });
+    drafts.applyConfigurations = applyConfigurations;
+    assert.equal(failedApply.status, 500);
 
     const selectedCells = applied.originalIds.flatMap((originalId) => (
       applied.hookIds.map((hookId) => `${originalId}:${hookId}`)
     ));
     const submitted = await renderer.submit(applied, selectedCells);
     assert.equal(submitted.jobs.length, 4);
-    const outputs = [];
-    for (const responseJob of submitted.jobs) {
-      const job = jobs.get(responseJob.jobId)!;
-      await fs.writeFile(job.files.outputPath, `rendered-${job.spec.originalId}-${job.spec.hookId}`);
-      outputs.push(await library.registerOutput({
-        batchId: applied.id, jobId: job.id,
-        originalId: job.spec.originalId, hookId: job.spec.hookId,
-        originalName: job.spec.originalName, hookName: job.spec.hookName,
-        filename: job.spec.outputFilename,
-        duration: job.spec.trimEnd - job.spec.trimStart,
-        outputPath: job.files.outputPath, workDir: job.files.workDir, completedAt: now,
-      }));
-    }
+    await waitFor(async () => (
+      submitted.jobs.every((job) => queue.getJob(job.jobId)?.status === 'completed')
+      && (await library.listAll()).length === 4
+    ));
+    assert.equal(submitted.jobs.every((job) => queue.getJob(job.jobId)?.status === 'completed'), true);
+    const outputsByJobId = new Map((await library.listAll()).map((output) => [output.jobId, output]));
+    const outputs = submitted.jobs.map((job) => outputsByJobId.get(job.jobId)!);
+    assert.equal(outputs.every(Boolean), true, 'production queue completion registered every output');
 
     const prepareResponse = await fetch(`${baseUrl}/api/library/download-bundles`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
@@ -237,13 +290,33 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
     assert.equal(prepareResponse.status, 201);
     const prepared = await prepareResponse.json() as { token: string; downloadUrl: string };
     assert.equal((await library.listAll()).every((entry) => entry.holds.length === 1), true);
+    assert.equal(await directoryHasZip(managedRoot), false, 'bundle preparation does not persist a ZIP');
     const zipResponse = await fetch(`${baseUrl}${prepared.downloadUrl}`);
     assert.equal(zipResponse.status, 200);
     const zipEntries = readZipEntries(Buffer.from(await zipResponse.arrayBuffer()));
     assert.equal(zipEntries.length, 4);
-    assert.equal(new Set(zipEntries.map((entry) => entry.name.toLowerCase())).size, 4);
-    assert.equal(zipEntries.every((entry) => entry.bytes.length > 0), true);
+    assert.deepEqual(zipEntries.map((entry) => entry.name), outputs.map((output) => output.filename));
+    zipEntries.forEach((entry, index) => {
+      assert.deepEqual(entry.bytes, renderedBytes.get(outputs[index].jobId));
+    });
+    assert.equal(await directoryHasZip(managedRoot), false, 'completed stream does not persist a ZIP');
     await waitFor(async () => (await library.listAll()).every((entry) => entry.holds.length === 0));
+
+    const failingBundles = new LibraryDownloadBundleService({
+      resolveUsablePath: library.resolveUsablePath.bind(library),
+      hold: library.hold.bind(library),
+      release: async () => { throw new Error('injected bundle release failure'); },
+    }, { now: () => now });
+    const failingBundle = await failingBundles.prepare([outputs[0].id], 'workflow-user');
+    await assert.rejects(failingBundles.complete(failingBundle.token), /injected bundle release failure/);
+    assert.equal(await counterValue(composerLibraryBundles, { status: 'error' }), bundleErrorBefore + 1);
+    await assert.rejects(failingBundles.complete(failingBundle.token), /injected bundle release failure/);
+    assert.equal(
+      await counterValue(composerLibraryBundles, { status: 'error' }),
+      bundleErrorBefore + 1,
+      'retrying a failed completion does not double count the terminal error',
+    );
+    await library.release(outputs[0].id, failingBundle.referenceId);
 
     const pending = await bundles.prepare([outputs[0].id], 'workflow-user');
     assert.deepEqual((await library.listAll()).find((entry) => entry.id === outputs[0].id)?.holds, [pending.referenceId]);
@@ -254,13 +327,26 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
 
     const streaming = await bundles.prepare([outputs[1].id], 'workflow-user');
     assert.equal(bundles.claim(streaming.token, 'workflow-user').status, 'ready');
-    now = outputs[0].expiresAt + 1;
+    const streamingPath = (await library.resolveUsablePath(outputs[1].id))!.path;
+    const streamingWorkDir = path.dirname(path.dirname(streamingPath));
+    assert.equal(
+      (await fs.realpath(queue.getJob(outputs[1].jobId)!.files.workDir)).toLowerCase(),
+      (await fs.realpath(streamingWorkDir)).toLowerCase(),
+    );
+    assert.equal(
+      (await Promise.all((await library.getRetainedWorkDirs()).map((workDir) => fs.realpath(workDir))))
+        .map((workDir) => workDir.toLowerCase())
+        .includes((await fs.realpath(streamingWorkDir)).toLowerCase()),
+      true,
+    );
+    now = Math.max(...outputs.map((output) => output.expiresAt)) + 1;
     const cleanup = new ComposerCleanupCoordinator({
       root: composerRoot, queue, library, bundles,
     });
     await cleanup.runCleanupCycle(now);
     assert.equal((await library.listAll()).length, 1, 'streaming hold survives 24-hour cleanup');
     assert.deepEqual((await library.listAll())[0].holds, [streaming.referenceId]);
+    await fs.access(streamingPath);
     await bundles.abort(streaming.token);
     await cleanup.runCleanupCycle(now);
     assert.equal((await library.listAll()).length, 0);
@@ -269,26 +355,31 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
     assert.equal(await counterValue(composerSourceTrimMutations, { status: 'success' }), trimBefore + 2);
     assert.equal(await counterValue(composerSourceTrimMutations, { status: 'conflict' }), trimConflictBefore + 1);
     assert.equal(await counterValue(composerSourceTrimMutations, { status: 'invalid' }), trimInvalidBefore + 1);
+    assert.equal(await counterValue(composerSourceTrimMutations, { status: 'error' }), trimErrorBefore + 1);
     assert.equal(await counterValue(composerBulkApplyMutations, { scope: 'matrix', status: 'success' }), applyBefore + 1);
     assert.equal(await counterValue(composerBulkApplyMutations, { scope: 'matrix', status: 'conflict' }), applyConflictBefore + 1);
     assert.equal(await counterValue(composerBulkApplyMutations, { scope: 'row', status: 'conflict' }), applyRowConflictBefore + 1);
-    assert.equal(await counterValue(composerLibraryBundles, { status: 'prepared' }), preparedBefore + 3);
+    assert.equal(await counterValue(composerBulkApplyMutations, { scope: 'row', status: 'invalid' }), applyRowInvalidBefore + 1);
+    assert.equal(await counterValue(composerBulkApplyMutations, { scope: 'row', status: 'error' }), applyRowErrorBefore + 1);
+    assert.equal(await counterValue(composerBulkApplyMutations, { scope: 'column', status: 'invalid' }), applyColumnInvalidBefore + 1);
+    assert.equal(await counterValue(composerLibraryBundles, { status: 'prepared' }), preparedBefore + 4);
     assert.equal(await counterValue(composerLibraryBundles, { status: 'completed' }), completedBefore + 1);
     assert.equal(await counterValue(composerLibraryBundles, { status: 'expired' }), expiredBefore + 1);
     assert.equal(await counterValue(composerLibraryBundles, { status: 'aborted' }), abortedBefore + 1);
     assert.deepEqual(
       new Set((await composerSourceTrimMutations.get()).values.map((value) => value.labels.status)),
-      new Set(['success', 'conflict', 'invalid']),
+      new Set(['success', 'conflict', 'invalid', 'error']),
     );
     assert.deepEqual(
       new Set((await composerBulkApplyMutations.get()).values.map((value) => value.labels.scope)),
-      new Set(['row', 'matrix']),
+      new Set(['row', 'column', 'matrix']),
     );
     assert.deepEqual(
       new Set((await composerLibraryBundles.get()).values.map((value) => value.labels.status)),
-      new Set(['prepared', 'completed', 'expired', 'aborted']),
+      new Set(['prepared', 'completed', 'expired', 'aborted', 'error']),
     );
   } finally {
+    queue.stopCleanupScheduler();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await fs.rm(managedRoot, { recursive: true, force: true });
   }
