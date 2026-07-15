@@ -14,7 +14,9 @@ import { ComposerPreview } from './ComposerPreview.tsx';
 import { ComposerTimeline } from './ComposerTimeline.tsx';
 import { MediaPanel } from './MediaPanel.tsx';
 import { fitNineBySixteenCrop } from './crop.ts';
-import { SourceEditDrawer, SourceEditTab } from './SourceEditDrawer.tsx';
+import {
+  runWithSourceDiscardGuard, SourceEditBackground, SourceEditDrawer, SourceEditTab,
+} from './SourceEditDrawer.tsx';
 import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets.ts';
 import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
 import { ReviewMatrix } from './ReviewMatrix.tsx';
@@ -60,6 +62,8 @@ export function HookComposerPage() {
   const [sourceAssets, setSourceAssets] = useState<ComposerAsset[]>([]);
   const [sourceEdit, setSourceEdit] = useState<{ asset: ComposerAsset; tab: SourceEditTab }>();
   const [sourceCrop, setSourceCrop] = useState<ComposerCrop>();
+  const [sourceEditDirty, setSourceEditDirty] = useState(false);
+  const [sourceEditModal, setSourceEditModal] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string>();
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
@@ -271,7 +275,20 @@ export function HookComposerPage() {
     updateSourceAssets({ type: 'upsert', asset });
   };
 
+  const closeSourceEditor = () => {
+    setSourceEditDirty(false);
+    setSourceEditModal(false);
+    setSourceEdit(undefined);
+  };
+
+  const guardSourceInteraction = () => runWithSourceDiscardGuard(
+    Boolean(sourceEdit && sourceEditDirty),
+    () => window.confirm('Discard unsaved source changes?'),
+    closeSourceEditor,
+  );
+
   const removeSource = (assetId: string) => {
+    if (!guardSourceInteraction()) return;
     const url = sourceUrlsRef.current.get(assetId);
     if (url) URL.revokeObjectURL(url);
     sourceUrlsRef.current.delete(assetId);
@@ -284,6 +301,7 @@ export function HookComposerPage() {
   };
 
   const openSourceEditor = (asset: ComposerAsset, tab: SourceEditTab) => {
+    if (!guardSourceInteraction()) return;
     setSourceCrop(asset.crop ?? fitNineBySixteenCrop(asset.width, asset.height));
     setSourceEdit({ asset, tab });
   };
@@ -313,6 +331,7 @@ export function HookComposerPage() {
       setContinueError('Every retained source must be ready before a batch can be created.');
       return;
     }
+    if (!guardSourceInteraction()) return;
     setContinuing(true);
     setContinueError(undefined);
     const controller = new AbortController();
@@ -386,6 +405,7 @@ export function HookComposerPage() {
 
   const changeStage = async (stage: ComposerStage) => {
     if (stage === state.stage) return;
+    if (!guardSourceInteraction()) return;
     previewRequest.current?.abort();
     setExactPreview({});
     if (state.stage === 'edit' && !(await persistCurrentConfiguration())) return;
@@ -543,16 +563,18 @@ export function HookComposerPage() {
         </div>
         {state.stage === 'sources' ? (
           <div className={sourceEdit ? 'grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]' : 'min-w-0'}>
-            <MediaPanel
-              originals={originals}
-              hooks={hooks}
-              onAssetUploaded={retainSourceFile}
-              onAssetRemoved={removeSource}
-              onEditRequested={openSourceEditor}
-              onContinue={() => void continueToEdit()}
-              continuing={continuing}
-              continueError={continueError}
-            />
+            <SourceEditBackground modal={sourceEditModal}>
+              <MediaPanel
+                originals={originals}
+                hooks={hooks}
+                onAssetUploaded={retainSourceFile}
+                onAssetRemoved={removeSource}
+                onEditRequested={openSourceEditor}
+                onContinue={() => void continueToEdit()}
+                continuing={continuing}
+                continueError={continueError}
+              />
+            </SourceEditBackground>
             {sourceEdit && sourceCrop && (
               <SourceEditDrawer
                 key={`${sourceEdit.asset.id}:${sourceEdit.asset.revision}`}
@@ -562,10 +584,12 @@ export function HookComposerPage() {
                 crop={sourceCrop}
                 videoRef={sourceEditVideoRef}
                 confirmDiscard={() => window.confirm('Discard unsaved source changes?')}
+                onDirtyChange={setSourceEditDirty}
+                onModalChange={setSourceEditModal}
                 onCropChange={setSourceCrop}
                 onSaveCrop={saveCrop}
                 onSaveTrim={saveSourceTrim}
-                onClose={() => setSourceEdit(undefined)}
+                onClose={closeSourceEditor}
               />
             )}
           </div>

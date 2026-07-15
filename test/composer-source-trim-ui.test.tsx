@@ -4,8 +4,16 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ComposerAsset } from '../shared/composer-contract.ts';
 import { MediaCard } from '../src/composer/MediaPanel.tsx';
-import { canCloseSourceEditor, sourceDrawerIsModal, SourceEditDrawer } from '../src/composer/SourceEditDrawer.tsx';
-import { clampSourceTrim, pointerToSourceTime } from '../src/composer/sourceTrimGeometry.ts';
+import {
+  resolveSourceTabChange,
+  sourceTabCanSaveAndClose,
+  runWithSourceDiscardGuard,
+  SourceEditBackground,
+  canCloseSourceEditor,
+  sourceDrawerIsModal,
+  SourceEditDrawer,
+} from '../src/composer/SourceEditDrawer.tsx';
+import { clampSourceTrim, pointerToSourceTime, sourceTrimRangeForKey } from '../src/composer/sourceTrimGeometry.ts';
 
 const asset = (overrides: Partial<ComposerAsset> = {}): ComposerAsset => ({
   id: 'a',
@@ -48,6 +56,7 @@ test('source drawer edits a frame-snapped range and can restore the full source'
       crop={{ x: 0, y: 0, width: 1, height: 1 }}
       videoRef={{ current: null }}
       confirmDiscard={() => true}
+      onDirtyChange={() => {}}
       onCropChange={() => {}}
       onSaveCrop={async () => {}}
       onSaveTrim={async () => {}}
@@ -97,4 +106,54 @@ test('dirty source editor asks before closing while a clean editor closes direct
 test('source drawer is modal only below its desktop breakpoint', () => {
   assert.equal(sourceDrawerIsModal(1279), true);
   assert.equal(sourceDrawerIsModal(1280), false);
+});
+
+test('switching away from a dirty trim or crop tab confirms and resets that tab', () => {
+  let confirmations = 0;
+  const confirm = () => {
+    confirmations += 1;
+    return true;
+  };
+  assert.deepEqual(resolveSourceTabChange('trim', 'crop', 'trim', confirm), {
+    tab: 'crop',
+    discardedTab: 'trim',
+  });
+  assert.deepEqual(resolveSourceTabChange('crop', 'trim', 'crop', confirm), {
+    tab: 'trim',
+    discardedTab: 'crop',
+  });
+  assert.equal(confirmations, 2);
+
+  assert.deepEqual(resolveSourceTabChange('trim', 'crop', 'trim', () => false), {
+    tab: 'trim',
+  });
+});
+
+test('save closes only when no other source tab owns an unsaved edit', () => {
+  assert.equal(sourceTabCanSaveAndClose('trim', 'trim'), true);
+  assert.equal(sourceTabCanSaveAndClose('crop', undefined), true);
+  assert.equal(sourceTabCanSaveAndClose('trim', 'crop'), false);
+  assert.equal(sourceTabCanSaveAndClose('crop', 'trim'), false);
+});
+
+test('parent source interactions run only after the shared discard guard allows them', () => {
+  const actions: string[] = [];
+  assert.equal(runWithSourceDiscardGuard(true, () => false, () => actions.push('replace')), false);
+  assert.equal(runWithSourceDiscardGuard(true, () => true, () => actions.push('remove')), true);
+  assert.deepEqual(actions, ['remove']);
+});
+
+test('narrow source edit background is inert and hidden from assistive technology', () => {
+  const html = renderToStaticMarkup(<SourceEditBackground modal><button type="button">Remove</button></SourceEditBackground>);
+  assert.match(html, /inert=""/);
+  assert.match(html, /aria-hidden="true"/);
+});
+
+test('source trim sliders support arrows plus Home and End without crossing', () => {
+  const range = { start: 2, end: 10 };
+  assert.deepEqual(sourceTrimRangeForKey('start', 'ArrowRight', range, 20, 30), { start: 2 + 1 / 30, end: 10 });
+  assert.deepEqual(sourceTrimRangeForKey('start', 'End', range, 20, 30), { start: 10 - 1 / 30, end: 10 });
+  assert.deepEqual(sourceTrimRangeForKey('end', 'Home', range, 20, 30), { start: 2, end: 2 + 1 / 30 });
+  assert.deepEqual(sourceTrimRangeForKey('end', 'End', range, 20, 30), { start: 2, end: 20 });
+  assert.equal(sourceTrimRangeForKey('end', 'Escape', range, 20, 30), undefined);
 });

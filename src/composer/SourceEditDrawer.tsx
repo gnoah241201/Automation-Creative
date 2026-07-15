@@ -4,7 +4,7 @@ import { ComposerAsset, ComposerCrop, SourceTimeRange } from '../../shared/compo
 import { getEffectiveSourceRange } from '../../shared/composerSourceRange.ts';
 import { clampCrop } from './crop.ts';
 import { CropSelection } from './CropEditor.tsx';
-import { clampSourceTrim, pointerToSourceTime } from './sourceTrimGeometry.ts';
+import { clampSourceTrim, pointerToSourceTime, sourceTrimRangeForKey } from './sourceTrimGeometry.ts';
 
 export type SourceEditTab = 'trim' | 'crop';
 
@@ -15,6 +15,8 @@ export interface SourceEditDrawerProps {
   crop: ComposerCrop;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   confirmDiscard(): boolean;
+  onDirtyChange(dirty: boolean): void;
+  onModalChange?(modal: boolean): void;
   onCropChange(crop: ComposerCrop): void;
   onSaveCrop(crop: ComposerCrop): Promise<void>;
   onSaveTrim(range: SourceTimeRange): Promise<void>;
@@ -26,6 +28,46 @@ export const canCloseSourceEditor = (dirty: boolean, confirmDiscard: () => boole
 );
 
 export const sourceDrawerIsModal = (viewportWidth: number): boolean => viewportWidth < 1280;
+
+export interface SourceTabTransition {
+  tab: SourceEditTab;
+  discardedTab?: SourceEditTab;
+}
+
+export const resolveSourceTabChange = (
+  currentTab: SourceEditTab,
+  nextTab: SourceEditTab,
+  dirtyTab: SourceEditTab | undefined,
+  confirmDiscard: () => boolean,
+): SourceTabTransition => {
+  if (currentTab === nextTab) return { tab: currentTab };
+  if (dirtyTab === currentTab && !confirmDiscard()) return { tab: currentTab };
+  return dirtyTab === currentTab
+    ? { tab: nextTab, discardedTab: currentTab }
+    : { tab: nextTab };
+};
+
+export const sourceTabCanSaveAndClose = (
+  activeTab: SourceEditTab,
+  dirtyTab: SourceEditTab | undefined,
+): boolean => dirtyTab === undefined || dirtyTab === activeTab;
+
+export const runWithSourceDiscardGuard = (
+  dirty: boolean,
+  confirmDiscard: () => boolean,
+  action: () => void,
+): boolean => {
+  if (!canCloseSourceEditor(dirty, confirmDiscard)) return false;
+  action();
+  return true;
+};
+
+export function SourceEditBackground({ modal, children }: {
+  modal: boolean;
+  children: React.ReactNode;
+}) {
+  return <div inert={modal || undefined} aria-hidden={modal || undefined}>{children}</div>;
+}
 
 const SourceEditTabs = ({ value, onChange }: {
   value: SourceEditTab;
@@ -68,11 +110,21 @@ function SourceTrimControls({ asset, range, videoRef, onChange }: {
         onPointerCancel={() => { dragging.current = undefined; }}
       >
         <div className="absolute top-2 h-6 rounded bg-blue-500/35" style={{ left: `${(range.start / asset.duration) * 100}%`, right: `${100 - (range.end / asset.duration) * 100}%` }} />
-        <button type="button" role="slider" aria-label="Trim in handle" aria-valuemin={0} aria-valuemax={range.end} aria-valuenow={range.start} onPointerDown={(event) => {
+        <button type="button" role="slider" aria-orientation="horizontal" aria-label="Trim in handle" aria-valuemin={0} aria-valuemax={range.end - 1 / asset.frameRate} aria-valuenow={range.start} onKeyDown={(event) => {
+          const next = sourceTrimRangeForKey('start', event.key, range, asset.duration, asset.frameRate);
+          if (!next) return;
+          event.preventDefault();
+          onChange(next);
+        }} onPointerDown={(event) => {
           dragging.current = 'start';
           event.currentTarget.setPointerCapture(event.pointerId);
         }} className="absolute top-1 h-8 w-3 -translate-x-1/2 touch-none rounded bg-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: `${(range.start / asset.duration) * 100}%` }} />
-        <button type="button" role="slider" aria-label="Trim out handle" aria-valuemin={range.start} aria-valuemax={asset.duration} aria-valuenow={range.end} onPointerDown={(event) => {
+        <button type="button" role="slider" aria-orientation="horizontal" aria-label="Trim out handle" aria-valuemin={range.start + 1 / asset.frameRate} aria-valuemax={asset.duration} aria-valuenow={range.end} onKeyDown={(event) => {
+          const next = sourceTrimRangeForKey('end', event.key, range, asset.duration, asset.frameRate);
+          if (!next) return;
+          event.preventDefault();
+          onChange(next);
+        }} onPointerDown={(event) => {
           dragging.current = 'end';
           event.currentTarget.setPointerCapture(event.pointerId);
         }} className="absolute top-1 h-8 w-3 -translate-x-1/2 touch-none rounded bg-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: `${(range.end / asset.duration) * 100}%` }} />
@@ -96,36 +148,67 @@ function SourceTrimControls({ asset, range, videoRef, onChange }: {
 
 export function SourceEditDrawer(props: SourceEditDrawerProps) {
   const initialRange = getEffectiveSourceRange(props.asset);
+  const initialCrop = useRef(props.crop);
   const [tab, setTab] = useState<SourceEditTab>(props.initialTab);
   const [range, setRange] = useState<SourceTimeRange>({ start: initialRange.start, end: initialRange.end });
-  const [dirty, setDirty] = useState(false);
+  const [dirtyTab, setDirtyTab] = useState<SourceEditTab>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
   const [modal, setModal] = useState(() => typeof window !== 'undefined' && sourceDrawerIsModal(window.innerWidth));
   const closeButton = useRef<HTMLButtonElement>(null);
+  const dialog = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     closeButton.current?.focus();
-    const updateModal = () => setModal(sourceDrawerIsModal(window.innerWidth));
+    const updateModal = () => {
+      const next = sourceDrawerIsModal(window.innerWidth);
+      setModal(next);
+      props.onModalChange?.(next);
+    };
     updateModal();
     window.addEventListener('resize', updateModal);
     return () => {
       window.removeEventListener('resize', updateModal);
+      props.onModalChange?.(false);
       previouslyFocused?.focus();
     };
-  }, []);
+  }, [props.onModalChange]);
+
+  const setDirty = (nextTab: SourceEditTab) => {
+    setDirtyTab(nextTab);
+    props.onDirtyChange(true);
+  };
+  const clearDirty = () => {
+    setDirtyTab(undefined);
+    props.onDirtyChange(false);
+  };
+
+  const requestTabChange = (nextTab: SourceEditTab) => {
+    const transition = resolveSourceTabChange(tab, nextTab, dirtyTab, props.confirmDiscard);
+    if (transition.discardedTab === 'trim') setRange({ start: initialRange.start, end: initialRange.end });
+    if (transition.discardedTab === 'crop') props.onCropChange(initialCrop.current);
+    if (transition.discardedTab) clearDirty();
+    setTab(transition.tab);
+  };
 
   const requestClose = () => {
-    if (canCloseSourceEditor(dirty, props.confirmDiscard)) props.onClose();
+    if (canCloseSourceEditor(Boolean(dirtyTab), props.confirmDiscard)) {
+      clearDirty();
+      props.onClose();
+    }
   };
   const save = async () => {
+    if (!sourceTabCanSaveAndClose(tab, dirtyTab)) {
+      setError('Discard changes in the other source tab before saving.');
+      return;
+    }
     setSaving(true);
     setError(undefined);
     try {
       if (tab === 'trim') await props.onSaveTrim(range);
       else await props.onSaveCrop(props.crop);
-      setDirty(false);
+      clearDirty();
       props.onClose();
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Source changes could not be saved');
@@ -133,19 +216,40 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
     }
   };
 
+  const handleDialogKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key === 'Escape' && !saving) {
+      event.preventDefault();
+      requestClose();
+      return;
+    }
+    if (event.key !== 'Tab' || !modal) return;
+    const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])',
+    ) ?? []);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  };
+
   return (
-    <aside
-      role="dialog"
-      aria-modal={modal || undefined}
-      aria-label={`Edit ${props.asset.originalFilename}`}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape' && !saving) {
-          event.preventDefault();
-          requestClose();
-        }
-      }}
-      className="source-edit-drawer fixed inset-x-0 bottom-0 z-[120] max-h-[92vh] overflow-y-auto rounded-t-2xl border border-neutral-700 bg-neutral-900 p-4 shadow-2xl xl:static xl:z-auto xl:max-h-none xl:w-full xl:max-w-[420px] xl:rounded-2xl"
-    >
+    <>
+      {modal && <div data-source-edit-backdrop aria-hidden="true" onPointerDown={requestClose} className="fixed inset-0 z-[119] bg-black/70 xl:hidden" />}
+      <aside
+        ref={dialog}
+        role="dialog"
+        aria-modal={modal || undefined}
+        aria-label={`Edit ${props.asset.originalFilename}`}
+        data-modal-behavior="focus-trap"
+        onKeyDown={handleDialogKeyDown}
+        className="source-edit-drawer fixed inset-x-0 bottom-0 z-[120] max-h-[92vh] overflow-y-auto rounded-t-2xl border border-neutral-700 bg-neutral-900 p-4 shadow-2xl xl:static xl:z-auto xl:max-h-none xl:w-full xl:max-w-[420px] xl:rounded-2xl"
+      >
       <div className="mb-4 flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wider text-blue-400">Edit source</p>
@@ -153,20 +257,20 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
         </div>
         <button ref={closeButton} type="button" disabled={saving} onClick={requestClose} aria-label="Close source editor" className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white"><X className="h-5 w-5" /></button>
       </div>
-      <SourceEditTabs value={tab} onChange={setTab} />
+      <SourceEditTabs value={tab} onChange={requestTabChange} />
       <div className="relative mt-4 overflow-hidden rounded-xl bg-black" style={{ aspectRatio: `${props.asset.width}/${props.asset.height}` }}>
         <video ref={props.videoRef} src={props.sourceUrl} aria-label={`Source preview for ${props.asset.originalFilename}`} controls muted playsInline preload="metadata" onTimeUpdate={(event) => {
           if (event.currentTarget.currentTime >= range.end) event.currentTarget.pause();
         }} className="h-full w-full object-contain" />
         {tab === 'crop' && <CropSelection crop={props.crop} sourceWidth={props.asset.width} sourceHeight={props.asset.height} onChange={(crop) => {
           props.onCropChange(clampCrop(crop));
-          setDirty(true);
+          setDirty('crop');
         }} />}
       </div>
       <div className="mt-4">
         {tab === 'trim' && <SourceTrimControls asset={props.asset} range={range} videoRef={props.videoRef} onChange={(next) => {
           setRange(next);
-          setDirty(true);
+          setDirty('trim');
         }} />}
       </div>
       {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
@@ -176,6 +280,7 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
           {saving && <LoaderCircle className="h-4 w-4 animate-spin" />}{saving ? 'Saving...' : tab === 'trim' ? 'Save segment' : 'Save crop'}
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

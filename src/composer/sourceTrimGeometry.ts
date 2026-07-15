@@ -30,3 +30,35 @@ export const pointerToSourceTime = (
   const progress = Math.min(1, Math.max(0, (clientX - left) / width));
   return snapSourceTime(progress * duration, frameRate);
 };
+
+export type SourceTrimHandle = 'start' | 'end';
+
+export const sourceTrimRangeForKey = (
+  handle: SourceTrimHandle,
+  key: string,
+  range: SourceTimeRange,
+  duration: number,
+  frameRate: number,
+): SourceTimeRange | undefined => {
+  const frame = 1 / frameRate;
+  const lastFrameEnd = Math.floor(duration * frameRate) / frameRate;
+  const delta = key === 'ArrowLeft' || key === 'ArrowDown'
+    ? -frame
+    : key === 'ArrowRight' || key === 'ArrowUp'
+      ? frame
+      : undefined;
+  if (delta === undefined && key !== 'Home' && key !== 'End') return undefined;
+
+  if (handle === 'start') {
+    const requested = key === 'Home' ? 0 : key === 'End' ? range.end - frame : range.start + delta!;
+    return {
+      start: snapSourceTime(Math.min(range.end - frame, Math.max(0, requested)), frameRate),
+      end: range.end,
+    };
+  }
+  const requested = key === 'Home' ? range.start + frame : key === 'End' ? lastFrameEnd : range.end + delta!;
+  return {
+    start: range.start,
+    end: snapSourceTime(Math.min(lastFrameEnd, Math.max(range.start + frame, requested)), frameRate),
+  };
+};
