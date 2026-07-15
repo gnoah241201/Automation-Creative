@@ -6,6 +6,7 @@ import path from 'node:path';
 import express from 'express';
 import test from 'node:test';
 import { buildLibraryRouter } from '../server/routes/library.ts';
+import { safeApplicationErrorHandler } from '../server/middleware/safeApplicationError.ts';
 import { JobQueueService } from '../server/services/jobQueue.ts';
 import {
   LibraryBundleUnavailableError,
@@ -53,7 +54,7 @@ const readZipNames = (body: Buffer): string[] => {
   return names;
 };
 
-const requestRawBundlePreparation = async (body: string) => {
+const requestRawBundlePreparation = async (body: string, contentType = 'application/json') => {
   const harness = await createHarness();
   const bundles = new LibraryDownloadBundleService(harness.library);
   const app = express();
@@ -61,13 +62,14 @@ const requestRawBundlePreparation = async (body: string) => {
     res.locals.authUsername = 'admin';
     next();
   }, buildLibraryRouter(harness.library, bundles));
+  app.use(safeApplicationErrorHandler);
   const server = app.listen(0);
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const { port } = server.address() as AddressInfo;
   try {
     const response = await fetch(`http://127.0.0.1:${port}/api/library/download-bundles`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': contentType },
       body,
     });
     return {
@@ -106,6 +108,47 @@ test('bundle preparation maps oversized JSON to a safe typed response', async ()
   });
   assert.equal(response.body.includes(response.managedRoot), false);
   assert.equal(response.body.includes('PayloadTooLargeError'), false);
+});
+
+test('final application handler redacts a forwarded unsupported JSON charset error', async () => {
+  const response = await requestRawBundlePreparation(
+    JSON.stringify({ ids: [] }),
+    'application/json; charset=iso-8859-1',
+  );
+
+  assert.equal(response.status, 415);
+  assert.match(response.contentType ?? '', /^application\/json/);
+  assert.deepEqual(JSON.parse(response.body), {
+    error: 'UnsupportedMediaType',
+    message: 'Request content type is not supported',
+  });
+  assert.equal(response.body.includes(response.managedRoot), false);
+  assert.equal(response.body.includes('charset'), false);
+  assert.equal(response.body.includes('UnsupportedMediaTypeError'), false);
+});
+
+test('final application handler redacts an unexpected server error', async () => {
+  const secretPath = 'D:\\private\\managed\\entries.json';
+  const app = express();
+  app.get('/failure', () => { throw new Error(`EACCES ${secretPath}`); });
+  app.use(safeApplicationErrorHandler);
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/failure`);
+    const body = await response.text();
+    assert.equal(response.status, 500);
+    assert.match(response.headers.get('content-type') ?? '', /^application\/json/);
+    assert.deepEqual(JSON.parse(body), {
+      error: 'InternalServerError',
+      message: 'Request could not be completed',
+    });
+    assert.equal(body.includes(secretPath), false);
+    assert.equal(body.includes('EACCES'), false);
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
 });
 
 test('bundle preparation holds every selected usable output atomically', async () => {

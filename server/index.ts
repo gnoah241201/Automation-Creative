@@ -19,6 +19,7 @@ import { managedRenderRoot } from './services/fileStore';
 import { ComposerBatchRenderer } from './services/composerBatchRenderer';
 import { ComposerCleanupCoordinator } from './services/composerCleanupCoordinator';
 import { LibraryDownloadBundleService } from './services/libraryDownloadBundles';
+import { safeApplicationErrorHandler } from './middleware/safeApplicationError';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -410,6 +411,7 @@ const start = async () => {
     composerBatchRenderer,
   ));
   app.use('/api/library', requireAuth, buildLibraryRouter(localLibrary, libraryBundles));
+  app.use(safeApplicationErrorHandler);
 
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);
