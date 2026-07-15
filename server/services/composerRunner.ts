@@ -17,7 +17,14 @@ export const runComposerJob = (
     hookPath: job.files.backgroundVideoPath,
     outputPath: job.files.outputPath,
     encoder: getEncoder(),
-    ...job.composer,
+    originalDuration: job.composer.original.duration,
+    hookDuration: job.composer.hook.duration,
+    originalSourceRange: job.composer.original.sourceRange,
+    hookSourceRange: job.composer.hook.sourceRange,
+    originalHasAudio: job.composer.original.hasAudio,
+    hookHasAudio: job.composer.hook.hasAudio,
+    originalCrop: job.composer.original.crop,
+    hookCrop: job.composer.hook.crop,
   });
   const child = spawn(getFfmpegPath(), args, { stdio: ['ignore', 'pipe', 'pipe'] });
   return observeFfmpegProcess(

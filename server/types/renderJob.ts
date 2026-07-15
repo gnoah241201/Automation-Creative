@@ -1,5 +1,5 @@
 import { RenderJobStatus, RenderSpec } from '../../shared/render-contract';
-import { ComposerCrop, ComposerRenderSpec } from '../../shared/composer-contract';
+import { ComposerCrop, ComposerRenderSpec, SourceTimeRange } from '../../shared/composer-contract';
 
 export interface JobFiles {
   foregroundPath: string;
@@ -30,16 +30,19 @@ export interface ResizeJobRecord extends CommonNativeJobRecord {
   spec: RenderSpec;
 }
 
+export interface ComposerSourceSnapshot {
+  duration: number;
+  hasAudio: boolean;
+  sourceRange: SourceTimeRange;
+  crop?: ComposerCrop;
+}
+
 export interface ComposerJobRecord extends CommonNativeJobRecord {
   kind: 'compose' | 'compose-preview';
   spec: ComposerRenderSpec;
   composer: {
-    originalDuration: number;
-    hookDuration: number;
-    originalHasAudio: boolean;
-    hookHasAudio: boolean;
-    originalCrop?: ComposerCrop;
-    hookCrop?: ComposerCrop;
+    original: ComposerSourceSnapshot;
+    hook: ComposerSourceSnapshot;
   };
 }
 

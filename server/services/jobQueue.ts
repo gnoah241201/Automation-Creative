@@ -45,6 +45,37 @@ const isComposerJob = (job: NativeJobRecord): job is ComposerJobRecord => (
   job.kind === 'compose' || job.kind === 'compose-preview'
 );
 
+type LegacyComposerMetadata = {
+  originalDuration: number;
+  hookDuration: number;
+  originalHasAudio: boolean;
+  hookHasAudio: boolean;
+  originalCrop?: ComposerJobRecord['composer']['original']['crop'];
+  hookCrop?: ComposerJobRecord['composer']['hook']['crop'];
+};
+
+const normalizeComposerJob = (job: NativeJobRecord): NativeJobRecord => {
+  if (!isComposerJob(job) || 'original' in job.composer) return job;
+  const legacy = job.composer as unknown as LegacyComposerMetadata;
+  return {
+    ...job,
+    composer: {
+      original: {
+        duration: legacy.originalDuration,
+        hasAudio: legacy.originalHasAudio,
+        sourceRange: { start: 0, end: legacy.originalDuration },
+        crop: legacy.originalCrop,
+      },
+      hook: {
+        duration: legacy.hookDuration,
+        hasAudio: legacy.hookHasAudio,
+        sourceRange: { start: 0, end: legacy.hookDuration },
+        crop: legacy.hookCrop,
+      },
+    },
+  };
+};
+
 /**
  * RESTART RECOVERY POLICY:
  * 
@@ -125,7 +156,8 @@ export class JobQueueService {
     let failed = 0;
     let requeued = 0;
 
-    for (const job of persistedJobs) {
+    for (const persistedJob of persistedJobs) {
+      const job = normalizeComposerJob(persistedJob);
       // Check if this is a recoverable state
       const originalStatus = job.status;
       if (originalStatus === 'processing' || originalStatus === 'cancelling') {

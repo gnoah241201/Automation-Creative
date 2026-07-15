@@ -1,4 +1,4 @@
-import { ComposerCrop, ComposerRenderSpec } from '../../shared/composer-contract.ts';
+import { ComposerCrop, ComposerRenderSpec, SourceTimeRange } from '../../shared/composer-contract.ts';
 import { EncoderMode } from '../services/encoderConfig.ts';
 
 const MAX_GROUP_DURATION_SPREAD_SECONDS = 0.1;
@@ -9,6 +9,8 @@ export interface ComposerCommandParams {
   hookPath: string;
   originalDuration: number;
   hookDuration: number;
+  originalSourceRange: SourceTimeRange;
+  hookSourceRange: SourceTimeRange;
   originalHasAudio: boolean;
   hookHasAudio: boolean;
   originalCrop?: ComposerCrop;
@@ -31,6 +33,17 @@ const validateCrop = (crop: ComposerCrop | undefined, name: string): void => {
   ) {
     throw new Error(`${name} crop must be normalized inside the display frame`);
   }
+};
+
+const validateSourceRange = (range: SourceTimeRange, duration: number, name: string): void => {
+  if (
+    !range
+    || !Number.isFinite(range.start)
+    || !Number.isFinite(range.end)
+    || range.start < 0
+    || range.end <= range.start
+    || Math.abs((range.end - range.start) - duration) > Number.EPSILON * Math.max(1, range.end, duration) * 4
+  ) throw new Error(`${name} source range must match its effective duration`);
 };
 
 const validateParams = (params: ComposerCommandParams): void => {
@@ -81,11 +94,13 @@ const validateParams = (params: ComposerCommandParams): void => {
 
   validateCrop(params.originalCrop, 'Original');
   validateCrop(params.hookCrop, 'Hook');
+  validateSourceRange(params.originalSourceRange, params.originalDuration, 'Original');
+  validateSourceRange(params.hookSourceRange, params.hookDuration, 'Hook');
 };
 
 const normalizeVideo = (
   index: number,
-  duration: number,
+  range: SourceTimeRange,
   crop: ComposerCrop | undefined,
   label: string,
   width: number,
@@ -94,17 +109,20 @@ const normalizeVideo = (
   const cropFilter = crop
     ? `crop=iw*${crop.width}:ih*${crop.height}:iw*${crop.x}:ih*${crop.y},`
     : '';
-  return `[${index}:v]${cropFilter}scale=${width}:${height}:flags=lanczos,fps=30,format=yuv420p,setsar=1,trim=duration=${duration},setpts=PTS-STARTPTS[${label}]`;
+  return `[${index}:v]trim=start=${range.start}:end=${range.end},setpts=PTS-STARTPTS,${cropFilter}scale=${width}:${height}:flags=lanczos,fps=30,format=yuv420p,setsar=1[${label}]`;
 };
 
 const normalizeAudio = (
   index: number,
   hasAudio: boolean,
+  range: SourceTimeRange,
   duration: number,
   label: string,
 ): string => {
-  const source = hasAudio ? `[${index}:a]` : 'anullsrc=channel_layout=stereo:sample_rate=48000,';
-  return `${source}atrim=duration=${duration},aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS[${label}]`;
+  const temporal = hasAudio
+    ? `[${index}:a]atrim=start=${range.start}:end=${range.end}`
+    : `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${duration}`;
+  return `${temporal},asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[${label}]`;
 };
 
 export const buildComposerCommand = (params: ComposerCommandParams): string[] => {
@@ -114,10 +132,10 @@ export const buildComposerCommand = (params: ComposerCommandParams): string[] =>
   const width = spec.mode === 'preview' ? 360 : 1080;
   const height = spec.mode === 'preview' ? 640 : 1920;
   const filters = [
-    normalizeVideo(0, params.originalDuration, params.originalCrop, 'original_v', width, height),
-    normalizeVideo(1, params.hookDuration, params.hookCrop, 'hook_v', width, height),
-    normalizeAudio(0, params.originalHasAudio, params.originalDuration, 'original_a'),
-    normalizeAudio(1, params.hookHasAudio, params.hookDuration, 'hook_a'),
+    normalizeVideo(0, params.originalSourceRange, params.originalCrop, 'original_v', width, height),
+    normalizeVideo(1, params.hookSourceRange, params.hookCrop, 'hook_v', width, height),
+    normalizeAudio(0, params.originalHasAudio, params.originalSourceRange, params.originalDuration, 'original_a'),
+    normalizeAudio(1, params.hookHasAudio, params.hookSourceRange, params.hookDuration, 'hook_a'),
   ];
   const segments: Array<{ video: string; audio: string }> = [];
   const isMiddleInsertion = spec.insertAt > 0 && spec.insertAt < params.originalDuration;

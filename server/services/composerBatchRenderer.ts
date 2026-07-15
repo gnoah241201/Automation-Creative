@@ -7,6 +7,7 @@ import {
 import {
   buildComposerOutputFilename, deriveComposerMatrix, estimateComposerOutputBytes, groupHooksByDuration,
 } from '../../shared/composerTimeline.ts';
+import { getEffectiveSourceRange } from '../../shared/composerSourceRange.ts';
 import { ComposerJobRecord, JobFiles, NativeJobRecord } from '../types/renderJob.ts';
 import { validateComposerConfiguration } from './composerValidation.ts';
 
@@ -135,12 +136,16 @@ export class ComposerBatchRenderer {
 
     const originalById = new Map(originals.map((item) => [item.id, item]));
     const hookById = new Map(hooks.map((item) => [item.id, item]));
+    const originalRangeById = new Map(originals.map((item) => [item.id, getEffectiveSourceRange(item)]));
+    const hookRangeById = new Map(hooks.map((item) => [item.id, getEffectiveSourceRange(item)]));
     let snapshots = selected.map((cell): RenderSnapshot => {
       const outputId = `${cell.originalId}:${cell.hookId}`;
       const original = originalById.get(cell.originalId)!;
       const hook = hookById.get(cell.hookId)!;
+      const originalRange = originalRangeById.get(original.id)!;
+      const hookRange = hookRangeById.get(hook.id)!;
       const candidate = batch.configurations[cell.configurationId];
-      const validation = validateComposerConfiguration(batch, candidate, original.duration);
+      const validation = validateComposerConfiguration(batch, candidate, originalRange.duration);
       if ('message' in validation) throw new Error(`Selected output ${outputId} has an invalid configuration: ${validation.message}`);
       if (!validation.config.reviewed) throw new Error(`Selected output ${outputId} has an unreviewed configuration`);
       const configuration = validation.config;
@@ -153,10 +158,16 @@ export class ComposerBatchRenderer {
           outputFilename: buildComposerOutputFilename(original.originalFilename, hook.originalFilename), mode: 'final',
         },
         composer: {
-          originalDuration: original.duration, hookDuration: hook.duration,
-          originalHasAudio: original.hasAudio, hookHasAudio: hook.hasAudio,
-          originalCrop: original.crop ? structuredClone(original.crop) : undefined,
-          hookCrop: hook.crop ? structuredClone(hook.crop) : undefined,
+          original: {
+            duration: originalRange.duration, hasAudio: original.hasAudio,
+            sourceRange: { start: originalRange.start, end: originalRange.end },
+            crop: original.crop ? structuredClone(original.crop) : undefined,
+          },
+          hook: {
+            duration: hookRange.duration, hasAudio: hook.hasAudio,
+            sourceRange: { start: hookRange.start, end: hookRange.end },
+            crop: hook.crop ? structuredClone(hook.crop) : undefined,
+          },
         },
         originalSourcePath: this.assets.getSourcePath(original.id, original.originalFilename),
         hookSourcePath: this.assets.getSourcePath(hook.id, hook.originalFilename),

@@ -61,7 +61,7 @@ const fixture = async (options: { failEnqueueAt?: number; duplicateNames?: boole
     queue,
     disk: { requireCapacity: async (_root, bytes) => { capacity.push(bytes); } },
   });
-  return { root, renderer, queue, calls, cancelled, jobs, capacity };
+  return { root, renderer, queue, calls, cancelled, jobs, capacity, originals, hooks };
 };
 
 test('render snapshots one job per selected valid cell in deterministic order', async (t) => {
@@ -70,6 +70,30 @@ test('render snapshots one job per selected valid cell in deterministic order', 
   assert.equal(result.jobs.length, 3);
   assert.deepEqual(result.jobs.map((job) => job.outputFilename), ['o1__h1.mp4', 'o1__h2.mp4', 'o2__h1.mp4']);
   assert.deepEqual(f.capacity, [estimateComposerOutputBytes([6, 6, 6]) + 12]);
+});
+
+test('render snapshots effective source ranges independently for original and hook', async (t) => {
+  const f = await fixture(); t.after(() => fs.rm(f.root, { recursive: true, force: true }));
+  f.originals[0].sourceTrimStart = 0.5;
+  f.originals[0].sourceTrimEnd = 2.5;
+  f.hooks[0].sourceTrimStart = 1;
+  f.hooks[0].sourceTrimEnd = 3;
+  const trimmedDraft = draft();
+  trimmedDraft.durationGroups = [{ id: 'g-2.000', minDuration: 2, maxDuration: 2, hookIds: ['h1'] }, { id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['h2'] }];
+  trimmedDraft.configurations['o1:g-2.000'] = {
+    ...config('o1', 'g-2.000'), representativeHookId: 'h1', trimEnd: 4,
+  };
+
+  await f.renderer.submit(trimmedDraft, ['o1:h1']);
+  const job = f.calls[0];
+  assert.deepEqual(job.composer.original, {
+    duration: 2, hasAudio: true, sourceRange: { start: 0.5, end: 2.5 }, crop: undefined,
+  });
+  assert.deepEqual(job.composer.hook, {
+    duration: 2, hasAudio: true, sourceRange: { start: 1, end: 3 }, crop: undefined,
+  });
+  f.originals[0].sourceTrimStart = 1;
+  assert.deepEqual(job.composer.original.sourceRange, { start: 0.5, end: 2.5 });
 });
 
 test('render rejects unknown, duplicate, excessive, and unreviewed selections before enqueue', async (t) => {

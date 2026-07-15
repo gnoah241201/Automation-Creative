@@ -16,6 +16,7 @@ import { buildComposerBatchesRouter } from '../server/routes/composerBatches.ts'
 const crop = { x: 0, y: 0, width: 1, height: 1 };
 const keyFixture = () => ({
   originalId: 'original-1', hookId: 'hook-1', originalCrop: crop, hookCrop: crop,
+  originalSourceRange: { start: 0, end: 10 }, hookSourceRange: { start: 0, end: 3 },
   insertAt: 2, trimStart: 0, trimEnd: 13, transition: 'cut' as const,
 });
 
@@ -84,6 +85,8 @@ test('preview cache key changes for every render-affecting input and is canonica
   for (const changed of [
     { ...base, originalId: 'original-2' },
     { ...base, hookId: 'hook-2' },
+    { ...base, originalSourceRange: { start: 1, end: 9 } },
+    { ...base, hookSourceRange: { start: 1, end: 2 } },
     { ...base, insertAt: 2.1 },
     { ...base, trimStart: 0.1 },
     { ...base, trimEnd: 12.9 },
@@ -129,8 +132,11 @@ test('concurrent identical requests enqueue one immutable staged preview job', a
   assert.equal(await fs.readFile(job.files.foregroundPath, 'utf8'), 'original-1');
   harness.request.insertAt = 8;
   harness.assetsById.get('hook-1')!.duration = 99;
+  harness.assetsById.get('hook-1')!.sourceTrimStart = 1;
   assert.equal(job.spec.insertAt, 2);
-  assert.equal(job.composer.hookDuration, 3);
+  assert.equal(job.composer.hook.duration, 3);
+  assert.deepEqual(job.composer.original.sourceRange, { start: 0, end: 10 });
+  assert.deepEqual(job.composer.hook.sourceRange, { start: 0, end: 3 });
 });
 
 test('expired metadata is not served as a cache hit', async (t) => {

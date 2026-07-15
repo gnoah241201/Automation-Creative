@@ -175,7 +175,7 @@ export const buildComposerBatchesRouter = (
         } catch {
           throw new InvalidPreviewRequestError('Preview source is unavailable');
         }
-        const validation = validateComposerConfiguration(draft, configuration, original.duration);
+        const validation = validateComposerConfiguration(draft, configuration, getEffectiveSourceDuration(original));
         if ('message' in validation) throw new InvalidPreviewRequestError(validation.message);
         const request: PreviewRequest = {
           batchId: draft.id,

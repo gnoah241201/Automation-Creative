@@ -37,6 +37,8 @@ const commandFixture = (
     hookPath: '/input/hook.mp4',
     originalDuration: 30,
     hookDuration: 3,
+    originalSourceRange: { start: 0, end: 30 },
+    hookSourceRange: { start: 0, end: 3 },
     originalHasAudio: true,
     hookHasAudio: true,
     outputPath: '/output/result.mp4',
@@ -44,6 +46,21 @@ const commandFixture = (
     ...parameterOverrides,
   };
 };
+
+test('source time trims happen before crop and composition', () => {
+  const graph = filterGraph(buildComposerCommand(commandFixture({
+    originalSourceRange: { start: 2, end: 12 },
+    hookSourceRange: { start: 1, end: 4 },
+    originalDuration: 10,
+    hookDuration: 3,
+    insertAt: 5,
+    trimEnd: 13,
+    originalCrop: { x: 0.25, y: 0, width: 0.5, height: 1 },
+  })));
+
+  assert.match(graph, /\[0:v\]trim=start=2:end=12,setpts=PTS-STARTPTS,crop=/);
+  assert.match(graph, /\[1:a\]atrim=start=1:end=4,asetpts=PTS-STARTPTS/);
+});
 
 const filterGraph = (args: string[]): string => {
   const index = args.indexOf('-filter_complex');
@@ -96,7 +113,7 @@ test('missing hook audio generates duration-bounded stereo silence', () => {
 
   assert.match(
     graph,
-    /anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=3,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo,asetpts=PTS-STARTPTS\[hook_a\]/,
+    /anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=3,asetpts=PTS-STARTPTS,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo\[hook_a\]/,
   );
 });
 
@@ -115,7 +132,7 @@ test('applies normalized crop before final-size square-pixel normalization', () 
 
   assert.match(
     graph,
-    /\[0:v\]crop=iw\*0.421875:ih\*1:iw\*0.2890625:ih\*0,scale=1080:1920:flags=lanczos,fps=30,format=yuv420p,setsar=1,trim=duration=30,setpts=PTS-STARTPTS\[original_v\]/,
+    /\[0:v\]trim=start=0:end=30,setpts=PTS-STARTPTS,crop=iw\*0.421875:ih\*1:iw\*0.2890625:ih\*0,scale=1080:1920:flags=lanczos,fps=30,format=yuv420p,setsar=1\[original_v\]/,
   );
   assert.equal(args.filter((arg) => arg === '-autorotate').length, 2);
 });

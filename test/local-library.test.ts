@@ -538,7 +538,8 @@ test('completed final composer jobs register once and previews never enter the l
     trimStart: 1, trimEnd: 11, transition: 'cut' as const, outputFilename: `${mode}.mp4`, mode,
   });
   const composer: ComposerJobRecord['composer'] = {
-    originalDuration: 10, hookDuration: 3, originalHasAudio: true, hookHasAudio: true,
+    original: { duration: 10, hasAudio: true, sourceRange: { start: 0, end: 10 } },
+    hook: { duration: 3, hasAudio: true, sourceRange: { start: 0, end: 3 } },
   };
   const finalJob = await queue.createComposerJob(spec('final'), await createFiles('final'), composer);
   const previewJob = await queue.createComposerJob(spec('preview'), await createFiles('preview'), composer);
@@ -598,7 +599,8 @@ test('composer registration persistence failure fails the queue job without a gh
   }, {
     workDir, foregroundPath, backgroundVideoPath, outputPath: path.join(workDir, 'output', 'result.mp4'),
   }, {
-    originalDuration: 8, hookDuration: 2, originalHasAudio: true, hookHasAudio: true,
+    original: { duration: 8, hasAudio: true, sourceRange: { start: 0, end: 8 } },
+    hook: { duration: 2, hasAudio: true, sourceRange: { start: 0, end: 2 } },
   });
   const started = Date.now();
   while (queue.getJob(job.id)?.status !== 'failed') {

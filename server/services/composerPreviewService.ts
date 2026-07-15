@@ -2,8 +2,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  ComposerAsset, ComposerCrop, ComposerRenderSpec, ExactPreviewResponse,
+  ComposerAsset, ComposerCrop, ComposerRenderSpec, ExactPreviewResponse, SourceTimeRange,
 } from '../../shared/composer-contract.ts';
+import { getEffectiveSourceRange } from '../../shared/composerSourceRange.ts';
 import { ComposerJobRecord, JobFiles } from '../types/renderJob.ts';
 import { ComposerAssetStore } from './composerAssetStore.ts';
 import { JobQueueService } from './jobQueue.ts';
@@ -17,13 +18,15 @@ export interface PreviewCacheInput {
   hookId: string;
   originalCrop?: ComposerCrop;
   hookCrop?: ComposerCrop;
+  originalSourceRange: SourceTimeRange;
+  hookSourceRange: SourceTimeRange;
   insertAt: number;
   trimStart: number;
   trimEnd: number;
   transition: 'cut';
 }
 
-export interface PreviewRequest extends PreviewCacheInput {
+export interface PreviewRequest extends Omit<PreviewCacheInput, 'originalSourceRange' | 'hookSourceRange'> {
   batchId: string;
   draftExpiresAt: number;
 }
@@ -61,6 +64,8 @@ const canonicalCrop = (crop: ComposerCrop | undefined) => crop ? {
   x: finite(crop.x), y: finite(crop.y), width: finite(crop.width), height: finite(crop.height),
 } : null;
 
+const canonicalRange = (range: SourceTimeRange) => ({ start: finite(range.start), end: finite(range.end) });
+
 const finite = (value: number): number => {
   if (!Number.isFinite(value)) throw new Error('Preview cache values must be finite');
   return value;
@@ -73,6 +78,8 @@ export const getPreviewCacheKey = (input: PreviewCacheInput): string => createHa
     hookId: input.hookId,
     originalCrop: canonicalCrop(input.originalCrop),
     hookCrop: canonicalCrop(input.hookCrop),
+    originalSourceRange: canonicalRange(input.originalSourceRange),
+    hookSourceRange: canonicalRange(input.hookSourceRange),
     insertAt: finite(input.insertAt),
     trimStart: finite(input.trimStart),
     trimEnd: finite(input.trimEnd),
@@ -109,6 +116,8 @@ export class ComposerPreviewService {
       ...structuredClone(input),
       originalCrop: original.crop,
       hookCrop: hook.crop,
+      originalSourceRange: getEffectiveSourceRange(original),
+      hookSourceRange: getEffectiveSourceRange(hook),
     };
     const key = getPreviewCacheKey(snapshot);
     const pending = this.requests.get(key);
@@ -171,7 +180,7 @@ export class ComposerPreviewService {
 
   private async requestPreviewOnce(
     key: string,
-    input: PreviewRequest,
+    input: PreviewRequest & Pick<PreviewCacheInput, 'originalSourceRange' | 'hookSourceRange'>,
     original: ComposerAsset,
     hook: ComposerAsset,
   ): Promise<ExactPreviewResponse> {
@@ -232,12 +241,18 @@ export class ComposerPreviewService {
       mode: 'preview',
     };
     const composer: ComposerJobRecord['composer'] = {
-      originalDuration: original.duration,
-      hookDuration: hook.duration,
-      originalHasAudio: original.hasAudio,
-      hookHasAudio: hook.hasAudio,
-      originalCrop: original.crop,
-      hookCrop: hook.crop,
+      original: {
+        duration: input.originalSourceRange.end - input.originalSourceRange.start,
+        hasAudio: original.hasAudio,
+        sourceRange: { start: input.originalSourceRange.start, end: input.originalSourceRange.end },
+        crop: original.crop,
+      },
+      hook: {
+        duration: input.hookSourceRange.end - input.hookSourceRange.start,
+        hasAudio: hook.hasAudio,
+        sourceRange: { start: input.hookSourceRange.start, end: input.hookSourceRange.end },
+        crop: hook.crop,
+      },
     };
     const job = await this.queue.createComposerJob(spec, files, composer);
     composerPreviewCache.inc({ result: 'miss' });

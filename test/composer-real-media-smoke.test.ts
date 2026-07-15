@@ -93,6 +93,46 @@ test('real FFmpeg smoke renders insertion boundaries, crop, silence, preview and
   }
 });
 
+test('real FFmpeg excludes trimmed leading source sections from preview and final output', {
+  timeout: 180_000,
+}, async () => {
+  const managedRoot = path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
+  await fs.mkdir(managedRoot, { recursive: true });
+  const root = await fs.mkdtemp(path.join(managedRoot, 'composer-trim-smoke-'));
+  try {
+    const original = path.join(root, 'original.mp4');
+    const hook = path.join(root, 'hook.mp4');
+    createSectionedVideo(original, 'red', 'yellow', 0.5, 1, 220);
+    createSectionedVideo(hook, 'blue', 'green', 0.4, 0.6, 880);
+
+    for (const mode of ['preview', 'final'] as const) {
+      const output = path.join(root, `${mode}.mp4`);
+      render({
+        original, hook, output, insertAt: 0.5, mode,
+        originalSourceRange: { start: 0.5, end: 1.5 },
+        hookSourceRange: { start: 0.4, end: 1 },
+      });
+      const media = probeMedia(output);
+      assert.deepEqual([media.width, media.height], mode === 'preview' ? [360, 640] : [1080, 1920]);
+      assert.equal(media.frameRate, 30);
+      const streams = probeStreams(output);
+      const video = streams.find((stream) => stream.codec_type === 'video')!;
+      const audio = streams.find((stream) => stream.codec_type === 'audio')!;
+      assert.equal(video.codec_name, 'h264');
+      assert.equal(video.pix_fmt, 'yuv420p');
+      assert.equal(audio.codec_name, 'aac');
+      assert.equal(audio.sample_rate, '48000');
+      assert.equal(audio.channels, 2);
+      assertColor(await sampleRgb(output, 0.2), 'yellow');
+      assertColor(await sampleRgb(output, 0.7), 'green');
+      assert.ok(pcmRms(output, 0.2) < 10, 'trimmed original leading tone is absent');
+      assert.ok(pcmRms(output, 0.7) < 10, 'trimmed hook leading tone is absent');
+    }
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
 function createVideo(output: string, color: string, size: string, duration: number, frequency?: number): void {
   const args = ['-y', '-f', 'lavfi', '-i', `color=c=${color}:s=${size}:r=30:d=${duration}`];
   if (frequency) args.push('-f', 'lavfi', '-i', `sine=frequency=${frequency}:sample_rate=48000:duration=${duration}`);
@@ -103,6 +143,26 @@ function createVideo(output: string, color: string, size: string, duration: numb
   execFileSync(ffmpeg, args, { stdio: 'ignore', timeout: 30_000 });
 }
 
+function createSectionedVideo(
+  output: string,
+  leadingColor: string,
+  keptColor: string,
+  leadingDuration: number,
+  keptDuration: number,
+  leadingFrequency: number,
+): void {
+  execFileSync(ffmpeg, [
+    '-y',
+    '-f', 'lavfi', '-i', `color=c=${leadingColor}:s=270x480:r=30:d=${leadingDuration}`,
+    '-f', 'lavfi', '-i', `sine=frequency=${leadingFrequency}:sample_rate=48000:duration=${leadingDuration},aformat=channel_layouts=stereo`,
+    '-f', 'lavfi', '-i', `color=c=${keptColor}:s=270x480:r=30:d=${keptDuration}`,
+    '-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${keptDuration}`,
+    '-filter_complex', '[0:v][1:a][2:v][3:a]concat=n=2:v=1:a=1[v][a]',
+    '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-ar', '48000', '-ac', '2', output,
+  ], { stdio: 'ignore', timeout: 30_000 });
+}
+
 function render(options: {
   original: string;
   hook: string;
@@ -110,19 +170,27 @@ function render(options: {
   insertAt: number;
   mode: 'preview' | 'final';
   originalCrop?: { x: number; y: number; width: number; height: number };
+  originalSourceRange?: { start: number; end: number };
+  hookSourceRange?: { start: number; end: number };
 }): void {
   const original = probeMedia(options.original);
   const hook = probeMedia(options.hook);
+  const originalSourceRange = options.originalSourceRange ?? { start: 0, end: original.duration };
+  const hookSourceRange = options.hookSourceRange ?? { start: 0, end: hook.duration };
+  const originalDuration = originalSourceRange.end - originalSourceRange.start;
+  const hookDuration = hookSourceRange.end - hookSourceRange.start;
   const args = buildComposerCommand({
     spec: {
       batchId: 'smoke-batch', originalId: 'smoke-original', hookId: 'smoke-hook',
-      insertAt: options.insertAt, trimStart: 0, trimEnd: original.duration + hook.duration,
+      insertAt: options.insertAt, trimStart: 0, trimEnd: originalDuration + hookDuration,
       transition: 'cut', outputFilename: path.basename(options.output), mode: options.mode,
     },
     originalPath: options.original,
     hookPath: options.hook,
-    originalDuration: original.duration,
-    hookDuration: hook.duration,
+    originalDuration,
+    hookDuration,
+    originalSourceRange,
+    hookSourceRange,
     originalHasAudio: original.hasAudio,
     hookHasAudio: hook.hasAudio,
     originalCrop: options.originalCrop,
@@ -140,9 +208,11 @@ function sampleRgb(input: string, at: number): [number, number, number] {
   return [bytes[0], bytes[1], bytes[2]];
 }
 
-function assertColor([red, green, blue]: [number, number, number], expected: 'red' | 'blue'): void {
+function assertColor([red, green, blue]: [number, number, number], expected: 'red' | 'blue' | 'yellow' | 'green'): void {
   if (expected === 'red') assert.ok(red > green * 1.5 && red > blue * 1.5, `expected red, got ${red}/${green}/${blue}`);
-  else assert.ok(blue > red * 1.5 && blue > green * 1.5, `expected blue, got ${red}/${green}/${blue}`);
+  else if (expected === 'blue') assert.ok(blue > red * 1.5 && blue > green * 1.5, `expected blue, got ${red}/${green}/${blue}`);
+  else if (expected === 'yellow') assert.ok(red > blue * 1.5 && green > blue * 1.5, `expected yellow, got ${red}/${green}/${blue}`);
+  else assert.ok(green > red * 1.5 && green > blue * 1.5, `expected green, got ${red}/${green}/${blue}`);
 }
 
 function pcmRms(input: string, at: number): number {

@@ -32,7 +32,8 @@ const composerSpec = (mode: 'preview' | 'final' = 'final'): ComposerRenderSpec =
 });
 
 const composerMetadata = (): ComposerJobRecord['composer'] => ({
-  originalDuration: 10, hookDuration: 3, originalHasAudio: true, hookHasAudio: false,
+  original: { duration: 10, hasAudio: true, sourceRange: { start: 0, end: 10 } },
+  hook: { duration: 3, hasAudio: false, sourceRange: { start: 0, end: 3 } },
 });
 
 const createFiles = async (root: string, id: string): Promise<JobFiles> => {
@@ -106,11 +107,11 @@ test('preview composer jobs persist their distinct kind and immutable inputs', a
   const metadata = composerMetadata();
   const job = await harness.queue.createComposerJob(spec, await createFiles(harness.tempRoot, 'preview'), metadata);
   spec.insertAt = 7;
-  metadata.hookDuration = 99;
+  metadata.hook.duration = 99;
 
   assert.equal(job.kind, 'compose-preview');
   assert.equal(job.spec.insertAt, 3);
-  assert.equal(job.composer.hookDuration, 3);
+  assert.equal(job.composer.hook.duration, 3);
   const persisted = JSON.parse(await fs.readFile(path.join(harness.tempRoot, 'queue-state.json'), 'utf8'));
   assert.equal(persisted[0].kind, 'compose-preview');
   assert.equal(persisted[0].spec.insertAt, 3);
@@ -132,6 +133,28 @@ test('persisted jobs without kind migrate to resize or trim jobs', async () => {
   assert.equal(harness.queue.getJob('legacy-trim')?.kind, 'trim');
   const migrated = JSON.parse(await fs.readFile(path.join(root, 'queue-state.json'), 'utf8'));
   assert.deepEqual(migrated.map((job: { kind: string }) => job.kind), ['resize', 'trim']);
+  harness.queue.stopCleanupScheduler();
+});
+
+test('persisted pre-range composer jobs migrate to full-source snapshots', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-legacy-range-'));
+  const files = await createFiles(root, 'legacy');
+  const legacy = {
+    id: 'legacy-composer', kind: 'compose', spec: composerSpec(), files,
+    composer: {
+      originalDuration: 10, hookDuration: 3,
+      originalHasAudio: true, hookHasAudio: false,
+    },
+    status: 'completed', progress: 100,
+  };
+  await fs.writeFile(path.join(root, 'queue-state.json'), JSON.stringify([legacy]));
+
+  const harness = await createHarness(1, root);
+  const recovered = harness.queue.getJob('legacy-composer');
+  assert.equal(recovered?.kind, 'compose');
+  if (!recovered || recovered.kind !== 'compose') throw new Error('Expected recovered composer job');
+  assert.deepEqual(recovered.composer.original.sourceRange, { start: 0, end: 10 });
+  assert.deepEqual(recovered.composer.hook.sourceRange, { start: 0, end: 3 });
   harness.queue.stopCleanupScheduler();
 });
 
