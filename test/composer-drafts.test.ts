@@ -36,6 +36,7 @@ const draftFixture = (reviewed: boolean): ComposerBatchDraft => ({
 
 const readyAsset = (id: string, kind: 'original' | 'hook', duration: number): ComposerAsset => ({
   id,
+  revision: 1,
   kind,
   originalFilename: `${id}.mp4`,
   duration,
@@ -185,7 +186,7 @@ test('batch routes create, restore, and update a draft', async (t) => {
     representativeHookId: 'h1',
     insertAt: 2,
     trimStart: 0,
-    trimEnd: 13.05,
+    trimEnd: 10 + 91 / 30,
     transition: 'cut' as const,
     reviewed: true,
   };

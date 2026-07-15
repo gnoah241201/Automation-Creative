@@ -9,6 +9,7 @@ export interface SourceTimeRange { start: number; end: number }
 
 export interface ComposerAsset {
   id: string;
+  revision: number;
   kind: ComposerAssetKind;
   originalFilename: string;
   duration: number;

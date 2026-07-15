@@ -20,7 +20,7 @@ const keyFixture = () => ({
 });
 
 const readyAsset = (id: string, kind: 'original' | 'hook', duration: number): ComposerAsset => ({
-  id, kind, originalFilename: `${id}.mp4`, duration, width: 1080, height: 1920,
+  id, revision: 1, kind, originalFilename: `${id}.mp4`, duration, width: 1080, height: 1920,
   codedWidth: 1080, codedHeight: 1920, sampleAspectRatio: 1, displayAspectRatio: 9 / 16,
   rotation: 0, frameRate: 30, hasAudio: true, status: 'ready', crop,
   createdAt: 1, lastAccessedAt: 1,

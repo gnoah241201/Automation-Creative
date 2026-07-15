@@ -5,6 +5,7 @@ import { reduceComposerSourceAssets } from '../src/composer/sourceAssets.ts';
 
 const asset = (id: string, kind: 'original' | 'hook'): ComposerAsset => ({
   id,
+  revision: 1,
   kind,
   originalFilename: `${id}.mp4`,
   duration: 5,

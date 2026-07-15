@@ -4,7 +4,7 @@ import { ComposerAsset } from '../shared/composer-contract.ts';
 import { getEffectiveSourceRange, snapSourceTime } from '../shared/composerSourceRange.ts';
 
 const composerAsset = (overrides: Partial<ComposerAsset> = {}): ComposerAsset => ({
-  id: 'asset', kind: 'original', originalFilename: 'source.mp4', duration: 10,
+  id: 'asset', revision: 1, kind: 'original', originalFilename: 'source.mp4', duration: 10,
   width: 1080, height: 1920, codedWidth: 1080, codedHeight: 1920,
   sampleAspectRatio: 1, displayAspectRatio: 9 / 16, rotation: 0, frameRate: 30,
   hasAudio: true, status: 'ready', createdAt: 1, lastAccessedAt: 1,

@@ -10,6 +10,7 @@ import { ComposerAsset, ComposerVariantConfig } from '../shared/composer-contrac
 
 const asset = (id: string, kind: 'original' | 'hook', duration: number): ComposerAsset => ({
   id,
+  revision: 1,
   kind,
   originalFilename: `${id}.mp4`,
   duration,

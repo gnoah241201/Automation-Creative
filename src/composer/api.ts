@@ -7,6 +7,7 @@ import {
   ComposerCrop,
   ComposerVariantConfig,
   ExactPreviewResponse,
+  SourceTimeRange,
 } from '../../shared/composer-contract.ts';
 
 const API_BASE = '/api/composer';
@@ -83,12 +84,26 @@ export const uploadComposerAsset = (
 export const saveComposerCrop = (
   assetId: string,
   crop: ComposerCrop,
+  expectedRevision: number,
   signal?: AbortSignal,
 ): Promise<ComposerAsset> => fetch(`${API_BASE}/assets/${encodeURIComponent(assetId)}/crop`, {
   method: 'POST',
   credentials: 'include',
   headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(crop),
+  body: JSON.stringify({ crop, expectedRevision }),
+  signal,
+}).then(json<ComposerAsset>);
+
+export const saveComposerSourceTrim = (
+  assetId: string,
+  range: SourceTimeRange,
+  expectedRevision: number,
+  signal?: AbortSignal,
+): Promise<ComposerAsset> => fetch(`${API_BASE}/assets/${encodeURIComponent(assetId)}/trim`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ range, expectedRevision }),
   signal,
 }).then(json<ComposerAsset>);
 

@@ -8,7 +8,7 @@ import { allocateComposerOutputFilenames, ComposerBatchActiveError, ComposerBatc
 import { estimateComposerOutputBytes } from '../shared/composerTimeline.ts';
 
 const asset = (id: string, kind: 'original' | 'hook', filename = `${id}.mp4`, duration = 3): ComposerAsset => ({
-  id, kind, originalFilename: filename, duration, width: 1080, height: 1920,
+  id, revision: 1, kind, originalFilename: filename, duration, width: 1080, height: 1920,
   codedWidth: 1080, codedHeight: 1920, sampleAspectRatio: 1, displayAspectRatio: 9 / 16,
   rotation: 0, frameRate: 30, hasAudio: true, status: 'ready', createdAt: 1, lastAccessedAt: 1,
 });

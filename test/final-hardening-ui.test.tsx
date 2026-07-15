@@ -10,7 +10,7 @@ import { LibrarySourceNames } from '../src/library/LocalLibraryPage.tsx';
 import { ReviewMatrix } from '../src/composer/ReviewMatrix.tsx';
 
 const asset = (id: string, kind: 'original' | 'hook', crop?: ComposerAsset['crop']): ComposerAsset => ({
-  id, kind, originalFilename: `${id}.mp4`, duration: 4, width: 1920, height: 1080,
+  id, revision: 1, kind, originalFilename: `${id}.mp4`, duration: 4, width: 1920, height: 1080,
   codedWidth: 1920, codedHeight: 1080, sampleAspectRatio: 1, displayAspectRatio: 16 / 9,
   rotation: 0, frameRate: 30, hasAudio: true, status: crop ? 'ready' : 'needs-crop', crop,
   createdAt: 1, lastAccessedAt: 1,

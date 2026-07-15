@@ -3,7 +3,14 @@ import multer from 'multer';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { ComposerAssetStore, ComposerInvalidMediaError, ComposerProbeUnavailableError } from '../services/composerAssetStore.ts';
+import {
+  ComposerAssetConflictError,
+  ComposerAssetNotFoundError,
+  ComposerAssetStore,
+  ComposerAssetValidationError,
+  ComposerInvalidMediaError,
+  ComposerProbeUnavailableError,
+} from '../services/composerAssetStore.ts';
 import { composerRoot } from '../services/composerPaths.ts';
 
 const configuredMaxUploadBytes = Number(process.env.COMPOSER_MAX_UPLOAD_BYTES);
@@ -43,6 +50,33 @@ export const buildComposerAssetsRouter = (
   });
   const router = express.Router();
 
+  const sendMutationError = (error: unknown, res: express.Response): void => {
+    if (error instanceof ComposerAssetConflictError) {
+      res.status(409).json({
+        error: 'AssetConflict',
+        message: 'Composer asset changed; reload it and try again',
+      });
+      return;
+    }
+    if (error instanceof ComposerAssetValidationError) {
+      res.status(400).json({ error: 'ValidationError', message: error.message });
+      return;
+    }
+    if (error instanceof ComposerAssetNotFoundError) {
+      res.status(404).json({ error: 'NotFound', message: 'Composer asset not found' });
+      return;
+    }
+    console.error('[composerAssets] Failed to update asset metadata:', error);
+    res.status(500).json({ error: 'InternalError', message: 'Composer asset could not be updated' });
+  };
+
+  const parseExpectedRevision = (value: unknown): number => {
+    if (!Number.isSafeInteger(value)) {
+      throw new ComposerAssetValidationError('expectedRevision must be an integer');
+    }
+    return value as number;
+  };
+
   router.post('/assets', upload.single('file'), async (req, res) => {
     const kind = req.body.kind;
     if ((kind !== 'original' && kind !== 'hook') || !req.file) {
@@ -76,12 +110,36 @@ export const buildComposerAssetsRouter = (
 
   router.post('/assets/:id/crop', express.json(), async (req, res) => {
     try {
-      res.json(await assets.setCrop(req.params.id, req.body));
+      const crop = req.body?.crop;
+      if (
+        !crop
+        || [crop.x, crop.y, crop.width, crop.height].some((value) => !Number.isFinite(value))
+      ) {
+        throw new ComposerAssetValidationError('crop must contain finite normalized values');
+      }
+      res.json(await assets.setCrop(
+        req.params.id,
+        crop,
+        parseExpectedRevision(req.body?.expectedRevision),
+      ));
     } catch (error) {
-      res.status(400).json({
-        error: 'InvalidCrop',
-        message: error instanceof Error ? error.message : 'Invalid crop',
-      });
+      sendMutationError(error, res);
+    }
+  });
+
+  router.post('/assets/:id/trim', express.json(), async (req, res) => {
+    try {
+      const range = req.body?.range;
+      if (!range || !Number.isFinite(range.start) || !Number.isFinite(range.end)) {
+        throw new ComposerAssetValidationError('range must contain finite start and end values');
+      }
+      res.json(await assets.setSourceTrim(
+        req.params.id,
+        range,
+        parseExpectedRevision(req.body?.expectedRevision),
+      ));
+    } catch (error) {
+      sendMutationError(error, res);
     }
   });
 

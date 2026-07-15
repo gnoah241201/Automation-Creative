@@ -9,6 +9,7 @@ import { MediaPanel } from '../src/composer/MediaPanel.tsx';
 
 const mediaAsset = (id: string, kind: 'original' | 'hook', cropped = false): ComposerAsset => ({
   id,
+  revision: 1,
   kind,
   originalFilename: `${id}.mp4`,
   duration: 5,

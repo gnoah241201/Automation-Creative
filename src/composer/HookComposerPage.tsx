@@ -256,8 +256,8 @@ export function HookComposerPage() {
 
   const saveCrop = async (crop: ComposerCrop) => {
     if (!cropAsset) return;
-    const saved = await saveComposerCrop(cropAsset.id, crop);
-    updateSourceAssets({ type: 'upsert', asset: saved });
+    const updated = await saveComposerCrop(cropAsset.id, crop, cropAsset.revision);
+    updateSourceAssets({ type: 'upsert', asset: updated });
     setCropAsset(undefined);
   };
 
