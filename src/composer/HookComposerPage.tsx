@@ -1,19 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
 import {
-  ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig, HookDurationGroup,
+  ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig, HookDurationGroup, SourceTimeRange,
 } from '../../shared/composer-contract.ts';
 import { deriveComposerMatrix, estimateComposerOutputBytes } from '../../shared/composerTimeline.ts';
 import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import {
   ComposerApiError, composerAssetSourceUrl, createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getComposerAsset,
   getComposerBatch, getExactPreviewStatus, requestExactPreview,
-  saveComposerConfiguration, saveComposerCrop, renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
+  saveComposerConfiguration, saveComposerCrop, saveComposerSourceTrim, renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
 } from './api.ts';
 import { ComposerPreview } from './ComposerPreview.tsx';
 import { ComposerTimeline } from './ComposerTimeline.tsx';
-import { CropEditor } from './CropEditor.tsx';
 import { MediaPanel } from './MediaPanel.tsx';
+import { fitNineBySixteenCrop } from './crop.ts';
+import { SourceEditDrawer, SourceEditTab } from './SourceEditDrawer.tsx';
 import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets.ts';
 import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
 import { ReviewMatrix } from './ReviewMatrix.tsx';
@@ -57,7 +58,8 @@ export const createDefaultComposerConfiguration = (
 export function HookComposerPage() {
   const [state, dispatch] = useReducer(composerReducer, initialComposerState);
   const [sourceAssets, setSourceAssets] = useState<ComposerAsset[]>([]);
-  const [cropAsset, setCropAsset] = useState<ComposerAsset>();
+  const [sourceEdit, setSourceEdit] = useState<{ asset: ComposerAsset; tab: SourceEditTab }>();
+  const [sourceCrop, setSourceCrop] = useState<ComposerCrop>();
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string>();
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
@@ -72,6 +74,7 @@ export function HookComposerPage() {
   const [renderError, setRenderError] = useState<string>();
   const [restoreStatus, setRestoreStatus] = useState<string>();
   const sourceAssetsRef = useRef<ComposerAsset[]>([]);
+  const sourceEditVideoRef = useRef<HTMLVideoElement>(null);
   const sourceRevision = useRef(0);
   const createRequest = useRef<AbortController | undefined>(undefined);
   const saveRequest = useRef<AbortController | undefined>(undefined);
@@ -239,10 +242,10 @@ export function HookComposerPage() {
     };
   }, [editingConfig, state.batchId, state.stage]);
 
-  const updateSourceAssets = (change: ComposerSourceChange) => {
+  const updateSourceAssets = (change: ComposerSourceChange, forceInvalidateBatch = false) => {
     restoreRevision.current += 1;
     restoreRequest.current?.abort();
-    const result = reduceComposerSourceAssets(sourceAssetsRef.current, change, Boolean(state.batchId));
+    const result = reduceComposerSourceAssets(sourceAssetsRef.current, change, Boolean(state.batchId) || forceInvalidateBatch);
     if (result.assets === sourceAssetsRef.current) return;
     sourceAssetsRef.current = result.assets;
     sourceRevision.current += 1;
@@ -280,11 +283,21 @@ export function HookComposerPage() {
     updateSourceAssets({ type: 'remove', assetId });
   };
 
+  const openSourceEditor = (asset: ComposerAsset, tab: SourceEditTab) => {
+    setSourceCrop(asset.crop ?? fitNineBySixteenCrop(asset.width, asset.height));
+    setSourceEdit({ asset, tab });
+  };
+
   const saveCrop = async (crop: ComposerCrop) => {
-    if (!cropAsset) return;
-    const updated = await saveComposerCrop(cropAsset.id, crop, cropAsset.revision);
-    updateSourceAssets({ type: 'upsert', asset: updated });
-    setCropAsset(undefined);
+    if (!sourceEdit) return;
+    const updated = await saveComposerCrop(sourceEdit.asset.id, crop, sourceEdit.asset.revision);
+    updateSourceAssets({ type: 'replace', asset: updated }, true);
+  };
+
+  const saveSourceTrim = async (range: SourceTimeRange) => {
+    if (!sourceEdit) return;
+    const updated = await saveComposerSourceTrim(sourceEdit.asset.id, range, sourceEdit.asset.revision);
+    updateSourceAssets({ type: 'replace', asset: updated }, true);
   };
 
   const continueToEdit = async () => {
@@ -529,16 +542,33 @@ export function HookComposerPage() {
           </p>
         </div>
         {state.stage === 'sources' ? (
-          <MediaPanel
-            originals={originals}
-            hooks={hooks}
-            onAssetUploaded={retainSourceFile}
-            onAssetRemoved={removeSource}
-            onCropRequested={setCropAsset}
-            onContinue={() => void continueToEdit()}
-            continuing={continuing}
-            continueError={continueError}
-          />
+          <div className={sourceEdit ? 'grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]' : 'min-w-0'}>
+            <MediaPanel
+              originals={originals}
+              hooks={hooks}
+              onAssetUploaded={retainSourceFile}
+              onAssetRemoved={removeSource}
+              onEditRequested={openSourceEditor}
+              onContinue={() => void continueToEdit()}
+              continuing={continuing}
+              continueError={continueError}
+            />
+            {sourceEdit && sourceCrop && (
+              <SourceEditDrawer
+                key={`${sourceEdit.asset.id}:${sourceEdit.asset.revision}`}
+                asset={sourceEdit.asset}
+                sourceUrl={sourceUrls[sourceEdit.asset.id] ?? composerAssetSourceUrl(sourceEdit.asset.id)}
+                initialTab={sourceEdit.tab}
+                crop={sourceCrop}
+                videoRef={sourceEditVideoRef}
+                confirmDiscard={() => window.confirm('Discard unsaved source changes?')}
+                onCropChange={setSourceCrop}
+                onSaveCrop={saveCrop}
+                onSaveTrim={saveSourceTrim}
+                onClose={() => setSourceEdit(undefined)}
+              />
+            )}
+          </div>
         ) : state.stage === 'edit' && activeOriginal && activeGroup && representativeHook && editingConfig ? (
           <div className="grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
             <aside className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-4">
@@ -615,14 +645,6 @@ export function HookComposerPage() {
         )}
       </section>
 
-      {cropAsset && cropAsset.thumbnailUrl && (
-        <CropEditor
-          asset={cropAsset}
-          sourceUrl={sourceUrls[cropAsset.id] ?? cropAsset.thumbnailUrl}
-          onSave={saveCrop}
-          onClose={() => setCropAsset(undefined)}
-        />
-      )}
     </div>
   );
 }

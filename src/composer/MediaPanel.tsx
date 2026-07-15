@@ -1,7 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, Check, Crop, Film, LoaderCircle, Trash2, Upload, X } from 'lucide-react';
+import { AlertCircle, Check, Crop, Film, LoaderCircle, Scissors, Trash2, Upload, X } from 'lucide-react';
 import { ComposerAsset, ComposerAssetKind } from '../../shared/composer-contract.ts';
+import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import { uploadComposerAsset } from './api.ts';
+import { SourceEditTab } from './SourceEditDrawer.tsx';
 
 const MAX_ASSETS_PER_KIND = 10;
 
@@ -21,7 +23,8 @@ interface MediaPanelProps {
   hooks: ComposerAsset[];
   onAssetUploaded: (asset: ComposerAsset, file: File) => void;
   onAssetRemoved: (assetId: string) => void;
-  onCropRequested: (asset: ComposerAsset) => void;
+  onEditRequested?: (asset: ComposerAsset, tab: SourceEditTab) => void;
+  onCropRequested?: (asset: ComposerAsset) => void;
   onContinue: () => void;
   continuing?: boolean;
   continueError?: string;
@@ -41,6 +44,7 @@ export function MediaPanel({
   hooks,
   onAssetUploaded,
   onAssetRemoved,
+  onEditRequested,
   onCropRequested,
   onContinue,
   continuing = false,
@@ -156,6 +160,10 @@ export function MediaPanel({
 
   const uploading = uploads.some((item) => item.status === 'uploading');
   const retainedAssets = [...originals, ...hooks];
+  const requestEdit = (asset: ComposerAsset, tab: SourceEditTab) => {
+    if (onEditRequested) onEditRequested(asset, tab);
+    else if (tab === 'crop') onCropRequested?.(asset);
+  };
   const allReady = originals.length > 0
     && hooks.length > 0
     && retainedAssets.every((asset) => asset.status === 'ready')
@@ -174,7 +182,7 @@ export function MediaPanel({
           onCancel={cancelUpload}
           onDismissError={dismissError}
           onRetry={retryUpload}
-          onCrop={onCropRequested}
+          onEdit={requestEdit}
           onRemove={removeAsset}
           disabled={continuing}
         />
@@ -188,7 +196,7 @@ export function MediaPanel({
           onCancel={cancelUpload}
           onDismissError={dismissError}
           onRetry={retryUpload}
-          onCrop={onCropRequested}
+          onEdit={requestEdit}
           onRemove={removeAsset}
           disabled={continuing}
         />
@@ -240,7 +248,7 @@ interface AssetCollectionProps {
   onCancel: (item: UploadItem) => void;
   onDismissError: (item: UploadItem) => void;
   onRetry: (item: UploadItem) => void;
-  onCrop: (asset: ComposerAsset) => void;
+  onEdit: (asset: ComposerAsset, tab: SourceEditTab) => void;
   onRemove: (asset: ComposerAsset) => void;
   disabled: boolean;
 }
@@ -255,7 +263,7 @@ function AssetCollection({
   onCancel,
   onDismissError,
   onRetry,
-  onCrop,
+  onEdit,
   onRemove,
   disabled,
 }: AssetCollectionProps) {
@@ -304,7 +312,7 @@ function AssetCollection({
 
       <div className="mt-4 space-y-3">
         {assets.map((asset) => (
-          <AssetCard key={asset.id} asset={asset} disabled={disabled} onCrop={() => onCrop(asset)} onRemove={() => onRemove(asset)} />
+          <MediaCard key={asset.id} asset={asset} disabled={disabled} onEdit={(tab) => onEdit(asset, tab)} onRemove={() => onRemove(asset)} />
         ))}
         {uploads.map((item) => (
           <UploadCard key={item.id} item={item} disabled={disabled} onCancel={() => onCancel(item)} onDismiss={() => onDismissError(item)} onRetry={() => onRetry(item)} />
@@ -317,9 +325,15 @@ function AssetCollection({
   );
 }
 
-function AssetCard({ asset, disabled, onCrop, onRemove }: { asset: ComposerAsset; disabled: boolean; onCrop: () => void; onRemove: () => void }) {
+export function MediaCard({ asset, disabled, onEdit, onRemove }: {
+  asset: ComposerAsset;
+  disabled: boolean;
+  onEdit: (tab: SourceEditTab) => void;
+  onRemove: () => void;
+}) {
   const ready = asset.status === 'ready';
   const needsCrop = asset.status === 'needs-crop';
+  const effectiveDuration = getEffectiveSourceDuration(asset);
   return (
     <article className="flex gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-3">
       <div className="relative h-20 w-14 shrink-0 overflow-hidden rounded-lg bg-neutral-950">
@@ -329,7 +343,7 @@ function AssetCard({ asset, disabled, onCrop, onRemove }: { asset: ComposerAsset
       </div>
       <div className="min-w-0 flex-1">
         <p className="truncate text-sm font-medium text-white" title={asset.originalFilename}>{asset.originalFilename}</p>
-        <p className="mt-1 text-xs text-neutral-500">{durationLabel(asset.duration)} &middot; {asset.width}&times;{asset.height}</p>
+        <p className="mt-1 text-xs text-neutral-500">Original {durationLabel(asset.duration)} &middot; Selected {durationLabel(effectiveDuration)} &middot; {asset.width}&times;{asset.height}</p>
         <div className="mt-2 flex flex-wrap items-center gap-2">
           <span className={ready
             ? 'inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-1 text-[11px] font-semibold text-emerald-300'
@@ -340,11 +354,12 @@ function AssetCard({ asset, disabled, onCrop, onRemove }: { asset: ComposerAsset
             {ready ? <Check className="h-3 w-3" aria-hidden="true" /> : <AlertCircle className="h-3 w-3" aria-hidden="true" />}
             {ready ? 'Ready' : needsCrop ? 'Crop required' : asset.error || 'Invalid media'}
           </span>
-          {(needsCrop || asset.crop) && (
-            <button type="button" disabled={disabled} onClick={onCrop} className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2 py-1 text-xs font-medium text-amber-100 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-40">
-              <Crop className="h-3 w-3" aria-hidden="true" /> {needsCrop ? 'Crop 9:16' : 'Adjust crop'}
-            </button>
-          )}
+          <button type="button" disabled={disabled} onClick={() => onEdit('trim')} className="inline-flex items-center gap-1 rounded-lg bg-blue-500/15 px-2 py-1 text-xs font-medium text-blue-100 hover:bg-blue-500/25 disabled:cursor-not-allowed disabled:opacity-40">
+            <Scissors className="h-3 w-3" aria-hidden="true" /> Trim segment
+          </button>
+          <button type="button" disabled={disabled} onClick={() => onEdit('crop')} className="inline-flex items-center gap-1 rounded-lg bg-amber-500/15 px-2 py-1 text-xs font-medium text-amber-100 hover:bg-amber-500/25 disabled:cursor-not-allowed disabled:opacity-40">
+            <Crop className="h-3 w-3" aria-hidden="true" /> {needsCrop ? 'Crop 9:16' : asset.crop ? 'Adjust crop' : 'Crop 9:16'}
+          </button>
         </div>
       </div>
       <button type="button" disabled={disabled} onClick={onRemove} className="h-8 rounded-lg p-2 text-neutral-500 hover:bg-red-500/10 hover:text-red-300 disabled:cursor-not-allowed disabled:opacity-40" aria-label={`Remove ${asset.originalFilename}`}><Trash2 className="h-4 w-4" /></button>

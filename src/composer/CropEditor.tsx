@@ -125,14 +125,14 @@ export function CropEditor({ asset, sourceUrl, onSave, onClose }: CropEditorProp
   );
 }
 
-interface CropSelectionProps {
+export interface CropSelectionProps {
   crop: ComposerCrop;
   sourceWidth: number;
   sourceHeight: number;
   onChange: (crop: ComposerCrop) => void;
 }
 
-function CropSelection({ crop, sourceWidth, sourceHeight, onChange }: CropSelectionProps) {
+export function CropSelection({ crop, sourceWidth, sourceHeight, onChange }: CropSelectionProps) {
   const start = useRef<{
     mode: 'move' | 'resize';
     x: number;

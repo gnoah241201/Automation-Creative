@@ -61,8 +61,26 @@ test('saving a changed crop replaces metadata and marks an existing batch stale'
   assert.equal(result.invalidateBatch, true);
 });
 
+test('saving a changed source trim replaces metadata and marks an existing batch stale', () => {
+  const hook = asset('h1', 'hook');
+  const trimmed = {
+    ...hook,
+    revision: 2,
+    sourceTrimStart: 1,
+    sourceTrimEnd: 4,
+  };
+  const result = reduceComposerSourceAssets([asset('o1', 'original'), hook], {
+    type: 'replace',
+    asset: trimmed,
+  }, true);
+
+  assert.equal(result.assets[1], trimmed);
+  assert.equal(result.invalidateBatch, true);
+});
+
 test('an idempotent upsert does not invalidate and changes before a batch need no invalidation', () => {
   const original = asset('o1', 'original');
   assert.equal(reduceComposerSourceAssets([original], { type: 'upsert', asset: original }, true).invalidateBatch, false);
   assert.equal(reduceComposerSourceAssets([original], { type: 'remove', assetId: 'o1' }, false).invalidateBatch, false);
+  assert.equal(reduceComposerSourceAssets([original], { type: 'replace', asset: asset('missing', 'hook') }, true).invalidateBatch, false);
 });
