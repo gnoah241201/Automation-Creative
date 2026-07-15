@@ -8,6 +8,14 @@ import {
   assertDraftAssetsCurrent, ComposerDraftStaleAssetsError, validateComposerConfiguration,
 } from '../services/composerValidation.ts';
 import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
+import type {
+  ComposerBatchDraft, ComposerBulkApplyPlan, ComposerBulkApplyScope,
+} from '../../shared/composer-contract.ts';
+import {
+  ComposerBulkApplyConflictError,
+  ComposerBulkApplyValidationError,
+  planComposerBulkApply,
+} from '../../shared/composerBulkApply.ts';
 import { ComposerPreviewService, PreviewRequest } from '../services/composerPreviewService.ts';
 import {
   ComposerBatchActiveError, ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
@@ -16,6 +24,63 @@ import {
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
 class InvalidPreviewRequestError extends Error {}
+
+const parseBulkApplyRequest = (body: unknown, requireRevision: boolean): {
+  sourceConfigurationId: string;
+  scope: ComposerBulkApplyScope;
+  expectedRevision?: number;
+} => {
+  const request = body as Record<string, unknown> | null;
+  const scope = request?.scope as Record<string, unknown> | null;
+  if (typeof request?.sourceConfigurationId !== 'string' || request.sourceConfigurationId.length === 0) {
+    throw new ComposerBulkApplyValidationError('Source configuration ID is invalid');
+  }
+  if (
+    typeof scope?.allGroupsForOriginal !== 'boolean'
+    || typeof scope?.groupForAllOriginals !== 'boolean'
+  ) {
+    throw new ComposerBulkApplyValidationError('Bulk apply scope is invalid');
+  }
+  if (
+    requireRevision
+    && (!Number.isSafeInteger(request?.expectedRevision) || (request?.expectedRevision as number) < 1)
+  ) {
+    throw new ComposerBulkApplyValidationError('Expected draft revision is invalid');
+  }
+  return {
+    sourceConfigurationId: request.sourceConfigurationId,
+    scope: {
+      allGroupsForOriginal: scope.allGroupsForOriginal,
+      groupForAllOriginals: scope.groupForAllOriginals,
+    },
+    expectedRevision: request.expectedRevision as number | undefined,
+  };
+};
+
+const buildBulkApplyPlan = async (
+  draft: ComposerBatchDraft,
+  sourceConfigurationId: string,
+  scope: ComposerBulkApplyScope,
+  assets: ComposerAssetStore,
+): Promise<ComposerBulkApplyPlan> => {
+  const originals = await Promise.all(
+    draft.originalIds.map((id) => assets.requireReadyAsset(id, 'original')),
+  );
+  const originalDurations = Object.fromEntries(
+    originals.map((original) => [original.id, getEffectiveSourceDuration(original)]),
+  );
+  const plan = planComposerBulkApply(draft, sourceConfigurationId, scope, originalDurations);
+  const source = draft.configurations[sourceConfigurationId];
+  const sourceValidation = validateComposerConfiguration(
+    draft,
+    source,
+    originalDurations[source.originalId],
+  );
+  if ('message' in sourceValidation) {
+    throw new ComposerBulkApplyValidationError(sourceValidation.message);
+  }
+  return plan;
+};
 
 const sendNotFound = (res: express.Response) => res.status(404).json({
   error: 'NotFound', message: 'Composer batch not found',
@@ -134,6 +199,64 @@ export const buildComposerBatchesRouter = (
       });
       else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
       else sendInternalError(res, 'Unable to update composer configuration');
+    }
+  });
+
+  router.post('/batches/:batchId/apply-preview', express.json(), async (req, res) => {
+    try {
+      const request = parseBulkApplyRequest(req.body, false);
+      const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
+      await assertDraftAssetsCurrent(draft, assets);
+      res.json(await buildBulkApplyPlan(
+        draft,
+        request.sourceConfigurationId,
+        request.scope,
+        assets,
+      ));
+    } catch (error) {
+      if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+      else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
+      else if (error instanceof ComposerBulkApplyConflictError) res.status(409).json({
+        error: 'DraftConflict', message: 'The source configuration changed; preview again before applying',
+      });
+      else if (error instanceof ComposerBulkApplyValidationError) res.status(400).json({
+        error: 'ValidationError', message: error.message,
+      });
+      else {
+        console.error('[composerBatches] Bulk apply preview failure:', error);
+        sendInternalError(res, 'Unable to plan composer apply');
+      }
+    }
+  });
+
+  router.post('/batches/:batchId/apply', express.json(), async (req, res) => {
+    try {
+      const request = parseBulkApplyRequest(req.body, true);
+      const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
+      await assertDraftAssetsCurrent(draft, assets);
+      const plan = await buildBulkApplyPlan(
+        draft,
+        request.sourceConfigurationId,
+        request.scope,
+        assets,
+      );
+      res.json(await drafts.applyConfigurations(draft.id, plan.targets, request.expectedRevision!));
+    } catch (error) {
+      if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
+      else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
+      else if (error instanceof ComposerDraftConflictError) res.status(409).json({
+        error: 'DraftConflict', message: 'This draft changed in another tab; reload it before applying',
+      });
+      else if (error instanceof ComposerBulkApplyConflictError) res.status(409).json({
+        error: 'DraftConflict', message: 'The source configuration changed; preview again before applying',
+      });
+      else if (error instanceof ComposerBulkApplyValidationError) res.status(400).json({
+        error: 'ValidationError', message: error.message,
+      });
+      else {
+        console.error('[composerBatches] Bulk apply failure:', error);
+        sendInternalError(res, 'Unable to apply composer configurations');
+      }
     }
   });
 

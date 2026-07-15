@@ -52,6 +52,17 @@ export interface ComposerVariantConfig {
   reviewed: boolean;
 }
 
+export interface ComposerBulkApplyScope {
+  allGroupsForOriginal: boolean;
+  groupForAllOriginals: boolean;
+}
+
+export interface ComposerBulkApplyPlan {
+  draftRevision: number;
+  targets: ComposerVariantConfig[];
+  clampedOriginalIds: string[];
+}
+
 export interface ComposerBatchDraft {
   id: string;
   revision: number;

@@ -60,6 +60,20 @@ export class ComposerDraftStore {
     }));
   }
 
+  async applyConfigurations(
+    batchId: string,
+    targets: ComposerVariantConfig[],
+    expectedRevision: number,
+  ): Promise<ComposerBatchDraft> {
+    return this.mutate(batchId, expectedRevision, (draft) => ({
+      ...draft,
+      configurations: Object.fromEntries([
+        ...Object.entries(draft.configurations),
+        ...targets.map((target) => [target.id, target] as const),
+      ]),
+    }));
+  }
+
   async get(batchId: string): Promise<ComposerBatchDraft | null> {
     return this.read(batchId);
   }

@@ -4,8 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import express from 'express';
-import { ComposerAsset, ComposerBatchDraft } from '../shared/composer-contract.ts';
-import { ComposerDraftConflictError, ComposerDraftStore } from '../server/services/composerDraftStore.ts';
+import { ComposerAsset, ComposerBatchDraft, ComposerVariantConfig } from '../shared/composer-contract.ts';
+import {
+  ComposerDraftConflictError, ComposerDraftNotFoundError, ComposerDraftStore,
+} from '../server/services/composerDraftStore.ts';
 import { validateDraftForRender } from '../server/services/composerValidation.ts';
 import { buildComposerBatchesRouter } from '../server/routes/composerBatches.ts';
 import { ComposerAssetStore } from '../server/services/composerAssetStore.ts';
@@ -189,6 +191,40 @@ test('sequential revision-aware configuration updates preserve both keys', async
   assert.deepEqual(Object.keys(restored.configurations).sort(), ['o1:g-3.000', 'o1:g-3.050']);
 });
 
+test('stale bulk apply writes no target configurations', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ComposerDraftStore(root);
+  const draft = await store.create(['o1'], ['h1'], { o1: 1, h1: 1 });
+  const before = (await store.require(draft.id)).configurations;
+  const targets: ComposerVariantConfig[] = [{
+    id: 'o1:g-3.000', originalId: 'o1', durationGroupId: 'g-3.000', representativeHookId: 'h1',
+    insertAt: 0, trimStart: 0, trimEnd: 13, transition: 'cut', reviewed: true,
+  }];
+
+  await assert.rejects(
+    store.applyConfigurations(draft.id, targets, draft.revision - 1),
+    ComposerDraftConflictError,
+  );
+  assert.deepEqual((await store.require(draft.id)).configurations, before);
+});
+
+test('bulk apply writes every target in one draft revision', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const store = new ComposerDraftStore(root);
+  const draft = await store.create(['o1', 'o2'], ['h1'], { o1: 1, o2: 1, h1: 1 });
+  const targets: ComposerVariantConfig[] = ['o1', 'o2'].map((originalId) => ({
+    id: `${originalId}:g-3.000`, originalId, durationGroupId: 'g-3.000', representativeHookId: 'h1',
+    insertAt: 0, trimStart: 0, trimEnd: 13, transition: 'cut', reviewed: true,
+  }));
+
+  const updated = await store.applyConfigurations(draft.id, targets, draft.revision);
+
+  assert.equal(updated.revision, draft.revision + 1);
+  assert.deepEqual(Object.keys(updated.configurations), ['o1:g-3.000', 'o2:g-3.000']);
+});
+
 test('render validation rejects an unreviewed selected matrix cell', () => {
   const result = validateDraftForRender(draftFixture(false), ['o1:h1']);
   assert.deepEqual(result, {
@@ -294,7 +330,11 @@ test('another tab cannot configure, preview, or render after a source revision c
     requireAsset: async (id: string) => currentAssets.find((asset) => asset.id === id),
     requireReadyAsset: async (id: string) => currentAssets.find((asset) => asset.id === id),
   } as unknown as ComposerAssetStore;
-  const drafts = { require: async () => staleDraft } as unknown as ComposerDraftStore;
+  let applyCalls = 0;
+  const drafts = {
+    require: async () => staleDraft,
+    applyConfigurations: async () => { applyCalls += 1; return staleDraft; },
+  } as unknown as ComposerDraftStore;
   const previews = { requestPreview: async () => ({ status: 'queued' }) } as any;
   const renderer = { submit: async () => ({ jobs: [] }) } as any;
   const app = express();
@@ -306,7 +346,7 @@ test('another tab cannot configure, preview, or render after a source revision c
   assert.ok(address && typeof address !== 'string');
   const base = `http://127.0.0.1:${address.port}/api/composer/batches/batch-1`;
 
-  const [preview, render] = await Promise.all([
+  const [preview, render, applyPreview, apply] = await Promise.all([
     fetch(`${base}/preview`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ configurationId: 'o1:g-3.000', representativeHookId: 'h1' }),
@@ -314,6 +354,21 @@ test('another tab cannot configure, preview, or render after a source revision c
     fetch(`${base}/render`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ selectedCellIds: ['o1:h1'] }),
+    }),
+    fetch(`${base}/apply-preview`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceConfigurationId: 'o1:g-3.000',
+        scope: { allGroupsForOriginal: true, groupForAllOriginals: false },
+      }),
+    }),
+    fetch(`${base}/apply`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sourceConfigurationId: 'o1:g-3.000',
+        scope: { allGroupsForOriginal: true, groupForAllOriginals: false },
+        expectedRevision: staleDraft.revision,
+      }),
     }),
   ]);
   const configuration = staleDraft.configurations['o1:g-3.000'];
@@ -324,9 +379,156 @@ test('another tab cannot configure, preview, or render after a source revision c
   assert.equal(preview.status, 409);
   assert.equal(render.status, 409);
   assert.equal(save.status, 409);
+  assert.equal(applyPreview.status, 409);
+  assert.equal(apply.status, 409);
   assert.equal((await preview.json()).error, 'DraftStale');
   assert.equal((await render.json()).error, 'DraftStale');
   assert.equal((await save.json()).error, 'DraftStale');
+  assert.equal((await applyPreview.json()).error, 'DraftStale');
+  assert.equal((await apply.json()).error, 'DraftStale');
+  assert.equal(applyCalls, 0);
+});
+
+test('bulk apply preview and commit routes plan then atomically persist the matrix', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-bulk-route-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const originals = [readyAsset('o1', 'original', 10), readyAsset('o2', 'original', 5)];
+  const hooks = [readyAsset('h1', 'hook', 2), readyAsset('h2', 'hook', 3)];
+  const allAssets = [...originals, ...hooks];
+  const assets = {
+    requireAsset: async (id: string) => {
+      const asset = allAssets.find((candidate) => candidate.id === id);
+      if (!asset) throw new Error(`missing ${id}`);
+      return asset;
+    },
+    requireReadyAsset: async (id: string, kind: 'original' | 'hook') => {
+      const asset = allAssets.find((candidate) => candidate.id === id && candidate.kind === kind);
+      if (!asset) throw new Error(`missing ${id}`);
+      return asset;
+    },
+  } as ComposerAssetStore;
+  const drafts = new ComposerDraftStore(root);
+  const draft = await drafts.create(['o1', 'o2'], ['h1', 'h2'], {
+    o1: 1, o2: 1, h1: 1, h2: 1,
+  });
+  draft.durationGroups = [
+    { id: 'g2', minDuration: 2, maxDuration: 2, hookIds: ['h1'] },
+    { id: 'g3', minDuration: 3, maxDuration: 3, hookIds: ['h2'] },
+  ];
+  draft.configurations['o1:g3'] = {
+    id: 'o1:g3', originalId: 'o1', durationGroupId: 'g3', representativeHookId: 'h2',
+    insertAt: 8, trimStart: 2, trimEnd: 13, transition: 'cut', reviewed: false,
+  };
+  await drafts.save(draft);
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter(assets, drafts));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}/api/composer/batches/${draft.id}`;
+  const body = {
+    sourceConfigurationId: 'o1:g3',
+    scope: { allGroupsForOriginal: true, groupForAllOriginals: true },
+  };
+
+  const preview = await fetch(`${base}/apply-preview`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  });
+  assert.equal(preview.status, 200);
+  const previewPlan = await preview.json();
+  assert.equal(previewPlan.draftRevision, draft.revision);
+  assert.deepEqual(previewPlan.targets.map((target: ComposerVariantConfig) => target.id), [
+    'o1:g2', 'o1:g3', 'o2:g2', 'o2:g3',
+  ]);
+  assert.deepEqual(previewPlan.clampedOriginalIds, ['o2']);
+  assert.equal((await drafts.require(draft.id)).revision, draft.revision);
+
+  const commit = await fetch(`${base}/apply`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...body, expectedRevision: draft.revision }),
+  });
+  assert.equal(commit.status, 200);
+  const committed = await commit.json() as ComposerBatchDraft;
+  assert.equal(committed.revision, draft.revision + 1);
+  assert.deepEqual(Object.keys(committed.configurations), ['o1:g3', 'o1:g2', 'o2:g2', 'o2:g3']);
+  assert.deepEqual(
+    (({ insertAt, trimStart, trimEnd }) => ({ insertAt, trimStart, trimEnd }))(committed.configurations['o2:g3']),
+    { insertAt: 5, trimStart: 2, trimEnd: 8 },
+  );
+});
+
+test('bulk apply routes safely reject conflicts, invalid requests, missing drafts, and storage failures', async (t) => {
+  const draft = draftFixture(true);
+  const currentAssets = [readyAsset('o1', 'original', 10), readyAsset('h1', 'hook', 3)];
+  let applyCalls = 0;
+  const drafts = {
+    require: async (id: string) => {
+      if (id === 'missing') throw new ComposerDraftNotFoundError();
+      if (id === 'storage') throw new Error('EACCES D:\\private\\draft.json');
+      return draft;
+    },
+    applyConfigurations: async () => {
+      applyCalls += 1;
+      throw new ComposerDraftConflictError('stale details');
+    },
+  } as unknown as ComposerDraftStore;
+  const assets = {
+    requireAsset: async (id: string) => currentAssets.find((asset) => asset.id === id),
+    requireReadyAsset: async (id: string) => currentAssets.find((asset) => asset.id === id),
+  } as unknown as ComposerAssetStore;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter(assets, drafts));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address(); assert.ok(address && typeof address !== 'string');
+  const root = `http://127.0.0.1:${address.port}/api/composer/batches`;
+  const validScope = { allGroupsForOriginal: true, groupForAllOriginals: false };
+  const request = async (batchId: string, suffix: 'apply' | 'apply-preview', body: unknown) => fetch(
+    `${root}/${batchId}/${suffix}`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
+  );
+
+  const conflict = await request('batch-1', 'apply', {
+    sourceConfigurationId: 'o1:g-3.000', scope: validScope, expectedRevision: 1,
+  });
+  assert.equal(conflict.status, 409);
+  assert.deepEqual(await conflict.json(), {
+    error: 'DraftConflict', message: 'This draft changed in another tab; reload it before applying',
+  });
+  assert.equal(applyCalls, 1);
+
+  for (const body of [
+    { sourceConfigurationId: 'o1:g-3.000', scope: { allGroupsForOriginal: false, groupForAllOriginals: false } },
+    { sourceConfigurationId: 4, scope: validScope },
+    { sourceConfigurationId: 'o1:g-3.000', scope: { allGroupsForOriginal: 1, groupForAllOriginals: false } },
+  ]) {
+    const response = await request('batch-1', 'apply-preview', body);
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error, 'ValidationError');
+  }
+  const staleSource = await request('batch-1', 'apply-preview', {
+    sourceConfigurationId: 'missing', scope: validScope,
+  });
+  assert.equal(staleSource.status, 409);
+  assert.equal((await staleSource.json()).error, 'DraftConflict');
+  assert.equal((await request('missing', 'apply-preview', {
+    sourceConfigurationId: 'o1:g-3.000', scope: validScope,
+  })).status, 404);
+  const storage = await request('storage', 'apply-preview', {
+    sourceConfigurationId: 'o1:g-3.000', scope: validScope,
+  });
+  assert.equal(storage.status, 500);
+  assert.deepEqual(await storage.json(), { error: 'InternalError', message: 'Unable to plan composer apply' });
+  const commitStorage = await request('storage', 'apply', {
+    sourceConfigurationId: 'o1:g-3.000', scope: validScope, expectedRevision: 1,
+  });
+  assert.equal(commitStorage.status, 500);
+  assert.deepEqual(await commitStorage.json(), {
+    error: 'InternalError', message: 'Unable to apply composer configurations',
+  });
 });
 
 test('configuration route rejects an ID mismatch', async (t) => {
