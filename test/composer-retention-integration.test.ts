@@ -50,6 +50,7 @@ test('concurrent cleanup triggers share one non-overlapping cycle', async () => 
       cleanupExpired: async () => [],
       getRetainedWorkDirs: async () => [],
     },
+    bundles: { cleanupExpired: async () => {} },
   });
 
   const first = coordinator.runCleanupCycle(1_000);
@@ -110,6 +111,7 @@ test('extended completed preview lifetime governs queue and file cleanup', async
     root,
     queue,
     library: { cleanupExpired: async () => [], getRetainedWorkDirs: async () => [] },
+    bundles: { cleanupExpired: async () => {} },
   });
 
   await coordinator.runCleanupCycle(base + 24 * 60 * 60 * 1_000 + 1);
@@ -180,6 +182,7 @@ test('cleanup keeps held output, removes expired composer data and orphans, then
       getAllJobs: () => activeJobs as never,
     },
     library,
+    bundles: { cleanupExpired: async () => {} },
   });
   now = expiresAt + 1;
   await coordinator.runCleanupCycle(now);
@@ -202,6 +205,36 @@ test('cleanup keeps held output, removes expired composer data and orphans, then
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, 'library', 'entries.json'), 'utf8')), []);
 
   await fs.rm(managedRoot, { recursive: true, force: true });
+});
+
+test('cleanup releases expired bundle holds before Local Library expiry cleanup', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-bundle-cleanup-order-'));
+  const calls: string[] = [];
+  const coordinator = new ComposerCleanupCoordinator({
+    root,
+    queue: {
+      getAllJobs: () => [],
+      runCleanupCycle: async () => {
+        calls.push('queue');
+        return { expiredJobIds: [] };
+      },
+    },
+    library: {
+      cleanupExpired: async () => {
+        calls.push('library');
+        return [];
+      },
+      getRetainedWorkDirs: async () => [],
+    },
+    bundles: {
+      cleanupExpired: async () => { calls.push('bundles'); },
+    },
+  });
+
+  await coordinator.runCleanupCycle(1_000);
+
+  assert.deepEqual(calls, ['bundles', 'queue', 'library']);
+  await fs.rm(root, { recursive: true, force: true });
 });
 
 const pathExists = async (candidate: string): Promise<boolean> => fs.access(candidate).then(

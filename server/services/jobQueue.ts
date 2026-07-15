@@ -351,7 +351,7 @@ export class JobQueueService {
     const jobsToCheck = Array.from(this.jobs.values()).filter(
       (job) => job.status === 'completed' || job.status === 'failed',
     );
-    await this.reconcileLibraryHolds();
+    await this.reconcileLibraryHolds(true);
     await cleanupExpiredJobs(jobsToCheck, now, protectedJobIds);
     await this.localLibrary?.cleanupExpired(now);
 
@@ -370,7 +370,7 @@ export class JobQueueService {
     return { expiredJobIds: expiredIds };
   }
 
-  private async reconcileLibraryHolds(): Promise<void> {
+  private async reconcileLibraryHolds(preserveBundleHolds = false): Promise<void> {
     if (!this.localLibrary) return;
     const activeResizeReferences = this.getAllJobs()
       .filter((job) => (
@@ -378,7 +378,7 @@ export class JobQueueService {
         && (job.status === 'queued' || job.status === 'processing' || (job.status as string) === 'cancelling')
       ))
       .map((job) => job.id);
-    await this.localLibrary.reconcileHolds(activeResizeReferences);
+    await this.localLibrary.reconcileHolds(activeResizeReferences, { preserveBundleHolds });
   }
 
   private async getQueuedRecoveryError(job: NativeJobRecord): Promise<string | null> {
@@ -487,7 +487,7 @@ export class JobQueueService {
       await this.persistAll();
       cancelledJobs.inc();
       if (isComposerJob(job)) composerJobsCompleted.inc({ status: 'cancelled' });
-      await this.reconcileLibraryHolds();
+      await this.reconcileLibraryHolds(true);
       await this.localLibrary?.cleanupExpired();
       this.syncQueueMetrics();
       // Now cleanup the files - if this fails after persist, recovery will handle it
@@ -664,7 +664,7 @@ export class JobQueueService {
       
       // Persist after terminal state
       await this.persistAll();
-      await this.reconcileLibraryHolds();
+      await this.reconcileLibraryHolds(true);
       
       // Update metrics after state change
       this.syncQueueMetrics();

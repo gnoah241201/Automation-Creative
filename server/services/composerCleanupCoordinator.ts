@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { NativeJobRecord } from '../types/renderJob.ts';
 import { LocalLibraryService } from './localLibrary.ts';
+import { LibraryDownloadBundleService } from './libraryDownloadBundles.ts';
 
 const RETENTION_MS = 86_400_000;
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -17,6 +18,8 @@ type CleanupLibrary = Pick<
   'cleanupExpired' | 'getRetainedWorkDirs'
 >;
 
+type CleanupBundles = Pick<LibraryDownloadBundleService, 'cleanupExpired'>;
+
 export interface ComposerCleanupResult {
   drafts: number;
   previews: number;
@@ -28,13 +31,20 @@ export class ComposerCleanupCoordinator {
   private readonly root: string;
   private readonly queue: CleanupQueue;
   private readonly library: CleanupLibrary;
+  private readonly bundles: CleanupBundles;
   private timer: NodeJS.Timeout | null = null;
   private running: Promise<ComposerCleanupResult> | null = null;
 
-  constructor(options: { root: string; queue: CleanupQueue; library: CleanupLibrary }) {
+  constructor(options: {
+    root: string;
+    queue: CleanupQueue;
+    library: CleanupLibrary;
+    bundles: CleanupBundles;
+  }) {
     this.root = path.resolve(options.root);
     this.queue = options.queue;
     this.library = options.library;
+    this.bundles = options.bundles;
   }
 
   start(): void {
@@ -63,6 +73,7 @@ export class ComposerCleanupCoordinator {
 
   private async runOnce(now: number): Promise<ComposerCleanupResult> {
     if (!Number.isFinite(now) || now < 0) throw new Error('Cleanup time must be a finite timestamp');
+    await this.bundles.cleanupExpired(now);
     const jobsBeforeCleanup = this.queue.getAllJobs();
     const protectedPreviewJobIds = await this.getProtectedPreviewJobIds(now, jobsBeforeCleanup);
     await this.queue.runCleanupCycle(now, protectedPreviewJobIds);

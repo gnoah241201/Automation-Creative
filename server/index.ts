@@ -18,6 +18,7 @@ import { DiskCapacityGuard, LocalLibraryService } from './services/localLibrary'
 import { managedRenderRoot } from './services/fileStore';
 import { ComposerBatchRenderer } from './services/composerBatchRenderer';
 import { ComposerCleanupCoordinator } from './services/composerCleanupCoordinator';
+import { LibraryDownloadBundleService } from './services/libraryDownloadBundles';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -189,6 +190,7 @@ const requireAuth: express.RequestHandler = (req, res, next) => {
     });
     return;
   }
+  res.locals.authUsername = session.username;
   next();
 };
 
@@ -251,6 +253,7 @@ const start = async () => {
     managedRoot: managedRenderRoot,
     libraryRoot: path.join(composerRoot, 'library'),
   });
+  const libraryBundles = new LibraryDownloadBundleService(localLibrary);
   const queue = new JobQueueService(maxConcurrentJobs, {
     localLibrary,
     diskCapacityGuard: new DiskCapacityGuard(),
@@ -270,7 +273,12 @@ const start = async () => {
     disk: new DiskCapacityGuard(),
   });
   await queue.init();
-  const composerCleanup = new ComposerCleanupCoordinator({ root: composerRoot, queue, library: localLibrary });
+  const composerCleanup = new ComposerCleanupCoordinator({
+    root: composerRoot,
+    queue,
+    library: localLibrary,
+    bundles: libraryBundles,
+  });
   await composerCleanup.runCleanupCycle();
   composerCleanup.start();
   let metricsInitialized = false;
@@ -401,7 +409,7 @@ const start = async () => {
     composerPreviewService,
     composerBatchRenderer,
   ));
-  app.use('/api/library', requireAuth, buildLibraryRouter(localLibrary));
+  app.use('/api/library', requireAuth, buildLibraryRouter(localLibrary, libraryBundles));
 
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);

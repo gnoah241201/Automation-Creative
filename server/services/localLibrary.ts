@@ -338,7 +338,10 @@ export class LocalLibraryService {
     });
   }
 
-  async reconcileHolds(activeReferenceIds: Iterable<string>): Promise<string[]> {
+  async reconcileHolds(
+    activeReferenceIds: Iterable<string>,
+    options: { preserveBundleHolds?: boolean } = {},
+  ): Promise<string[]> {
     const active = new Set(activeReferenceIds);
     for (const id of active) validateIdentifier(id, 'hold reference');
     return this.mutate(() => {
@@ -346,7 +349,7 @@ export class LocalLibraryService {
       for (const entry of this.entries!.values()) {
         const retained: string[] = [];
         for (const hold of entry.holds) {
-          if (active.has(hold)) retained.push(hold);
+          if (active.has(hold) || (options.preserveBundleHolds && hold.startsWith('bundle-'))) retained.push(hold);
           else released.add(hold);
         }
         entry.holds = retained;
