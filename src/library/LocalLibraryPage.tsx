@@ -8,6 +8,8 @@ import {
   deleteLibraryEntry,
   libraryDownloadUrl,
   listLibraryEntries,
+  prepareLibraryDownloadBundle,
+  startBundleDownload,
 } from './api.ts';
 
 interface LocalLibraryPageProps {
@@ -34,6 +36,49 @@ export function LibrarySourceNames({ entry }: { entry: LocalLibraryEntry }) {
   );
 }
 
+interface LocalLibraryToolbarProps {
+  entryCount: number;
+  selectedCount: number;
+  busy: boolean;
+  onSelectAll: () => void;
+  onClear: () => void;
+  onDownload: () => void;
+  onDelete: () => void;
+  onSendToResize: () => void;
+}
+
+export function LocalLibraryToolbar({
+  entryCount,
+  selectedCount,
+  busy,
+  onSelectAll,
+  onClear,
+  onDownload,
+  onDelete,
+  onSendToResize,
+}: LocalLibraryToolbarProps) {
+  const hasSelection = selectedCount >= 1 && selectedCount <= 100;
+  const canDownload = hasSelection && !busy;
+  const canSendToResize = selectedCount >= 1 && selectedCount <= 10 && !busy;
+
+  return (
+    <div className="mb-5 flex flex-wrap items-center gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+      <button type="button" onClick={onSelectAll} disabled={busy || entryCount === 0} className="rounded-lg bg-neutral-800 px-4 py-2 text-sm disabled:opacity-50">Select all</button>
+      <button type="button" onClick={onClear} disabled={busy || selectedCount === 0} className="rounded-lg bg-neutral-800 px-4 py-2 text-sm disabled:opacity-50">Clear selection</button>
+      <button type="button" onClick={onDownload} disabled={!canDownload} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold disabled:opacity-50">
+        <Download className="mr-2 inline h-4 w-4" /> Download selected (.zip) ({selectedCount})
+      </button>
+      <button type="button" onClick={onDelete} disabled={busy || !hasSelection} className="rounded-lg bg-red-950 px-4 py-2 text-sm text-red-300 disabled:opacity-50">Delete selected</button>
+      <div className="ml-auto text-right">
+        <button type="button" onClick={onSendToResize} disabled={!canSendToResize} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold disabled:opacity-50">
+          <Send className="mr-2 inline h-4 w-4" /> Send selected to Resize ({selectedCount}/10)
+        </button>
+        {selectedCount > 10 && <p className="mt-1 text-xs text-amber-300">Resize supports up to 10 selected outputs</p>}
+      </div>
+    </div>
+  );
+}
+
 const bytes = (value: number): string => value >= 1_000_000
   ? `${(value / 1_000_000).toFixed(1)} MB`
   : `${Math.max(1, Math.round(value / 1_000))} KB`;
@@ -50,6 +95,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
 
   const load = useCallback(async () => {
@@ -78,10 +124,32 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
     return entries.filter((entry) => ids.has(entry.id));
   }, [entries, selected]);
 
-  const selectAll = () => setSelected(entries.slice(0, 10).map((entry) => entry.id));
+  const selectAll = () => setSelected(entries.slice(0, 100).map((entry) => entry.id));
   const toggle = (id: string) => setSelected((current) => current.includes(id)
     ? current.filter((item) => item !== id)
-    : current.length < 10 ? [...current, id] : current);
+    : current.length < 100 ? [...current, id] : current);
+
+  const canDownloadZip = selected.length >= 1 && selected.length <= 100 && !busy;
+  const canSendToResize = selected.length >= 1 && selected.length <= 10 && !busy;
+
+  const downloadSelected = async () => {
+    if (!canDownloadZip) return;
+    setBusy(true);
+    setError(null);
+    setStatus('Preparing ZIP…');
+    try {
+      const bundle = await prepareLibraryDownloadBundle(selected);
+      startBundleDownload(bundle.downloadUrl);
+      setStatus('Download started');
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : 'Could not prepare ZIP download';
+      await load();
+      setError(message);
+      setStatus(null);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const removeOne = async (id: string) => {
     setError(null);
@@ -112,7 +180,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
   };
 
   const send = async () => {
-    if (selectedEntries.length === 0) return;
+    if (!canSendToResize) return;
     setBusy(true);
     setError(null);
     try {
@@ -153,13 +221,17 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
           </button>
         </div>
 
-        <div className="mb-5 flex flex-wrap gap-3 rounded-xl border border-neutral-800 bg-neutral-900 p-4">
-          <button type="button" onClick={selectAll} disabled={entries.length === 0} className="rounded-lg bg-neutral-800 px-4 py-2 text-sm">Select all</button>
-          <button type="button" onClick={() => void removeSelected()} disabled={busy || selected.length === 0} className="rounded-lg bg-red-950 px-4 py-2 text-sm text-red-300">Delete selected</button>
-          <button type="button" onClick={() => void send()} disabled={busy || selected.length === 0} className="ml-auto rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold disabled:opacity-50">
-            <Send className="mr-2 inline h-4 w-4" /> Send selected to Resize ({selected.length}/10)
-          </button>
-        </div>
+        <LocalLibraryToolbar
+          entryCount={entries.length}
+          selectedCount={selected.length}
+          busy={busy}
+          onSelectAll={selectAll}
+          onClear={() => setSelected([])}
+          onDownload={() => void downloadSelected()}
+          onDelete={() => void removeSelected()}
+          onSendToResize={() => void send()}
+        />
+        {status && <p role="status" className="mb-4 rounded-lg bg-neutral-900 p-3 text-sm text-neutral-300">{status}</p>}
         {error && <p role="alert" className="mb-4 rounded-lg bg-red-950/60 p-3 text-sm text-red-300">{error}</p>}
         {loading && entries.length === 0 ? <p className="text-neutral-400">Loading outputs…</p> : null}
         {!loading && entries.length === 0 ? <div className="rounded-2xl border border-dashed border-neutral-700 p-16 text-center text-neutral-500"><Film className="mx-auto mb-3 h-9 w-9" />No composer outputs yet.</div> : null}

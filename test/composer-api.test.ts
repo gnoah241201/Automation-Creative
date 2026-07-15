@@ -11,6 +11,58 @@ import {
   previewComposerBulkApply,
 } from '../src/composer/api.ts';
 import type { ComposerVariantConfig } from '../shared/composer-contract.ts';
+import { prepareLibraryDownloadBundle, startBundleDownload } from '../src/library/api.ts';
+
+test('bundle API posts IDs only and returns an authenticated same-origin URL', async (t) => {
+  const originalFetch = globalThis.fetch;
+  let observed: { input: string; init?: RequestInit } | undefined;
+  globalThis.fetch = (async (input, init) => {
+    observed = { input: String(input), init };
+    return new Response(JSON.stringify({
+      token: 'bundle-token',
+      expiresAt: Date.now() + 60_000,
+      downloadUrl: '/api/library/download-bundles/bundle-token',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const prepared = await prepareLibraryDownloadBundle(['a', 'b']);
+
+  assert.equal(observed?.input, '/api/library/download-bundles');
+  assert.equal(observed?.init?.credentials, 'include');
+  assert.equal(observed?.init?.body, JSON.stringify({ ids: ['a', 'b'] }));
+  assert.match(prepared.downloadUrl, /^\/api\/library\/download-bundles\//);
+});
+
+test('bundle download uses a temporary anchor and rejects non-bundle URLs', (t) => {
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const clicked: string[] = [];
+  const appended: unknown[] = [];
+  const anchor = {
+    href: '',
+    download: 'unset',
+    click: () => { clicked.push(anchor.href); },
+    remove: () => { appended.pop(); },
+  };
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      createElement: () => anchor,
+      body: { append: (element: unknown) => { appended.push(element); } },
+    },
+  });
+  t.after(() => {
+    if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor);
+    else Reflect.deleteProperty(globalThis, 'document');
+  });
+
+  startBundleDownload('/api/library/download-bundles/bundle-token');
+
+  assert.deepEqual(clicked, ['/api/library/download-bundles/bundle-token']);
+  assert.equal(anchor.download, '');
+  assert.equal(appended.length, 0);
+  assert.throws(() => startBundleDownload('https://example.com/bundle.zip'), /Invalid bundle download URL/);
+});
 
 test('unmount flush uses an authenticated keepalive request', async (t) => {
   const originalFetch = globalThis.fetch;

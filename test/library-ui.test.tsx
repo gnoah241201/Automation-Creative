@@ -4,7 +4,7 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LocalLibraryEntry } from '../shared/composer-contract.ts';
 import { createLibraryUploadSessions, listLibraryEntries } from '../src/library/api.ts';
-import { LibrarySelectionCheckbox, LocalLibraryPage } from '../src/library/LocalLibraryPage.tsx';
+import { LibrarySelectionCheckbox, LocalLibraryPage, LocalLibraryToolbar } from '../src/library/LocalLibraryPage.tsx';
 import { ResizeBatchPanel } from '../src/render/ResizeBatchPanel.tsx';
 
 test('library API uses authenticated requests and sends IDs instead of video bytes', async () => {
@@ -58,4 +58,42 @@ test('library selection checkbox names the output file for assistive technology'
       };
     const html = renderToStaticMarkup(<LibrarySelectionCheckbox entry={entry} checked={false} onChange={() => {}} />);
     assert.match(html, /<input[^>]+aria-label="Select named-output\.mp4"/);
+});
+
+test('Local Library can select all outputs for ZIP while Resize remains capped at ten', () => {
+  const html = renderToStaticMarkup(<LocalLibraryToolbar
+    entryCount={25}
+    selectedCount={25}
+    busy={false}
+    onSelectAll={() => {}}
+    onClear={() => {}}
+    onDownload={() => {}}
+    onDelete={() => {}}
+    onSendToResize={() => {}}
+  />);
+
+  assert.match(html, /Download selected \(\.zip\) \(25\)/);
+  assert.match(html, /Resize supports up to 10 selected outputs/);
+  assert.doesNotMatch(html.match(/<button[^>]*bg-emerald-700[^>]*>/)?.[0] ?? '', /\sdisabled=""/);
+  assert.match(html.match(/<button[^>]*bg-blue-600[^>]*>/)?.[0] ?? '', /\sdisabled=""/);
+});
+
+test('Local Library ZIP and Resize controls enforce independent selection limits', () => {
+  const render = (selectedCount: number) => renderToStaticMarkup(<LocalLibraryToolbar
+    entryCount={100}
+    selectedCount={selectedCount}
+    busy={false}
+    onSelectAll={() => {}}
+    onClear={() => {}}
+    onDownload={() => {}}
+    onDelete={() => {}}
+    onSendToResize={() => {}}
+  />);
+  const button = (html: string, className: string) => html.match(new RegExp(`<button[^>]*${className}[^>]*>`))?.[0] ?? '';
+
+  assert.match(button(render(0), 'bg-emerald-700'), /\sdisabled=""/);
+  assert.doesNotMatch(button(render(10), 'bg-blue-600'), /\sdisabled=""/);
+  assert.match(button(render(11), 'bg-blue-600'), /\sdisabled=""/);
+  assert.doesNotMatch(button(render(100), 'bg-emerald-700'), /\sdisabled=""/);
+  assert.match(button(render(101), 'bg-emerald-700'), /\sdisabled=""/);
 });

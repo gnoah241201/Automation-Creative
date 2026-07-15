@@ -8,6 +8,12 @@ export interface LibraryUploadSession {
   expiresInMs: number;
 }
 
+export interface PreparedLibraryBundle {
+  token: string;
+  expiresAt: number;
+  downloadUrl: string;
+}
+
 const parseJson = async <T,>(response: Response): Promise<T> => {
   if (!response.ok) {
     const body = await response.json().catch(() => null) as ApiError | null;
@@ -28,6 +34,27 @@ export const createLibraryUploadSessions = async (
   headers: { 'Content-Type': 'application/json' },
   body: JSON.stringify({ ids }),
 }));
+
+export const prepareLibraryDownloadBundle = async (
+  ids: string[],
+): Promise<PreparedLibraryBundle> => parseJson(await fetch('/api/library/download-bundles', {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ ids }),
+}));
+
+export const startBundleDownload = (downloadUrl: string): void => {
+  if (!downloadUrl.startsWith('/api/library/download-bundles/')) {
+    throw new Error('Invalid bundle download URL');
+  }
+  const anchor = document.createElement('a');
+  anchor.href = downloadUrl;
+  anchor.download = '';
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+};
 
 export const deleteLibraryEntry = async (id: string): Promise<void> => {
   const response = await fetch(`/api/library/${encodeURIComponent(id)}`, {
