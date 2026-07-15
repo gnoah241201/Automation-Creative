@@ -22,13 +22,32 @@ interface MediaPanelProps {
   originals: ComposerAsset[];
   hooks: ComposerAsset[];
   onAssetUploaded: (asset: ComposerAsset, file: File) => void;
-  onAssetRemoved: (assetId: string) => void;
+  onAssetRemoved: (assetId: string) => boolean;
   onEditRequested?: (asset: ComposerAsset, tab: SourceEditTab) => void;
   onCropRequested?: (asset: ComposerAsset) => void;
   onContinue: () => void;
   continuing?: boolean;
   continueError?: string;
 }
+
+export interface MediaRemovalBookkeeping {
+  fingerprints: Set<string>;
+  assetFingerprints: Map<string, string>;
+  acceptedCounts: Record<ComposerAssetKind, number>;
+}
+
+export const commitAcceptedMediaRemoval = (
+  asset: ComposerAsset,
+  requestRemoval: (assetId: string) => boolean,
+  bookkeeping: MediaRemovalBookkeeping,
+): boolean => {
+  if (!requestRemoval(asset.id)) return false;
+  const fingerprint = bookkeeping.assetFingerprints.get(asset.id);
+  if (fingerprint) bookkeeping.fingerprints.delete(fingerprint);
+  bookkeeping.assetFingerprints.delete(asset.id);
+  bookkeeping.acceptedCounts[asset.kind] = Math.max(0, bookkeeping.acceptedCounts[asset.kind] - 1);
+  return true;
+};
 
 const fileFingerprint = (kind: ComposerAssetKind, file: File) =>
   `${kind}:${file.name}:${file.size}:${file.lastModified}`;
@@ -151,11 +170,11 @@ export function MediaPanel({
     void runUpload(item);
   };
   const removeAsset = (asset: ComposerAsset) => {
-    const fingerprint = assetFingerprints.current.get(asset.id);
-    if (fingerprint) fingerprints.current.delete(fingerprint);
-    assetFingerprints.current.delete(asset.id);
-    acceptedCounts.current[asset.kind] = Math.max(0, acceptedCounts.current[asset.kind] - 1);
-    onAssetRemoved(asset.id);
+    commitAcceptedMediaRemoval(asset, onAssetRemoved, {
+      fingerprints: fingerprints.current,
+      assetFingerprints: assetFingerprints.current,
+      acceptedCounts: acceptedCounts.current,
+    });
   };
 
   const uploading = uploads.some((item) => item.status === 'uploading');

@@ -3,7 +3,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ComposerAsset } from '../shared/composer-contract.ts';
-import { MediaCard } from '../src/composer/MediaPanel.tsx';
+import { commitAcceptedMediaRemoval, MediaCard } from '../src/composer/MediaPanel.tsx';
 import {
   resolveSourceTabChange,
   sourceTabCanSaveAndClose,
@@ -156,4 +156,48 @@ test('source trim sliders support arrows plus Home and End without crossing', ()
   assert.deepEqual(sourceTrimRangeForKey('end', 'Home', range, 20, 30), { start: 2, end: 2 + 1 / 30 });
   assert.deepEqual(sourceTrimRangeForKey('end', 'End', range, 20, 30), { start: 2, end: 20 });
   assert.equal(sourceTrimRangeForKey('end', 'Escape', range, 20, 30), undefined);
+});
+
+test('cancelled media removal preserves bookkeeping and accepted removal commits once for both kinds', () => {
+  for (const kind of ['original', 'hook'] as const) {
+    const source = asset({ id: kind, kind });
+    const fingerprint = `${kind}:clip.mp4:100:1`;
+    const bookkeeping = {
+      fingerprints: new Set([fingerprint]),
+      assetFingerprints: new Map([[source.id, fingerprint]]),
+      acceptedCounts: { original: 2, hook: 2 },
+    };
+
+    assert.equal(commitAcceptedMediaRemoval(source, () => false, bookkeeping), false);
+    assert.equal(commitAcceptedMediaRemoval(source, () => false, bookkeeping), false);
+    assert.equal(bookkeeping.acceptedCounts[kind], 2);
+    assert.equal(bookkeeping.fingerprints.has(fingerprint), true);
+    assert.equal(bookkeeping.assetFingerprints.get(source.id), fingerprint);
+
+    assert.equal(commitAcceptedMediaRemoval(source, () => true, bookkeeping), true);
+    assert.equal(bookkeeping.acceptedCounts[kind], 1);
+    assert.equal(bookkeeping.fingerprints.has(fingerprint), false);
+    assert.equal(bookkeeping.assetFingerprints.has(source.id), false);
+  }
+});
+
+test('out slider exposes the canonical last complete frame as its aria maximum', () => {
+  const fractional = asset({ duration: 20.05, sourceTrimEnd: 601 / 30 });
+  const html = renderToStaticMarkup(
+    <SourceEditDrawer
+      asset={fractional}
+      sourceUrl="/source"
+      initialTab="trim"
+      crop={{ x: 0, y: 0, width: 1, height: 1 }}
+      videoRef={{ current: null }}
+      confirmDiscard={() => true}
+      onDirtyChange={() => {}}
+      onCropChange={() => {}}
+      onSaveCrop={async () => {}}
+      onSaveTrim={async () => {}}
+      onClose={() => {}}
+    />,
+  );
+  assert.match(html, /aria-label="Trim out handle"[^>]*aria-valuemax="20\.033333333333335"/);
+  assert.doesNotMatch(html, /aria-label="Trim out handle"[^>]*aria-valuemax="20\.05"/);
 });

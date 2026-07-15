@@ -288,7 +288,7 @@ export function HookComposerPage() {
   );
 
   const removeSource = (assetId: string) => {
-    if (!guardSourceInteraction()) return;
+    if (!guardSourceInteraction()) return false;
     const url = sourceUrlsRef.current.get(assetId);
     if (url) URL.revokeObjectURL(url);
     sourceUrlsRef.current.delete(assetId);
@@ -298,6 +298,7 @@ export function HookComposerPage() {
       return next;
     });
     updateSourceAssets({ type: 'remove', assetId });
+    return true;
   };
 
   const openSourceEditor = (asset: ComposerAsset, tab: SourceEditTab) => {

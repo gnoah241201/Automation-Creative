@@ -119,7 +119,7 @@ function SourceTrimControls({ asset, range, videoRef, onChange }: {
           dragging.current = 'start';
           event.currentTarget.setPointerCapture(event.pointerId);
         }} className="absolute top-1 h-8 w-3 -translate-x-1/2 touch-none rounded bg-blue-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: `${(range.start / asset.duration) * 100}%` }} />
-        <button type="button" role="slider" aria-orientation="horizontal" aria-label="Trim out handle" aria-valuemin={range.start + 1 / asset.frameRate} aria-valuemax={asset.duration} aria-valuenow={range.end} onKeyDown={(event) => {
+        <button type="button" role="slider" aria-orientation="horizontal" aria-label="Trim out handle" aria-valuemin={range.start + 1 / asset.frameRate} aria-valuemax={fullRange.end} aria-valuenow={range.end} onKeyDown={(event) => {
           const next = sourceTrimRangeForKey('end', event.key, range, asset.duration, asset.frameRate);
           if (!next) return;
           event.preventDefault();

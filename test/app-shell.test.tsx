@@ -53,7 +53,7 @@ test('composer media progress copy contains no mojibake', () => {
       originals={[original]}
       hooks={[mediaAsset('hook', 'hook')]}
       onAssetUploaded={() => {}}
-      onAssetRemoved={() => {}}
+      onAssetRemoved={() => true}
       onCropRequested={() => {}}
       onContinue={() => {}}
       continuing
