@@ -102,8 +102,8 @@ test('real FFmpeg excludes trimmed leading source sections from preview and fina
   try {
     const original = path.join(root, 'original.mp4');
     const hook = path.join(root, 'hook.mp4');
-    createSectionedVideo(original, 'red', 'yellow', 0.5, 1, 220);
-    createSectionedVideo(hook, 'blue', 'green', 0.4, 0.6, 880);
+    createSectionedVideo(original, 'red', 'yellow', 0.5, 1, 220, 660);
+    createSectionedVideo(hook, 'blue', 'green', 0.4, 0.6, 880, 1320);
 
     for (const mode of ['preview', 'final'] as const) {
       const output = path.join(root, `${mode}.mp4`);
@@ -125,8 +125,10 @@ test('real FFmpeg excludes trimmed leading source sections from preview and fina
       assert.equal(audio.channels, 2);
       assertColor(await sampleRgb(output, 0.2), 'yellow');
       assertColor(await sampleRgb(output, 0.7), 'green');
-      assert.ok(pcmRms(output, 0.2) < 10, 'trimmed original leading tone is absent');
-      assert.ok(pcmRms(output, 0.7) < 10, 'trimmed hook leading tone is absent');
+      assert.ok(toneMagnitude(output, 0.2, 220) < 20, 'trimmed original leading tone is absent');
+      assert.ok(toneMagnitude(output, 0.2, 660) > 100, 'kept original tone remains');
+      assert.ok(toneMagnitude(output, 0.7, 880) < 20, 'trimmed hook leading tone is absent');
+      assert.ok(toneMagnitude(output, 0.7, 1320) > 100, 'kept hook tone remains');
     }
   } finally {
     await fs.rm(root, { recursive: true, force: true });
@@ -150,13 +152,14 @@ function createSectionedVideo(
   leadingDuration: number,
   keptDuration: number,
   leadingFrequency: number,
+  keptFrequency: number,
 ): void {
   execFileSync(ffmpeg, [
     '-y',
     '-f', 'lavfi', '-i', `color=c=${leadingColor}:s=270x480:r=30:d=${leadingDuration}`,
     '-f', 'lavfi', '-i', `sine=frequency=${leadingFrequency}:sample_rate=48000:duration=${leadingDuration},aformat=channel_layouts=stereo`,
     '-f', 'lavfi', '-i', `color=c=${keptColor}:s=270x480:r=30:d=${keptDuration}`,
-    '-f', 'lavfi', '-i', `anullsrc=channel_layout=stereo:sample_rate=48000,atrim=duration=${keptDuration}`,
+    '-f', 'lavfi', '-i', `sine=frequency=${keptFrequency}:sample_rate=48000:duration=${keptDuration},aformat=channel_layouts=stereo`,
     '-filter_complex', '[0:v][1:a][2:v][3:a]concat=n=2:v=1:a=1[v][a]',
     '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-ar', '48000', '-ac', '2', output,
@@ -227,6 +230,23 @@ function pcmRms(input: string, at: number): number {
     sum += sample * sample;
   }
   return Math.sqrt(sum / count);
+}
+
+function toneMagnitude(input: string, at: number, frequency: number): number {
+  const bytes = execFileSync(ffmpeg, [
+    '-v', 'error', '-ss', String(at), '-i', input, '-t', '0.08', '-vn',
+    '-ac', '1', '-ar', '8000', '-f', 's16le', '-',
+  ], { timeout: 15_000 });
+  const count = Math.floor(bytes.length / 2);
+  let sine = 0;
+  let cosine = 0;
+  for (let index = 0; index < count; index += 1) {
+    const sample = bytes.readInt16LE(index * 2);
+    const angle = 2 * Math.PI * frequency * index / 8000;
+    sine += sample * Math.sin(angle);
+    cosine += sample * Math.cos(angle);
+  }
+  return 2 * Math.hypot(sine, cosine) / count;
 }
 
 function probeStreams(input: string): Array<Record<string, unknown>> {

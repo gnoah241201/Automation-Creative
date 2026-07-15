@@ -29,6 +29,9 @@ test('composer metrics tolerate module re-evaluation and expose only bounded lab
   assert.deepEqual(first.composerJobsCompleted.labelNames, ['status']);
   assert.deepEqual(first.composerPreviewCache.labelNames, ['result']);
   assert.deepEqual(first.composerLibraryBytes.labelNames, []);
+  assert.deepEqual(first.composerSourceTrimMutations.labelNames, ['status']);
+  assert.deepEqual(first.composerBulkApplyMutations.labelNames, ['scope', 'status']);
+  assert.deepEqual(first.composerLibraryBundles.labelNames, ['status']);
 });
 
 test('concurrent cleanup triggers share one non-overlapping cycle', async () => {

@@ -73,6 +73,24 @@ export const composerLibraryBytes = metric('resize_video_composer_library_bytes'
   help: 'Bytes currently retained in local composer library',
 }));
 
+export const composerSourceTrimMutations = metric('resize_video_composer_source_trim_total', () => new Counter({
+  name: 'resize_video_composer_source_trim_total',
+  help: 'Composer source trim mutations',
+  labelNames: ['status'],
+}));
+
+export const composerBulkApplyMutations = metric('resize_video_composer_bulk_apply_total', () => new Counter({
+  name: 'resize_video_composer_bulk_apply_total',
+  help: 'Composer bulk apply mutations',
+  labelNames: ['scope', 'status'],
+}));
+
+export const composerLibraryBundles = metric('resize_video_composer_library_bundle_total', () => new Counter({
+  name: 'resize_video_composer_library_bundle_total',
+  help: 'Composer library ZIP bundles',
+  labelNames: ['status'],
+}));
+
 // Export metrics endpoint
 export const metricsEndpoint = async () => {
   return register.metrics();

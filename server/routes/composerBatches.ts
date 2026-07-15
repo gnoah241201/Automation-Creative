@@ -21,6 +21,15 @@ import {
   ComposerBatchActiveError, ComposerBatchRenderer, ComposerInvalidRetryError, ComposerJobNotFoundError,
   ComposerPartialSubmissionError, ComposerRetrySourceGoneError, ComposerRetrySupersededError, ComposerStorageError,
 } from '../services/composerBatchRenderer.ts';
+import { composerBulkApplyMutations } from '../metrics.ts';
+
+type BulkApplyMetricScope = 'row' | 'column' | 'matrix';
+
+const bulkApplyMetricScope = (scope: ComposerBulkApplyScope): BulkApplyMetricScope => (
+  scope.allGroupsForOriginal && scope.groupForAllOriginals
+    ? 'matrix'
+    : scope.allGroupsForOriginal ? 'row' : 'column'
+);
 
 const toMessage = (error: unknown): string => error instanceof Error ? error.message : 'Invalid request';
 class InvalidPreviewRequestError extends Error {}
@@ -250,8 +259,10 @@ export const buildComposerBatchesRouter = (
   }, sendBulkApplyBodyError);
 
   router.post('/batches/:batchId/apply', express.json(), async (req, res) => {
+    let metricScope: BulkApplyMetricScope | null = null;
     try {
       const request = parseBulkApplyRequest(req.body, true);
+      metricScope = bulkApplyMetricScope(request.scope);
       const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
       await assertDraftAssetsCurrent(draft, assets);
       const plan = await buildBulkApplyPlan(
@@ -260,8 +271,18 @@ export const buildComposerBatchesRouter = (
         request.scope,
         assets,
       );
-      res.json(await drafts.applyConfigurations(draft.id, plan.targets, request.expectedRevision!));
+      const applied = await drafts.applyConfigurations(draft.id, plan.targets, request.expectedRevision!);
+      composerBulkApplyMutations.inc({ scope: metricScope, status: 'success' });
+      res.json(applied);
     } catch (error) {
+      if (metricScope) {
+        const status = error instanceof ComposerDraftConflictError
+          || error instanceof ComposerDraftStaleAssetsError
+          || error instanceof ComposerBulkApplyConflictError
+          ? 'conflict'
+          : error instanceof ComposerBulkApplyValidationError ? 'invalid' : 'error';
+        composerBulkApplyMutations.inc({ scope: metricScope, status });
+      }
       if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
       else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
       else if (error instanceof ComposerDraftConflictError) res.status(409).json({

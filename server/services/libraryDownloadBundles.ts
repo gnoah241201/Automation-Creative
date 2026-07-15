@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { LocalLibraryService, ResolvedLibraryOutput } from './localLibrary.ts';
+import { composerLibraryBundles } from '../metrics.ts';
 
 const BUNDLE_LIFETIME_MS = 5 * 60 * 1_000;
 
@@ -25,6 +26,7 @@ interface LibraryBundleRecord {
   createdAt: number;
   expiresAt: number;
   state: 'prepared' | 'streaming' | 'releasing';
+  outcomeRecorded: boolean;
   entries: LibraryBundleEntry[];
 }
 
@@ -124,9 +126,11 @@ export class LibraryDownloadBundleService {
         createdAt,
         expiresAt: createdAt + BUNDLE_LIFETIME_MS,
         state: 'prepared',
+        outcomeRecorded: false,
         entries: allocateArchiveNames(resolved),
       };
       this.records.set(token, record);
+      composerLibraryBundles.inc({ status: 'prepared' });
       return {
         token,
         referenceId,
@@ -137,6 +141,7 @@ export class LibraryDownloadBundleService {
       const rollback = await Promise.allSettled(held.map((id) => this.library.release(id, referenceId)));
       const unreleased = held.filter((_id, index) => rollback[index].status === 'rejected');
       if (unreleased.length > 0) this.rollbackHolds.set(referenceId, unreleased);
+      composerLibraryBundles.inc({ status: 'error' });
       throw error;
     }
   }
@@ -161,13 +166,13 @@ export class LibraryDownloadBundleService {
     };
   }
 
-  async complete(token: string): Promise<void> {
+  async complete(token: string, outcome: 'completed' | 'aborted' | 'error' = 'completed'): Promise<void> {
     const inFlight = this.completions.get(token);
     if (inFlight) return inFlight;
     const record = this.records.get(token);
     if (!record) return;
     record.state = 'releasing';
-    const completion = this.finishCompletion(record);
+    const completion = this.finishCompletion(record, outcome);
     this.completions.set(token, completion);
     try {
       await completion;
@@ -177,7 +182,11 @@ export class LibraryDownloadBundleService {
   }
 
   async abort(token: string): Promise<void> {
-    await this.complete(token);
+    await this.complete(token, 'aborted');
+  }
+
+  async fail(token: string): Promise<void> {
+    await this.complete(token, 'error');
   }
 
   async cleanupExpired(now = this.now()): Promise<void> {
@@ -203,8 +212,14 @@ export class LibraryDownloadBundleService {
   }
 
   private async expire(record: LibraryBundleRecord, now: number): Promise<void> {
-    await this.release(record);
+    try {
+      await this.release(record);
+    } catch (error) {
+      this.recordOutcome(record, 'error');
+      throw error;
+    }
     if (this.records.get(record.token) !== record) return;
+    this.recordOutcome(record, 'expired');
     this.records.delete(record.token);
     this.tombstones.set(record.token, {
       owner: record.owner,
@@ -213,14 +228,32 @@ export class LibraryDownloadBundleService {
     });
   }
 
-  private async finishCompletion(record: LibraryBundleRecord): Promise<void> {
-    await this.release(record);
+  private async finishCompletion(
+    record: LibraryBundleRecord,
+    outcome: 'completed' | 'aborted' | 'error',
+  ): Promise<void> {
+    try {
+      await this.release(record);
+    } catch (error) {
+      this.recordOutcome(record, 'error');
+      throw error;
+    }
     if (this.records.get(record.token) !== record) return;
+    this.recordOutcome(record, outcome);
     this.records.delete(record.token);
     this.tombstones.set(record.token, {
       owner: record.owner,
       status: 'consumed',
       expiresAt: record.expiresAt,
     });
+  }
+
+  private recordOutcome(
+    record: LibraryBundleRecord,
+    status: 'completed' | 'expired' | 'aborted' | 'error',
+  ): void {
+    if (record.outcomeRecorded) return;
+    record.outcomeRecorded = true;
+    composerLibraryBundles.inc({ status });
   }
 }

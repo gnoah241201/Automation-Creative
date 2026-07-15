@@ -12,6 +12,7 @@ import {
   ComposerProbeUnavailableError,
 } from '../services/composerAssetStore.ts';
 import { composerRoot } from '../services/composerPaths.ts';
+import { composerSourceTrimMutations } from '../metrics.ts';
 
 const configuredMaxUploadBytes = Number(process.env.COMPOSER_MAX_UPLOAD_BYTES);
 export const DEFAULT_COMPOSER_MAX_UPLOAD_BYTES =
@@ -50,8 +51,9 @@ export const buildComposerAssetsRouter = (
   });
   const router = express.Router();
 
-  const sendMutationError = (error: unknown, res: express.Response): void => {
+  const sendMutationError = (error: unknown, res: express.Response, sourceTrim = false): void => {
     if (error instanceof ComposerAssetConflictError) {
+      if (sourceTrim) composerSourceTrimMutations.inc({ status: 'conflict' });
       res.status(409).json({
         error: 'AssetConflict',
         message: 'Composer asset changed; reload it and try again',
@@ -59,13 +61,16 @@ export const buildComposerAssetsRouter = (
       return;
     }
     if (error instanceof ComposerAssetValidationError) {
+      if (sourceTrim) composerSourceTrimMutations.inc({ status: 'invalid' });
       res.status(400).json({ error: 'ValidationError', message: error.message });
       return;
     }
     if (error instanceof ComposerAssetNotFoundError) {
+      if (sourceTrim) composerSourceTrimMutations.inc({ status: 'error' });
       res.status(404).json({ error: 'NotFound', message: 'Composer asset not found' });
       return;
     }
+    if (sourceTrim) composerSourceTrimMutations.inc({ status: 'error' });
     console.error('[composerAssets] Failed to update asset metadata:', error);
     res.status(500).json({ error: 'InternalError', message: 'Composer asset could not be updated' });
   };
@@ -133,13 +138,15 @@ export const buildComposerAssetsRouter = (
       if (!range || !Number.isFinite(range.start) || !Number.isFinite(range.end)) {
         throw new ComposerAssetValidationError('range must contain finite start and end values');
       }
-      res.json(await assets.setSourceTrim(
+      const asset = await assets.setSourceTrim(
         req.params.id,
         range,
         parseExpectedRevision(req.body?.expectedRevision),
-      ));
+      );
+      composerSourceTrimMutations.inc({ status: 'success' });
+      res.json(asset);
     } catch (error) {
-      sendMutationError(error, res);
+      sendMutationError(error, res, true);
     }
   });
 
@@ -175,7 +182,7 @@ export const buildComposerAssetsRouter = (
     }
   });
 
-  router.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
+  router.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (error instanceof multer.MulterError) {
       const tooLarge = error.code === 'LIMIT_FILE_SIZE';
       res.status(tooLarge ? 413 : 400).json({
@@ -191,10 +198,12 @@ export const buildComposerAssetsRouter = (
       ? (error as { type?: unknown }).type
       : undefined;
     if (bodyErrorType === 'entity.parse.failed') {
+      if (req.path.endsWith('/trim')) composerSourceTrimMutations.inc({ status: 'invalid' });
       res.status(400).json({ error: 'InvalidJson', message: 'Request body must be valid JSON' });
       return;
     }
     if (bodyErrorType === 'entity.too.large') {
+      if (req.path.endsWith('/trim')) composerSourceTrimMutations.inc({ status: 'invalid' });
       res.status(413).json({ error: 'RequestTooLarge', message: 'Request body exceeds the allowed size' });
       return;
     }

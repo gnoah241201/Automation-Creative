@@ -100,7 +100,10 @@ export const buildLibraryRouter = (
     let releasePromise: Promise<BundleFinalizeOutcome> | null = null;
     const finalize = (reason: BundleFinalizeReason): Promise<BundleFinalizeOutcome> => {
       if (releasePromise) return releasePromise;
-      releasePromise = bundles.complete(bundle.token).then(
+      const release = reason === 'completed'
+        ? bundles.complete(bundle.token)
+        : reason === 'aborted' ? bundles.abort(bundle.token) : bundles.fail(bundle.token);
+      releasePromise = release.then(
         () => reason,
         () => {
           console.error('[library] Failed to release ZIP bundle holds');
