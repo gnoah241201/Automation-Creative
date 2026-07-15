@@ -4,6 +4,8 @@ import {
   ComposerBatchDraft,
   ComposerBatchJob,
   ComposerBatchRenderResponse,
+  ComposerBulkApplyPlan,
+  ComposerBulkApplyScope,
   ComposerCrop,
   ComposerVariantConfig,
   ExactPreviewResponse,
@@ -154,6 +156,33 @@ export const saveComposerConfiguration = (
     signal,
   },
 ).then(json<ComposerBatchDraft>);
+
+export const previewComposerBulkApply = (
+  batchId: string,
+  sourceConfigurationId: string,
+  scope: ComposerBulkApplyScope,
+  signal?: AbortSignal,
+): Promise<ComposerBulkApplyPlan> => fetch(`${API_BASE}/batches/${encodeURIComponent(batchId)}/apply-preview`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sourceConfigurationId, scope }),
+  signal,
+}).then(json<ComposerBulkApplyPlan>);
+
+export const applyComposerBulkConfiguration = (
+  batchId: string,
+  sourceConfigurationId: string,
+  scope: ComposerBulkApplyScope,
+  expectedRevision: number,
+  signal?: AbortSignal,
+): Promise<ComposerBatchDraft> => fetch(`${API_BASE}/batches/${encodeURIComponent(batchId)}/apply`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ sourceConfigurationId, scope, expectedRevision }),
+  signal,
+}).then(json<ComposerBatchDraft>);
 
 export const flushComposerConfigurationKeepalive = (
   batchId: string,

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  applyComposerBulkConfiguration,
   composerAssetSourceUrl,
   flushComposerConfigurationKeepalive,
   getComposerAsset,
   saveComposerCrop,
   saveComposerConfiguration,
   saveComposerSourceTrim,
+  previewComposerBulkApply,
 } from '../src/composer/api.ts';
 import type { ComposerVariantConfig } from '../shared/composer-contract.ts';
 
@@ -103,4 +105,34 @@ test('configuration saves carry the expected draft revision', async (t) => {
   await saveComposerConfiguration('batch-1', configuration, 7);
 
   assert.equal(observed?.init?.body, JSON.stringify({ configuration, expectedRevision: 7 }));
+});
+
+test('bulk apply preview and commit are authenticated and carry scope and expected revision', async (t) => {
+  const originalFetch = globalThis.fetch;
+  const observed: Array<{ input: string; init?: RequestInit }> = [];
+  globalThis.fetch = (async (input, init) => {
+    observed.push({ input: String(input), init });
+    return new Response(JSON.stringify({ draftRevision: 7, targets: [], clampedOriginalIds: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as typeof fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  const scope = { allGroupsForOriginal: true, groupForAllOriginals: false };
+
+  await previewComposerBulkApply('batch 1', 'o1:g1', scope);
+  await applyComposerBulkConfiguration('batch 1', 'o1:g1', scope, 7);
+
+  assert.deepEqual(observed.map(({ input, init }) => ({
+    input, method: init?.method, credentials: init?.credentials, body: init?.body,
+  })), [
+    {
+      input: '/api/composer/batches/batch%201/apply-preview', method: 'POST', credentials: 'include',
+      body: JSON.stringify({ sourceConfigurationId: 'o1:g1', scope }),
+    },
+    {
+      input: '/api/composer/batches/batch%201/apply', method: 'POST', credentials: 'include',
+      body: JSON.stringify({ sourceConfigurationId: 'o1:g1', scope, expectedRevision: 7 }),
+    },
+  ]);
 });

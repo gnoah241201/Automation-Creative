@@ -284,3 +284,25 @@ test('canonical draft replacement updates revision, snapshots, and configuration
   assert.deepEqual(replaced.assetRevisions, replacement.assetRevisions);
   assert.deepEqual(replaced.configurations, replacement.configurations);
 });
+
+test('canonical Apply response replaces configurations and draft revision', () => {
+  const state = {
+    ...initialComposerState,
+    batchId: 'batch-1',
+    draftRevision: 4,
+    originals: [asset('o1', 'original', 10)],
+    hooks: [asset('h1', 'hook', 3)],
+    durationGroups: [{ id: 'g1', minDuration: 3, maxDuration: 3, hookIds: ['h1'] }],
+  };
+  const draft: ComposerBatchDraft = {
+    id: 'batch-1', revision: 5, assetRevisions: { o1: 1, h1: 1 },
+    originalIds: ['o1'], hookIds: ['h1'], durationGroups: state.durationGroups,
+    configurations: { 'o1:g1': { ...config('o1:g1', true), durationGroupId: 'g1' } },
+    createdAt: 1, updatedAt: 2, expiresAt: 3,
+  };
+
+  const next = composerReducer(state, { type: 'draftReplaced', draft });
+
+  assert.equal(next.draftRevision, 5);
+  assert.equal(Object.keys(next.configurations).length, Object.keys(draft.configurations).length);
+});

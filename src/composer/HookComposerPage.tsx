@@ -1,15 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
 import {
-  ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig, HookDurationGroup, SourceTimeRange,
+  ComposerAsset, ComposerBatchJob, ComposerBulkApplyPlan, ComposerBulkApplyScope, ComposerCrop,
+  ComposerVariantConfig, HookDurationGroup, SourceTimeRange,
 } from '../../shared/composer-contract.ts';
 import { deriveComposerMatrix, estimateComposerOutputBytes } from '../../shared/composerTimeline.ts';
 import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import {
-  ComposerApiError, composerAssetSourceUrl, createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getComposerAsset,
+  applyComposerBulkConfiguration, ComposerApiError, composerAssetSourceUrl, createComposerBatch, exactPreviewUrl,
+  flushComposerConfigurationKeepalive, getComposerAsset,
   getComposerBatch, getExactPreviewStatus, requestExactPreview,
-  saveComposerConfiguration, saveComposerCrop, saveComposerSourceTrim, renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
+  previewComposerBulkApply, saveComposerConfiguration, saveComposerCrop, saveComposerSourceTrim,
+  renderComposerBatch, getComposerBatchJobs, cancelComposerBatch, retryComposerJob,
 } from './api.ts';
+import { BulkApplyDrawer } from './BulkApplyDrawer.tsx';
 import { ComposerPreview } from './ComposerPreview.tsx';
 import { ComposerTimeline } from './ComposerTimeline.tsx';
 import { MediaPanel } from './MediaPanel.tsx';
@@ -72,6 +76,15 @@ export function HookComposerPage() {
   const [playhead, setPlayhead] = useState(0);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string>();
+  const [bulkApply, setBulkApply] = useState<{
+    instance: number;
+    batchId: string;
+    sourceConfigurationId: string;
+    scope: ComposerBulkApplyScope;
+    preview?: ComposerBulkApplyPlan;
+    error?: string;
+    busy: boolean;
+  }>();
   const [exactPreview, setExactPreview] = useState<{ url?: string; status?: string; error?: string }>({});
   const [renderJobs, setRenderJobs] = useState<ComposerBatchJob[]>([]);
   const [rendering, setRendering] = useState(false);
@@ -85,10 +98,13 @@ export function HookComposerPage() {
   const previewRequest = useRef<AbortController | undefined>(undefined);
   const renderRequest = useRef<AbortController | undefined>(undefined);
   const restoreRequest = useRef<AbortController | undefined>(undefined);
+  const bulkApplyRequest = useRef<AbortController | undefined>(undefined);
+  const bulkApplyInstance = useRef(0);
   const restoreRevision = useRef(0);
   const restoredJobsBatchId = useRef<string | undefined>(undefined);
   const configRevision = useRef(0);
   const configurationConflict = useRef(false);
+  const skipConfigurationSave = useRef(false);
   const latestBatchId = useRef<string | undefined>(undefined);
   const latestDraftRevision = useRef<number | undefined>(undefined);
   const latestConfiguration = useRef<ComposerVariantConfig | undefined>(undefined);
@@ -113,6 +129,7 @@ export function HookComposerPage() {
       previewRequest.current?.abort();
       renderRequest.current?.abort();
       restoreRequest.current?.abort();
+      bulkApplyRequest.current?.abort();
       unmountFlushTimer.current = window.setTimeout(() => {
         const batchId = latestBatchId.current;
         const draftRevision = latestDraftRevision.current;
@@ -126,6 +143,23 @@ export function HookComposerPage() {
       }, 0);
     };
   }, []);
+
+  useEffect(() => () => bulkApplyRequest.current?.abort(), [
+    bulkApply?.instance,
+    bulkApply?.scope.allGroupsForOriginal,
+    bulkApply?.scope.groupForAllOriginals,
+    bulkApply?.sourceConfigurationId,
+    editingConfig?.id,
+    state.batchId,
+  ]);
+
+  useEffect(() => {
+    if (!bulkApply) return;
+    if (bulkApply.batchId === state.batchId && bulkApply.sourceConfigurationId === editingConfig?.id) return;
+    bulkApplyRequest.current?.abort();
+    bulkApplyRequest.current = undefined;
+    setBulkApply(undefined);
+  }, [bulkApply, editingConfig?.id, state.batchId]);
 
   const restoreDraft = useCallback(async (manual = false) => {
     const revision = ++restoreRevision.current;
@@ -209,6 +243,10 @@ export function HookComposerPage() {
   }, [activeGroup, activeHooks, activeOriginal, state.activeVariant]);
 
   useEffect(() => {
+    if (skipConfigurationSave.current) {
+      skipConfigurationSave.current = false;
+      return;
+    }
     if (
       !state.batchId || !state.draftRevision || !editingConfig
       || state.stage !== 'edit' || configurationConflict.current
@@ -362,6 +400,7 @@ export function HookComposerPage() {
   };
 
   const changeConfiguration = (next: ComposerVariantConfig) => {
+    if (bulkApply?.busy) return;
     previewRequest.current?.abort();
     setExactPreview({});
     setEditingConfig(next);
@@ -419,6 +458,106 @@ export function HookComposerPage() {
     setExactPreview({});
     if (!(await persistCurrentConfiguration())) return;
     dispatch({ type: 'selectVariant', originalId, durationGroupId });
+  };
+
+  const closeBulkApply = () => {
+    bulkApplyRequest.current?.abort();
+    bulkApplyRequest.current = undefined;
+    setBulkApply(undefined);
+  };
+
+  const openBulkApply = async () => {
+    if (!editingConfig || !state.batchId || !(await persistCurrentConfiguration())) return;
+    setBulkApply({
+      instance: ++bulkApplyInstance.current,
+      batchId: state.batchId,
+      sourceConfigurationId: editingConfig.id,
+      scope: { allGroupsForOriginal: true, groupForAllOriginals: false },
+      busy: false,
+    });
+  };
+
+  const changeBulkApplyScope = (scope: ComposerBulkApplyScope) => {
+    bulkApplyRequest.current?.abort();
+    bulkApplyRequest.current = undefined;
+    setBulkApply((current) => current ? { ...current, scope, preview: undefined, error: undefined, busy: false } : current);
+  };
+
+  const previewBulkApply = async () => {
+    if (!bulkApply || !state.batchId || bulkApply.batchId !== state.batchId
+      || bulkApply.sourceConfigurationId !== editingConfig?.id) return;
+    const { instance, sourceConfigurationId, scope } = bulkApply;
+    const controller = new AbortController();
+    saveRequest.current?.abort();
+    configRevision.current += 1;
+    bulkApplyRequest.current?.abort();
+    bulkApplyRequest.current = controller;
+    setBulkApply((current) => current?.instance === instance
+      ? { ...current, preview: undefined, error: undefined, busy: true }
+      : current);
+    try {
+      const preview = await previewComposerBulkApply(state.batchId, sourceConfigurationId, scope, controller.signal);
+      if (controller.signal.aborted) return;
+      setBulkApply((current) => current?.instance === instance
+        ? { ...current, preview, busy: false }
+        : current);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setBulkApply((current) => current?.instance === instance
+        ? { ...current, error: error instanceof Error ? error.message : 'Could not preview affected variants', busy: false }
+        : current);
+    } finally {
+      if (bulkApplyRequest.current === controller) bulkApplyRequest.current = undefined;
+    }
+  };
+
+  const commitBulkApply = async () => {
+    if (!bulkApply || !state.batchId || !state.draftRevision
+      || bulkApply.batchId !== state.batchId || bulkApply.sourceConfigurationId !== editingConfig?.id
+      || bulkApply.preview?.draftRevision !== state.draftRevision || bulkApply.preview.targets.length === 0) return;
+    const { instance, sourceConfigurationId, scope } = bulkApply;
+    const controller = new AbortController();
+    saveRequest.current?.abort();
+    configRevision.current += 1;
+    bulkApplyRequest.current?.abort();
+    bulkApplyRequest.current = controller;
+    setBulkApply((current) => current?.instance === instance
+      ? { ...current, error: undefined, busy: true }
+      : current);
+    try {
+      const draft = await applyComposerBulkConfiguration(
+        state.batchId, sourceConfigurationId, scope, state.draftRevision, controller.signal,
+      );
+      if (controller.signal.aborted) return;
+      const activeId = state.activeVariant
+        ? `${state.activeVariant.originalId}:${state.activeVariant.durationGroupId}`
+        : sourceConfigurationId;
+      const canonicalActive = draft.configurations[activeId];
+      dispatch({ type: 'draftReplaced', draft });
+      if (canonicalActive) {
+        skipConfigurationSave.current = true;
+        setEditingConfig(canonicalActive);
+        setPlayhead((current) => Math.min(canonicalActive.trimEnd, Math.max(canonicalActive.trimStart, current)));
+      }
+      configurationConflict.current = false;
+      setSaveState('saved');
+      setSaveError(undefined);
+      setBulkApply(undefined);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      setBulkApply((current) => current?.instance === instance
+        ? {
+          ...current,
+          preview: error instanceof ComposerApiError && error.status === 409 ? undefined : current.preview,
+          error: error instanceof ComposerApiError && error.status === 409
+            ? 'Draft changed. Reload before applying.'
+            : error instanceof Error ? error.message : 'Could not apply configuration',
+          busy: false,
+        }
+        : current);
+    } finally {
+      if (bulkApplyRequest.current === controller) bulkApplyRequest.current = undefined;
+    }
   };
 
   const createExactPreview = async () => {
@@ -595,27 +734,29 @@ export function HookComposerPage() {
             )}
           </div>
         ) : state.stage === 'edit' && activeOriginal && activeGroup && representativeHook && editingConfig ? (
-          <div className="grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
+          <div className={bulkApply && bulkApply.batchId === state.batchId && bulkApply.sourceConfigurationId === editingConfig.id
+            ? 'grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)_minmax(320px,380px)]'
+            : 'grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)]'}>
             <aside className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-4">
               <h3 className="text-sm font-semibold">Variation</h3>
               <p className="mt-2 text-xs text-neutral-400">{reviewedConfigurationIds.size}/{reviewTotal} configurations reviewed</p>
               <label className="mt-4 block text-xs text-neutral-400">Original
-                <select value={activeOriginal.id} onChange={(event) => void switchVariant(event.target.value, activeGroup.id)} className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+                <select value={activeOriginal.id} disabled={bulkApply?.busy} onChange={(event) => void switchVariant(event.target.value, activeGroup.id)} className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white disabled:opacity-50">
                   {state.originals.map((asset) => <option key={asset.id} value={asset.id}>{asset.originalFilename}</option>)}
                 </select>
               </label>
               <label className="mt-4 block text-xs text-neutral-400">Hook duration group
-                <select value={activeGroup.id} onChange={(event) => void switchVariant(activeOriginal.id, event.target.value)} className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+                <select value={activeGroup.id} disabled={bulkApply?.busy} onChange={(event) => void switchVariant(activeOriginal.id, event.target.value)} className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white disabled:opacity-50">
                   {state.durationGroups.map((group) => <option key={group.id} value={group.id}>{group.minDuration.toFixed(3)}–{group.maxDuration.toFixed(3)}s · {group.hookIds.length} hook(s)</option>)}
                 </select>
               </label>
               <label className="mt-4 block text-xs text-neutral-400">Representative hook
-                <select value={representativeHook.id} onChange={(event) => changeConfiguration({ ...editingConfig, representativeHookId: event.target.value, reviewed: false })} className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white">
+                <select value={representativeHook.id} disabled={bulkApply?.busy} onChange={(event) => changeConfiguration({ ...editingConfig, representativeHookId: event.target.value, reviewed: false })} className="mt-1.5 w-full rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-sm text-white disabled:opacity-50">
                   {activeHooks.map((hook) => <option key={hook.id} value={hook.id}>{hook.originalFilename}</option>)}
                 </select>
               </label>
               <div className="mt-5 grid grid-cols-2 gap-2">
-                {(['insert', 'trim', 'crop'] as const).map((tool) => <button key={tool} type="button" onClick={() => dispatch({ type: 'setTool', tool })} className={state.tool === tool ? 'rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold capitalize text-white' : 'rounded-lg border border-neutral-700 px-3 py-2 text-xs font-semibold capitalize text-neutral-300 hover:bg-neutral-800'}>{tool}</button>)}
+                {(['insert', 'trim', 'crop'] as const).map((tool) => <button key={tool} type="button" disabled={bulkApply?.busy} onClick={() => dispatch({ type: 'setTool', tool })} className={state.tool === tool ? 'rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold capitalize text-white disabled:opacity-50' : 'rounded-lg border border-neutral-700 px-3 py-2 text-xs font-semibold capitalize text-neutral-300 hover:bg-neutral-800 disabled:opacity-50'}>{tool}</button>)}
               </div>
               {state.tool === 'crop' && <p className="mt-3 text-xs leading-5 text-neutral-400">The non-destructive 9:16 crops selected during source import are applied to both previews.</p>}
               <div className="mt-6 border-t border-neutral-800 pt-4 text-xs">
@@ -623,17 +764,36 @@ export function HookComposerPage() {
                 {saveState === 'saved' && <p className="inline-flex items-center gap-2 text-emerald-300"><Check className="h-3.5 w-3.5" /> Draft saved</p>}
                 {saveState === 'error' && <p role="alert" className="text-red-300">{saveError}</p>}
               </div>
-              <button type="button" disabled={editingConfig.reviewed} onClick={() => changeConfiguration({ ...editingConfig, reviewed: true })} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-default disabled:bg-emerald-900 disabled:text-emerald-200"><Check className="mr-2 inline h-4 w-4" />{editingConfig.reviewed ? 'Reviewed' : 'Mark reviewed'}</button>
+              <button type="button" disabled={editingConfig.reviewed || bulkApply?.busy} onClick={() => changeConfiguration({ ...editingConfig, reviewed: true })} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-default disabled:bg-emerald-900 disabled:text-emerald-200"><Check className="mr-2 inline h-4 w-4" />{editingConfig.reviewed ? 'Reviewed' : 'Mark reviewed'}</button>
+              <button type="button" disabled={bulkApply?.busy} onClick={() => void openBulkApply()} className="mt-2 w-full rounded-xl border border-blue-500/50 px-4 py-2.5 text-sm font-semibold text-blue-200 hover:bg-blue-500/10 disabled:opacity-50">Apply</button>
             </aside>
             <section aria-label="Composer preview workspace" className="flex min-w-0 flex-col gap-5">
               <div className="relative flex-1 rounded-2xl border border-neutral-800 bg-[radial-gradient(circle_at_center,_#262626,_#0a0a0a_65%)] p-4 sm:p-6">
                 <ComposerPreview original={activeOriginal} hook={representativeHook} originalUrl={sourceUrls[activeOriginal.id]} hookUrl={sourceUrls[representativeHook.id]} config={editingConfig} playhead={playhead} onPlayheadChange={setPlayhead} exactUrl={exactPreview.url} />
-                <button type="button" disabled={Boolean(exactPreview.status && !exactPreview.url)} onClick={() => void createExactPreview()} className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-xl border border-blue-400/40 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-500/25 disabled:opacity-50"><Sparkles className="h-4 w-4" />Exact preview</button>
+                <button type="button" disabled={bulkApply?.busy || Boolean(exactPreview.status && !exactPreview.url)} onClick={() => void createExactPreview()} className="absolute bottom-4 right-4 inline-flex items-center gap-2 rounded-xl border border-blue-400/40 bg-blue-500/15 px-3 py-2 text-xs font-semibold text-blue-200 hover:bg-blue-500/25 disabled:opacity-50"><Sparkles className="h-4 w-4" />Exact preview</button>
                 {(exactPreview.status || exactPreview.error) && <p role={exactPreview.error ? 'alert' : 'status'} className={exactPreview.error ? 'absolute bottom-5 left-5 text-xs text-red-300' : 'absolute bottom-5 left-5 text-xs text-blue-200'}>{exactPreview.error ?? exactPreview.status}</p>}
               </div>
               <ComposerTimeline original={activeOriginal} hook={representativeHook} maxHookDuration={activeGroup.maxDuration} config={editingConfig} playhead={playhead} onPlayheadChange={setPlayhead} onChange={changeConfiguration} />
               <p className="inline-flex items-center gap-2 text-xs text-neutral-500"><Scissors className="h-4 w-4" />Trim always preserves the complete longest hook in this duration group.</p>
             </section>
+            {bulkApply && bulkApply.batchId === state.batchId && bulkApply.sourceConfigurationId === editingConfig.id && (
+              <BulkApplyDrawer
+                key={bulkApply.instance}
+                sourceLabel={`${activeOriginal.originalFilename} · Group ${activeGroup.maxDuration.toFixed(1)}s`}
+                scope={bulkApply.scope}
+                preview={bulkApply.preview}
+                clampedOriginalNames={bulkApply.preview?.clampedOriginalIds.map((id) => (
+                  state.originals.find((original) => original.id === id)?.originalFilename ?? id
+                ))}
+                draftRevision={state.draftRevision ?? 0}
+                busy={bulkApply.busy}
+                error={bulkApply.error}
+                onScopeChange={changeBulkApplyScope}
+                onPreview={() => void previewBulkApply()}
+                onApply={() => void commitBulkApply()}
+                onClose={closeBulkApply}
+              />
+            )}
           </div>
         ) : state.stage === 'review' ? (
           <ReviewMatrix
