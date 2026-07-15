@@ -5,7 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import express from 'express';
 import { ComposerAsset, ComposerBatchDraft } from '../shared/composer-contract.ts';
-import { ComposerDraftStore } from '../server/services/composerDraftStore.ts';
+import { ComposerDraftConflictError, ComposerDraftStore } from '../server/services/composerDraftStore.ts';
 import { validateDraftForRender } from '../server/services/composerValidation.ts';
 import { buildComposerBatchesRouter } from '../server/routes/composerBatches.ts';
 import { ComposerAssetStore } from '../server/services/composerAssetStore.ts';
@@ -95,7 +95,7 @@ test('draft stores asset revisions and increments revision for each configuratio
   assert.equal(updated.revision, 2);
 });
 
-test('configuration mutations reject a stale draft revision', async (t) => {
+test('concurrent configuration mutations serialize to one success and one revision conflict', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-drafts-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const store = new ComposerDraftStore(root);
@@ -105,11 +105,21 @@ test('configuration mutations reject a stale draft revision', async (t) => {
     insertAt: 0, trimStart: 0, trimEnd: 13, transition: 'cut' as const, reviewed: true,
   };
 
-  await store.putConfiguration(draft.id, configuration, draft.revision);
-  await assert.rejects(
+  const results = await Promise.allSettled([
     store.putConfiguration(draft.id, configuration, draft.revision),
-    /stale draft revision/i,
-  );
+    store.putConfiguration(
+      draft.id,
+      { ...configuration, id: 'o1:g-3.050', durationGroupId: 'g-3.050' },
+      draft.revision,
+    ),
+  ]);
+
+  assert.equal(results.filter((result) => result.status === 'fulfilled').length, 1);
+  const rejected = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  assert.ok(rejected?.reason instanceof ComposerDraftConflictError);
+  const restored = await store.require(draft.id);
+  assert.equal(restored.revision, 2);
+  assert.equal(Object.keys(restored.configurations).length, 1);
 });
 
 test('legacy drafts normalize revision and asset revisions once', async (t) => {
@@ -407,11 +417,17 @@ test('configuration route rejects invalid identity, membership, types, and timel
     assert.equal(response.status, 400, `expected rejection for ${JSON.stringify(config)}`);
   }
 
-  const nonFiniteJson = JSON.stringify(valid).replace('"insertAt":2', '"insertAt":1e400');
+  const nonFiniteJson = JSON.stringify({
+    configuration: valid,
+    expectedRevision: draft.revision,
+  }).replace('"insertAt":2', '"insertAt":1e400');
   const nonFinite = await fetch(`${endpoint}/${valid.id}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: nonFiniteJson,
   });
   assert.equal(nonFinite.status, 400);
+  assert.deepEqual(await nonFinite.json(), {
+    error: 'ValidationError', message: 'Configuration timeline values must be finite numbers',
+  });
   const outsideEffectiveOriginal = { ...valid, insertAt: 7, trimEnd: 10 };
   const effectiveDurationResponse = await fetch(`${endpoint}/${valid.id}`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },

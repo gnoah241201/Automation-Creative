@@ -4,7 +4,8 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ComposerAsset, ComposerBatchDraft, LocalLibraryEntry } from '../shared/composer-contract.ts';
 import { CropEditor } from '../src/composer/CropEditor.tsx';
-import { HookComposerPage } from '../src/composer/HookComposerPage.tsx';
+import { createDefaultComposerConfiguration, HookComposerPage } from '../src/composer/HookComposerPage.tsx';
+import { ComposerTimeline } from '../src/composer/ComposerTimeline.tsx';
 import { isCurrentComposerRestore, persistComposerBatchId, restorePersistedComposerDraft } from '../src/composer/restoreDraft.ts';
 import { LibrarySourceNames } from '../src/library/LocalLibraryPage.tsx';
 import { ReviewMatrix } from '../src/composer/ReviewMatrix.tsx';
@@ -32,6 +33,31 @@ test('crop editor renders the MP4 source as an accessible video preview behind t
   assert.match(html, /<video[^>]+muted=""[^>]+playsInline=""/);
   assert.doesNotMatch(html, /<img[^>]+blob:wide-mp4/);
   assert.match(html, /aria-label="9:16 crop selection/);
+});
+
+test('trimmed originals use effective duration for default configuration and timeline bounds', () => {
+  const original = {
+    ...asset('o1', 'original', { x: 0, y: 0, width: 1, height: 1 }),
+    width: 1080, height: 1920, duration: 10, sourceTrimStart: 2, sourceTrimEnd: 8,
+  };
+  const hook = {
+    ...asset('h1', 'hook', { x: 0, y: 0, width: 1, height: 1 }),
+    width: 1080, height: 1920, duration: 3,
+  };
+  const group = { id: 'g-3.000', minDuration: 3, maxDuration: 3, hookIds: ['h1'] };
+  const configuration = createDefaultComposerConfiguration(original, group, hook.id);
+
+  assert.equal(configuration.trimEnd, 9);
+  const html = renderToStaticMarkup(<ComposerTimeline
+    original={original} hook={hook} maxHookDuration={group.maxDuration}
+    config={{
+      id: 'o1:g-3.000', originalId: 'o1', durationGroupId: 'g-3.000', representativeHookId: 'h1',
+      insertAt: 0, trimStart: 0, trimEnd: 9, transition: 'cut', reviewed: false,
+    }}
+    playhead={0} onPlayheadChange={() => {}} onChange={() => {}}
+  />);
+  assert.match(html, /aria-label="Trim end"[^>]+aria-valuemax="9"/);
+  assert.match(html, /aria-label="Hook insertion"[^>]+aria-valuemax="6"/);
 });
 
 test('draft restore reloads persisted crop metadata for every batch asset', async () => {

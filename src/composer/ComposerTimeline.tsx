@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import type { ComposerAsset, ComposerVariantConfig } from '../../shared/composer-contract.ts';
+import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import {
   clampInsertionPoint, clampTimelineDrag, clampTrimRange, snapTimelineTime,
 } from './timelineGeometry.ts';
@@ -22,7 +23,8 @@ export function ComposerTimeline({
   const [zoom, setZoom] = useState(1);
   const dragMode = useRef<DragMode | undefined>(undefined);
   const track = useRef<HTMLDivElement>(null);
-  const combinedDuration = original.duration + maxHookDuration;
+  const originalDuration = getEffectiveSourceDuration(original);
+  const combinedDuration = originalDuration + maxHookDuration;
   const constraints = { insertAt: config.insertAt, maxHookDuration, combinedDuration };
   const percent = (time: number) => `${combinedDuration > 0 ? time / combinedDuration * 100 : 0}%`;
   const frame = (time: number) => snapTimelineTime(time, original.frameRate);
@@ -39,7 +41,7 @@ export function ComposerTimeline({
       return;
     }
     if (mode === 'hook') {
-      const insertAt = clampInsertionPoint(time, original.duration);
+      const insertAt = clampInsertionPoint(time, originalDuration);
       const range = clampTrimRange(
         { start: Math.min(config.trimStart, insertAt), end: Math.max(config.trimEnd, insertAt + maxHookDuration) },
         { insertAt, maxHookDuration, combinedDuration },
@@ -83,8 +85,8 @@ export function ComposerTimeline({
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => setInsertion(0)} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800">Start</button>
-          <button type="button" onClick={() => setInsertion(original.duration / 2)} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800">Middle</button>
-          <button type="button" onClick={() => setInsertion(original.duration)} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800">End</button>
+          <button type="button" onClick={() => setInsertion(originalDuration / 2)} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800">Middle</button>
+          <button type="button" onClick={() => setInsertion(originalDuration)} className="rounded-lg border border-neutral-700 px-3 py-1.5 text-xs hover:bg-neutral-800">End</button>
         </div>
         <label className="flex items-center gap-2 text-xs text-neutral-400">Zoom
           <input aria-label="Timeline zoom" type="range" min="1" max="3" step="0.25" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
@@ -105,7 +107,7 @@ export function ComposerTimeline({
             <div className="h-full bg-purple-600" style={{ width: percent(maxHookDuration) }}><span className="sr-only">Hook</span></div>
             <div className="h-full flex-1 bg-slate-700"><span className="sr-only">Original after hook</span></div>
           </div>
-          <div role="slider" aria-label="Hook insertion" aria-valuemin={0} aria-valuemax={original.duration} aria-valuenow={config.insertAt} tabIndex={0} className="absolute top-5 h-12 cursor-grab rounded-md border-2 border-purple-300 bg-purple-500/20 outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: percent(config.insertAt), width: percent(maxHookDuration) }} onPointerDown={begin('hook')} onKeyDown={keyboard('hook')} />
+          <div role="slider" aria-label="Hook insertion" aria-valuemin={0} aria-valuemax={originalDuration} aria-valuenow={config.insertAt} tabIndex={0} className="absolute top-5 h-12 cursor-grab rounded-md border-2 border-purple-300 bg-purple-500/20 outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: percent(config.insertAt), width: percent(maxHookDuration) }} onPointerDown={begin('hook')} onKeyDown={keyboard('hook')} />
           <div role="slider" aria-label="Trim start" aria-valuemin={0} aria-valuemax={config.insertAt} aria-valuenow={config.trimStart} tabIndex={0} className="absolute top-4 h-14 w-2 -translate-x-1/2 cursor-ew-resize rounded-full bg-emerald-400 outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: percent(config.trimStart) }} onPointerDown={begin('trim-start')} onKeyDown={keyboard('trim-start')} />
           <div role="slider" aria-label="Trim end" aria-valuemin={config.insertAt + maxHookDuration} aria-valuemax={combinedDuration} aria-valuenow={config.trimEnd} tabIndex={0} className="absolute top-4 h-14 w-2 -translate-x-1/2 cursor-ew-resize rounded-full bg-emerald-400 outline-none focus-visible:ring-2 focus-visible:ring-white" style={{ left: percent(config.trimEnd) }} onPointerDown={begin('trim-end')} onKeyDown={keyboard('trim-end')} />
           <div role="slider" aria-label="Playhead" aria-valuemin={config.trimStart} aria-valuemax={config.trimEnd} aria-valuenow={playhead} tabIndex={0} className="absolute top-1 h-16 w-px cursor-ew-resize bg-white outline-none before:absolute before:-left-1.5 before:h-3 before:w-3 before:rotate-45 before:bg-white focus-visible:ring-2 focus-visible:ring-blue-400" style={{ left: percent(playhead) }} onPointerDown={begin('playhead')} onKeyDown={keyboard('playhead')} />

@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Check, LoaderCircle, Scissors, Sparkles } from 'lucide-react';
-import { ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig } from '../../shared/composer-contract.ts';
+import {
+  ComposerAsset, ComposerBatchJob, ComposerCrop, ComposerVariantConfig, HookDurationGroup,
+} from '../../shared/composer-contract.ts';
 import { deriveComposerMatrix, estimateComposerOutputBytes } from '../../shared/composerTimeline.ts';
+import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import {
   ComposerApiError, composerAssetSourceUrl, createComposerBatch, exactPreviewUrl, flushComposerConfigurationKeepalive, getComposerAsset,
   getComposerBatch, getExactPreviewStatus, requestExactPreview,
@@ -33,6 +36,22 @@ const waitForPreviewPoll = (signal: AbortSignal) => new Promise<void>((resolve, 
     resolve();
   }, 1_000);
   signal.addEventListener('abort', abort, { once: true });
+});
+
+export const createDefaultComposerConfiguration = (
+  original: ComposerAsset,
+  group: HookDurationGroup,
+  representativeHookId: string,
+): ComposerVariantConfig => ({
+  id: `${original.id}:${group.id}`,
+  originalId: original.id,
+  durationGroupId: group.id,
+  representativeHookId,
+  insertAt: 0,
+  trimStart: 0,
+  trimEnd: getEffectiveSourceDuration(original) + group.maxDuration,
+  transition: 'cut',
+  reviewed: false,
 });
 
 export function HookComposerPage() {
@@ -175,17 +194,8 @@ export function HookComposerPage() {
       return;
     }
     const id = `${activeOriginal.id}:${activeGroup.id}`;
-    const next = state.configurations[id] ?? {
-      id,
-      originalId: activeOriginal.id,
-      durationGroupId: activeGroup.id,
-      representativeHookId: activeHooks[0].id,
-      insertAt: 0,
-      trimStart: 0,
-      trimEnd: activeOriginal.duration + activeGroup.maxDuration,
-      transition: 'cut' as const,
-      reviewed: false,
-    };
+    const next = state.configurations[id]
+      ?? createDefaultComposerConfiguration(activeOriginal, activeGroup, activeHooks[0].id);
     setEditingConfig(next);
     setPlayhead(next.trimStart);
     setExactPreview({});
