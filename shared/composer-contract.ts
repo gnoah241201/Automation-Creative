@@ -5,6 +5,8 @@ export type ComposerAssetStatus = 'probing' | 'needs-crop' | 'ready' | 'invalid'
 
 export interface ComposerCrop { x: number; y: number; width: number; height: number }
 
+export interface SourceTimeRange { start: number; end: number }
+
 export interface ComposerAsset {
   id: string;
   kind: ComposerAssetKind;
@@ -26,6 +28,8 @@ export interface ComposerAsset {
   error?: string;
   createdAt: number;
   lastAccessedAt: number;
+  sourceTrimStart?: number;
+  sourceTrimEnd?: number;
 }
 
 export interface HookDurationGroup {

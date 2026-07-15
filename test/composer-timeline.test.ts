@@ -44,6 +44,15 @@ test('groups hooks whose duration spread is exactly 0.1 seconds', () => {
   assert.deepEqual(groups.map((group) => group.hookIds), [['h1', 'h2']]);
 });
 
+test('hook duration groups use effective trimmed durations', () => {
+  const hooks = [
+    { ...asset('h1', 'hook', 5), sourceTrimStart: 1, sourceTrimEnd: 4 },
+    { ...asset('h2', 'hook', 8), sourceTrimStart: 2, sourceTrimEnd: 5.09 },
+    { ...asset('h3', 'hook', 6), sourceTrimStart: 1, sourceTrimEnd: 4.18 },
+  ];
+  assert.deepEqual(groupHooksByDuration(hooks).map((group) => group.hookIds), [['h1', 'h2'], ['h3']]);
+});
+
 test('variant trim must contain the longest hook interval', () => {
   const config: ComposerVariantConfig = {
     id: 'o1:g1', originalId: 'o1', durationGroupId: 'g1', representativeHookId: 'h1',

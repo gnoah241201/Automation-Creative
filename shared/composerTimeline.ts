@@ -1,22 +1,24 @@
 import {
   ComposerAsset, ComposerMatrixCell, ComposerVariantConfig, HookDurationGroup,
 } from './composer-contract.ts';
+import { getEffectiveSourceDuration } from './composerSourceRange.ts';
 
 const GROUP_TOLERANCE_SECONDS = 0.1;
 const safeBase = (name: string) => name.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9._-]+/g, '_');
 
 export const groupHooksByDuration = (hooks: ComposerAsset[]): HookDurationGroup[] => {
-  const sorted = [...hooks].sort((a, b) => a.duration - b.duration || a.id.localeCompare(b.id));
+  const sorted = [...hooks].sort((a, b) => getEffectiveSourceDuration(a) - getEffectiveSourceDuration(b) || a.id.localeCompare(b.id));
   const groups: HookDurationGroup[] = [];
   for (const hook of sorted) {
+    const duration = getEffectiveSourceDuration(hook);
     const current = groups.at(-1);
     const comparisonEpsilon = current
-      ? Number.EPSILON * Math.max(1, Math.abs(hook.duration), Math.abs(current.minDuration))
+      ? Number.EPSILON * Math.max(1, Math.abs(duration), Math.abs(current.minDuration))
       : 0;
-    if (!current || hook.duration - current.minDuration > GROUP_TOLERANCE_SECONDS + comparisonEpsilon) {
-      groups.push({ id: `g-${hook.duration.toFixed(3)}`, minDuration: hook.duration, maxDuration: hook.duration, hookIds: [hook.id] });
+    if (!current || duration - current.minDuration > GROUP_TOLERANCE_SECONDS + comparisonEpsilon) {
+      groups.push({ id: `g-${duration.toFixed(3)}`, minDuration: duration, maxDuration: duration, hookIds: [hook.id] });
     } else {
-      current.maxDuration = Math.max(current.maxDuration, hook.duration);
+      current.maxDuration = Math.max(current.maxDuration, duration);
       current.hookIds.push(hook.id);
     }
   }
