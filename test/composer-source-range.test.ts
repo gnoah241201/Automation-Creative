@@ -22,3 +22,9 @@ test('source range rejects a selection shorter than one frame', () => {
     duration: 12, frameRate: 30, sourceTrimStart: 1, sourceTrimEnd: 1.01,
   })), /at least one frame/);
 });
+
+test('source range rejects a tail trim with no complete frame before the probed duration', () => {
+  assert.throws(() => getEffectiveSourceRange(composerAsset({
+    duration: 10.02, frameRate: 30, sourceTrimStart: 10,
+  })), /at least one frame/);
+});
