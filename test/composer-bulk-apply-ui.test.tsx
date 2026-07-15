@@ -5,6 +5,11 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ComposerVariantConfig } from '../shared/composer-contract.ts';
 import { BulkApplyDrawer } from '../src/composer/BulkApplyDrawer.tsx';
+import {
+  canConfirmComposerBulkApply,
+  invalidateComposerBulkPreview,
+  type ComposerBulkApplyLifecycle,
+} from '../src/composer/bulkApplyLifecycle.ts';
 
 const targets = (count: number): ComposerVariantConfig[] => Array.from({ length: count }, (_, index) => ({
   id: `o${index}:g1`, originalId: `o${index}`, durationGroupId: 'g1', representativeHookId: 'h1',
@@ -62,11 +67,63 @@ test('Apply drawer requires a scope and only confirms a preview for the current 
   assert.match(stale, /disabled=""[^>]*>Apply &amp; mark reviewed/);
 });
 
+test('Apply confirmation requires a non-empty current scope even when an old preview remains', () => {
+  const preview = { draftRevision: 4, targets: targets(2), clampedOriginalIds: [] };
+  const html = renderToStaticMarkup(<BulkApplyDrawer
+    sourceLabel="Source"
+    scope={{ allGroupsForOriginal: false, groupForAllOriginals: false }}
+    preview={preview}
+    draftRevision={4}
+    busy={false}
+    onScopeChange={() => {}}
+    onPreview={() => {}}
+    onApply={() => {}}
+    onClose={() => {}}
+  />);
+
+  assert.equal(canConfirmComposerBulkApply(
+    { allGroupsForOriginal: false, groupForAllOriginals: false }, preview, 4, 'idle',
+  ), false);
+  assert.match(html, /disabled=""[^>]*>Apply &amp; mark reviewed/);
+});
+
+test('a local configuration edit invalidates its bulk preview before the edit can be applied', () => {
+  const current: ComposerBulkApplyLifecycle = {
+    operation: 'idle',
+    preview: { draftRevision: 4, targets: targets(2), clampedOriginalIds: [] },
+    error: 'old error',
+  };
+
+  const invalidated = invalidateComposerBulkPreview(current);
+
+  assert.equal(invalidated.preview, undefined);
+  assert.equal(invalidated.error, undefined);
+  assert.equal(canConfirmComposerBulkApply(
+    { allGroupsForOriginal: true, groupForAllOriginals: false }, invalidated.preview, 4, invalidated.operation,
+  ), false);
+});
+
 test('bulk Apply invalidates pending autosaves and locks configuration edits during commit', () => {
   const source = readFileSync(new URL('../src/composer/HookComposerPage.tsx', import.meta.url), 'utf8');
   const commit = source.slice(source.indexOf('const commitBulkApply'), source.indexOf('const createExactPreview'));
 
   assert.match(commit, /saveRequest\.current\?\.abort\(\)/);
   assert.match(commit, /configRevision\.current \+= 1/);
-  assert.match(source, /const changeConfiguration[\s\S]*if \(bulkApply\?\.busy\) return;/);
+  assert.match(source, /const changeConfiguration[\s\S]*if \(bulkCommitBusy\) return;/);
+  assert.match(source, /const changeConfiguration[\s\S]*invalidateComposerBulkPreview/);
+});
+
+test('bulk commit locks draft replacement navigation and restore controls', () => {
+  const source = readFileSync(new URL('../src/composer/HookComposerPage.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /const bulkCommitBusy = bulkApply\?\.operation === 'committing'/);
+  assert.match(source, /disabled=\{bulkCommitBusy\}[\s\S]*Khôi phục bản nháp/);
+  assert.match(source, /disabled=\{bulkCommitBusy \|\| continuing/);
+});
+
+test('a failed canonical save releases preview busy state for retry', () => {
+  const source = readFileSync(new URL('../src/composer/HookComposerPage.tsx', import.meta.url), 'utf8');
+  const preview = source.slice(source.indexOf('const previewBulkApply'), source.indexOf('const commitBulkApply'));
+
+  assert.match(preview, /if \(!savedDraft\)[\s\S]*operation: 'idle'/);
 });

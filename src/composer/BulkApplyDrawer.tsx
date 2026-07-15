@@ -1,5 +1,6 @@
 import React from 'react';
 import type { ComposerBulkApplyPlan, ComposerBulkApplyScope } from '../../shared/composer-contract.ts';
+import { canConfirmComposerBulkApply } from './bulkApplyLifecycle.ts';
 
 export interface BulkApplyDrawerProps {
   sourceLabel: string;
@@ -22,7 +23,7 @@ export function BulkApplyDrawer({
   const hasScope = scope.allGroupsForOriginal || scope.groupForAllOriginals;
   const previewIsCurrent = preview?.draftRevision === draftRevision;
   const targetCount = preview?.targets.length ?? 0;
-  const canApply = Boolean(previewIsCurrent && targetCount > 0 && !busy);
+  const canApply = canConfirmComposerBulkApply(scope, preview, draftRevision, busy ? 'committing' : 'idle');
 
   return (
     <aside role="dialog" aria-label="Apply configuration to variants" className="rounded-2xl border border-neutral-700 bg-neutral-950/95 p-4 shadow-2xl">
@@ -61,4 +62,3 @@ export function BulkApplyDrawer({
     </aside>
   );
 }
-
