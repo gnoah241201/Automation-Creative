@@ -131,6 +131,51 @@ test('crop route rejects malformed mutation payloads as validation errors', asyn
   });
 });
 
+test('crop and trim routes safely reject malformed or oversized JSON bodies', async (t) => {
+  const assets = {
+    setCrop: async () => { throw new Error('store must not receive an invalid JSON body'); },
+    setSourceTrim: async () => { throw new Error('store must not receive an invalid JSON body'); },
+  } as unknown as ComposerAssetStore;
+  const app = express();
+  app.use('/api/composer', buildComposerAssetsRouter(assets));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const baseUrl = `http://127.0.0.1:${address.port}/api/composer/assets/asset`;
+
+  for (const mutation of ['crop', 'trim']) {
+    const response = await fetch(`${baseUrl}/${mutation}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{',
+    });
+    const body = await response.text();
+    assert.equal(response.status, 400);
+    assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
+    assert.deepEqual(JSON.parse(body), {
+      error: 'InvalidJson',
+      message: 'Request body must be valid JSON',
+    });
+    assert.doesNotMatch(body, /SyntaxError|composerAssets|node_modules|[A-Z]:\\/);
+  }
+
+  const oversized = await fetch(`${baseUrl}/crop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify('x'.repeat(102_400)),
+  });
+  const oversizedBody = await oversized.text();
+  assert.equal(oversized.status, 413);
+  assert.equal(oversized.headers.get('content-type'), 'application/json; charset=utf-8');
+  assert.deepEqual(JSON.parse(oversizedBody), {
+    error: 'RequestTooLarge',
+    message: 'Request body exceeds the allowed size',
+  });
+  assert.doesNotMatch(oversizedBody, /PayloadTooLargeError|composerAssets|node_modules|[A-Z]:\\/);
+});
+
 test('16:9 upload requires crop and valid 9:16 crop makes it ready', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-assets-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

@@ -176,18 +176,30 @@ export const buildComposerAssetsRouter = (
   });
 
   router.use((error: unknown, _req: express.Request, res: express.Response, next: express.NextFunction) => {
-    if (!(error instanceof multer.MulterError)) {
-      next(error);
+    if (error instanceof multer.MulterError) {
+      const tooLarge = error.code === 'LIMIT_FILE_SIZE';
+      res.status(tooLarge ? 413 : 400).json({
+        error: tooLarge ? 'UploadTooLarge' : 'UploadError',
+        message: tooLarge
+          ? `File exceeds the ${maxUploadBytes}-byte upload limit`
+          : error.message,
+      });
       return;
     }
 
-    const tooLarge = error.code === 'LIMIT_FILE_SIZE';
-    res.status(tooLarge ? 413 : 400).json({
-      error: tooLarge ? 'UploadTooLarge' : 'UploadError',
-      message: tooLarge
-        ? `File exceeds the ${maxUploadBytes}-byte upload limit`
-        : error.message,
-    });
+    const bodyErrorType = error && typeof error === 'object' && 'type' in error
+      ? (error as { type?: unknown }).type
+      : undefined;
+    if (bodyErrorType === 'entity.parse.failed') {
+      res.status(400).json({ error: 'InvalidJson', message: 'Request body must be valid JSON' });
+      return;
+    }
+    if (bodyErrorType === 'entity.too.large') {
+      res.status(413).json({ error: 'RequestTooLarge', message: 'Request body exceeds the allowed size' });
+      return;
+    }
+
+    next(error);
   });
 
   return router;
