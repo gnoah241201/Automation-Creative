@@ -5,7 +5,7 @@ import {
 } from '../services/composerDraftStore.ts';
 import { groupHooksByDuration } from '../../shared/composerTimeline.ts';
 import {
-  assertDraftAssetsCurrent, ComposerDraftStaleAssetsError, validateComposerConfiguration,
+  ComposerAssetSnapshot, ComposerDraftStaleAssetsError, loadDraftAssetSnapshot, validateComposerConfiguration,
 } from '../services/composerValidation.ts';
 import { getEffectiveSourceDuration } from '../../shared/composerSourceRange.ts';
 import type {
@@ -76,13 +76,10 @@ const buildBulkApplyPlan = async (
   draft: ComposerBatchDraft,
   sourceConfigurationId: string,
   scope: ComposerBulkApplyScope,
-  assets: ComposerAssetStore,
+  snapshot: ComposerAssetSnapshot,
 ): Promise<ComposerBulkApplyPlan> => {
-  const originals = await Promise.all(
-    draft.originalIds.map((id) => assets.requireReadyAsset(id, 'original')),
-  );
   const originalDurations = Object.fromEntries(
-    originals.map((original) => [original.id, getEffectiveSourceDuration(original)]),
+    snapshot.originals.map((original) => [original.id, getEffectiveSourceDuration(original)]),
   );
   const plan = planComposerBulkApply(draft, sourceConfigurationId, scope, originalDurations);
   const source = draft.configurations[sourceConfigurationId];
@@ -205,22 +202,13 @@ export const buildComposerBatchesRouter = (
         return;
       }
       const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
-      await assertDraftAssetsCurrent(draft, assets);
+      const snapshot = await loadDraftAssetSnapshot(draft, assets);
       const structural = validateComposerConfiguration(draft, req.body.configuration);
       if ('message' in structural) {
         res.status(400).json({ error: 'ValidationError', message: structural.message });
         return;
       }
-      let original;
-      try {
-        [original] = await Promise.all([
-          assets.requireReadyAsset(structural.config.originalId, 'original'),
-          assets.requireReadyAsset(structural.config.representativeHookId, 'hook'),
-        ]);
-      } catch (error) {
-        res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
-        return;
-      }
+      const original = snapshot.originals.find((item) => item.id === structural.config.originalId)!;
       const validation = validateComposerConfiguration(draft, structural.config, getEffectiveSourceDuration(original));
       if ('message' in validation) {
         res.status(400).json({ error: 'ValidationError', message: validation.message });
@@ -241,12 +229,12 @@ export const buildComposerBatchesRouter = (
     try {
       const request = parseBulkApplyRequest(req.body, false);
       const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
-      await assertDraftAssetsCurrent(draft, assets);
+      const snapshot = await loadDraftAssetSnapshot(draft, assets);
       res.json(await buildBulkApplyPlan(
         draft,
         request.sourceConfigurationId,
         request.scope,
-        assets,
+        snapshot,
       ));
     } catch (error) {
       if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
@@ -269,12 +257,12 @@ export const buildComposerBatchesRouter = (
     try {
       const request = parseBulkApplyRequest(req.body, true);
       const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
-      await assertDraftAssetsCurrent(draft, assets);
+      const snapshot = await loadDraftAssetSnapshot(draft, assets);
       const plan = await buildBulkApplyPlan(
         draft,
         request.sourceConfigurationId,
         request.scope,
-        assets,
+        snapshot,
       );
       const applied = await drafts.applyConfigurations(draft.id, plan.targets, request.expectedRevision!);
       composerBulkApplyMutations.inc({ scope: metricScope, status: 'success' });
@@ -321,7 +309,7 @@ export const buildComposerBatchesRouter = (
     router.post('/batches/:batchId/preview', express.json(), async (req, res) => {
       try {
         const draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
-        await assertDraftAssetsCurrent(draft, assets);
+        const snapshot = await loadDraftAssetSnapshot(draft, assets);
         const configurationId = typeof req.body?.configurationId === 'string'
           ? req.body.configurationId
           : '';
@@ -334,16 +322,9 @@ export const buildComposerBatchesRouter = (
         if (!group?.hookIds.includes(representativeHookId)) {
           throw new InvalidPreviewRequestError('Representative hook does not belong to the preview configuration');
         }
-        let original;
-        let hook;
-        try {
-          [original, hook] = await Promise.all([
-            assets.requireReadyAsset(configuration.originalId, 'original'),
-            assets.requireReadyAsset(representativeHookId, 'hook'),
-          ]);
-        } catch {
-          throw new InvalidPreviewRequestError('Preview source is unavailable');
-        }
+        const original = snapshot.originals.find((item) => item.id === configuration.originalId);
+        const hook = snapshot.hooks.find((item) => item.id === representativeHookId);
+        if (!original || !hook) throw new InvalidPreviewRequestError('Preview source is unavailable');
         const validation = validateComposerConfiguration(draft, configuration, getEffectiveSourceDuration(original));
         if ('message' in validation) throw new InvalidPreviewRequestError(validation.message);
         const request: PreviewRequest = {
@@ -358,7 +339,7 @@ export const buildComposerBatchesRouter = (
           trimEnd: validation.config.trimEnd,
           transition: validation.config.transition,
         };
-        res.status(202).json(await previews.requestPreview(request));
+        res.status(202).json(await previews.requestPreview(request, snapshot.all));
       } catch (error) {
         if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
         else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
@@ -393,9 +374,10 @@ export const buildComposerBatchesRouter = (
   if (renderer) {
     router.post('/batches/:batchId/render', express.json(), async (req, res) => {
       let draft;
+      let snapshot;
       try {
         draft = await hydrateLegacyAssetRevisions(await drafts.require(req.params.batchId), assets, drafts);
-        await assertDraftAssetsCurrent(draft, assets);
+        snapshot = await loadDraftAssetSnapshot(draft, assets);
       } catch (error) {
         if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
         else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
@@ -407,7 +389,7 @@ export const buildComposerBatchesRouter = (
       }
       try {
         const selectedCellIds = Array.isArray(req.body?.selectedCellIds) ? req.body.selectedCellIds : [];
-        res.status(202).json(await renderer.submit(draft, selectedCellIds));
+        res.status(202).json(await renderer.submit(draft, selectedCellIds, snapshot.all));
       } catch (error) {
         if (error instanceof ComposerBatchActiveError) res.status(409).json({
           error: 'BatchActive', message: 'This composer batch already has active render jobs',

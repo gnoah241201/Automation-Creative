@@ -6,7 +6,6 @@ import { setEncoder } from './services/renderRunner';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import fs from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { buildComposerAssetsRouter } from './routes/composerAssets';
 import { ComposerAssetStore } from './services/composerAssetStore';
 import { composerRoot } from './services/composerPaths';
@@ -20,6 +19,7 @@ import { ComposerBatchRenderer } from './services/composerBatchRenderer';
 import { ComposerCleanupCoordinator } from './services/composerCleanupCoordinator';
 import { LibraryDownloadBundleService } from './services/libraryDownloadBundles';
 import { safeApplicationErrorHandler } from './middleware/safeApplicationError';
+import { AuthSession, AuthSessionCodec } from './services/authSession';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -36,57 +36,7 @@ const authCookieName = 'rv_auth';
 const authCookieMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
 const authCookieSecure = process.env.APP_AUTH_COOKIE_SECURE === 'true';
 
-type AuthSession = {
-  username: string;
-  exp: number;
-};
-
-const base64UrlEncode = (input: string): string => Buffer.from(input).toString('base64url');
-
-const base64UrlDecode = (input: string): string => Buffer.from(input, 'base64url').toString('utf8');
-
-const signAuthPayload = (payload: string): string =>
-  crypto.createHmac('sha256', authSecret).update(payload).digest('base64url');
-
-const createAuthToken = (username: string): string => {
-  const session: AuthSession = {
-    username,
-    exp: Date.now() + authCookieMaxAgeMs,
-  };
-  const payload = base64UrlEncode(JSON.stringify(session));
-  const signature = signAuthPayload(payload);
-  return `${payload}.${signature}`;
-};
-
-const readAuthSession = (token?: string): AuthSession | null => {
-  if (!token) {
-    return null;
-  }
-
-  const [payload, signature] = token.split('.');
-  if (!payload || !signature) {
-    return null;
-  }
-
-  const expectedSignature = signAuthPayload(payload);
-  if (signature.length !== expectedSignature.length) {
-    return null;
-  }
-
-  if (!crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSignature))) {
-    return null;
-  }
-
-  try {
-    const session = JSON.parse(base64UrlDecode(payload)) as AuthSession;
-    if (!session.username || !session.exp || Date.now() > session.exp) {
-      return null;
-    }
-    return session;
-  } catch {
-    return null;
-  }
-};
+const authSessions = new AuthSessionCodec({ secret: authSecret, maxAgeMs: authCookieMaxAgeMs });
 
 const parseCookies = (headerValue: string | undefined): Record<string, string> => {
   if (!headerValue) {
@@ -121,11 +71,11 @@ const buildCookie = (value: string, maxAgeMs: number): string => {
 
 const getRequestSession = (req: express.Request): AuthSession | null => {
   const cookies = parseCookies(req.headers.cookie);
-  return readAuthSession(cookies[authCookieName]);
+  return authSessions.read(cookies[authCookieName]);
 };
 
 const issueSessionCookie = (res: express.Response, username: string): void => {
-  const token = createAuthToken(username);
+  const token = authSessions.issue(username);
   res.setHeader('Set-Cookie', buildCookie(token, authCookieMaxAgeMs));
 };
 
@@ -192,6 +142,7 @@ const requireAuth: express.RequestHandler = (req, res, next) => {
     return;
   }
   res.locals.authUsername = session.username;
+  res.locals.authSessionOwnerKey = authSessions.ownershipKey(session);
   next();
 };
 

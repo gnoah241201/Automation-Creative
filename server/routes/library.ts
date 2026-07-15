@@ -50,7 +50,11 @@ const sendError = (res: express.Response, error: unknown): void => {
   } else if (error instanceof LibraryBundleValidationError) {
     res.status(400).json({ error: 'ValidationError', message: error.message });
   } else if (error instanceof LibraryBundleUnavailableError) {
-    res.status(410).json({ error: 'Gone', message: 'One or more selected outputs are unavailable' });
+    res.status(410).json({
+      error: 'Gone',
+      message: 'One or more selected outputs are unavailable',
+      unavailableId: error.publicId,
+    });
   } else {
     res.status(500).json({ error: 'LibraryUnavailable', message: 'Local library is unavailable' });
   }
@@ -72,7 +76,7 @@ export const buildLibraryRouter = (
 
   router.post('/download-bundles', parseBundleJson, async (req, res) => {
     try {
-      const owner = res.locals.authUsername as string;
+      const owner = res.locals.authSessionOwnerKey as string;
       const prepared = await bundles.prepare(req.body?.ids, owner);
       res.status(201).json({
         token: prepared.token,
@@ -85,7 +89,7 @@ export const buildLibraryRouter = (
   });
 
   router.get('/download-bundles/:token', async (req, res) => {
-    const owner = res.locals.authUsername as string;
+    const owner = res.locals.authSessionOwnerKey as string;
     const claim = bundles.claim(req.params.token, owner);
     if (claim.status === 'consumed' || claim.status === 'expired') {
       res.status(410).json({ error: 'Gone', message: 'Download bundle is no longer available' });

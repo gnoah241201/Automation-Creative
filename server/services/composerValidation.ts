@@ -1,18 +1,43 @@
-import { ComposerBatchDraft, ComposerVariantConfig } from '../../shared/composer-contract.ts';
+import { ComposerAsset, ComposerBatchDraft, ComposerVariantConfig } from '../../shared/composer-contract.ts';
 import { ComposerAssetStore } from './composerAssetStore.ts';
 
 export class ComposerDraftStaleAssetsError extends Error {}
 
-export const assertDraftAssetsCurrent = async (
+export interface ComposerAssetSnapshot {
+  originals: readonly ComposerAsset[];
+  hooks: readonly ComposerAsset[];
+  all: readonly ComposerAsset[];
+}
+
+export const loadDraftAssetSnapshot = async (
   draft: ComposerBatchDraft,
   assets: ComposerAssetStore,
-): Promise<void> => {
-  for (const id of [...draft.originalIds, ...draft.hookIds]) {
-    const asset = await assets.requireAsset(id);
+): Promise<ComposerAssetSnapshot> => {
+  const ids = [...draft.originalIds, ...draft.hookIds];
+  const loaded = await Promise.all(ids.map(async (id) => {
+    const asset = structuredClone(await assets.requireAsset(id));
+    if (asset.crop) Object.freeze(asset.crop);
+    return Object.freeze(asset);
+  }));
+  for (const asset of loaded) {
+    const id = asset.id;
     if (draft.assetRevisions[id] !== asset.revision) {
       throw new ComposerDraftStaleAssetsError('Composer sources changed; create a fresh batch');
     }
   }
+  const originals = loaded.slice(0, draft.originalIds.length);
+  const hooks = loaded.slice(draft.originalIds.length);
+  if (
+    originals.some((asset, index) => asset.id !== draft.originalIds[index] || asset.kind !== 'original' || asset.status !== 'ready')
+    || hooks.some((asset, index) => asset.id !== draft.hookIds[index] || asset.kind !== 'hook' || asset.status !== 'ready')
+  ) {
+    throw new ComposerDraftStaleAssetsError('Composer sources are no longer ready');
+  }
+  return Object.freeze({
+    originals: Object.freeze(originals),
+    hooks: Object.freeze(hooks),
+    all: Object.freeze(loaded),
+  });
 };
 
 export interface ComposerValidationResult {

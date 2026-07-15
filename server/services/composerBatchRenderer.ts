@@ -95,19 +95,23 @@ export class ComposerBatchRenderer {
     this.disk = options.disk;
   }
 
-  async submit(batch: ComposerBatchDraft, selectedCellIds: string[]) {
+  async submit(batch: ComposerBatchDraft, selectedCellIds: string[], assetSnapshot?: readonly ComposerAsset[]) {
     if (this.batchMutationClaims.has(batch.id) || this.hasActiveJobs(batch.id)) {
       throw new ComposerBatchActiveError('Composer batch already has active render work');
     }
     this.batchMutationClaims.add(batch.id);
     try {
-      return await this.submitClaimed(batch, selectedCellIds);
+      return await this.submitClaimed(batch, selectedCellIds, assetSnapshot);
     } finally {
       this.batchMutationClaims.delete(batch.id);
     }
   }
 
-  private async submitClaimed(batch: ComposerBatchDraft, selectedCellIds: string[]) {
+  private async submitClaimed(
+    batch: ComposerBatchDraft,
+    selectedCellIds: string[],
+    assetSnapshot?: readonly ComposerAsset[],
+  ) {
     if (!Array.isArray(selectedCellIds) || selectedCellIds.length === 0) throw new Error('Select at least one output');
     if (selectedCellIds.length > 100) throw new Error('A composer batch can render at most 100 outputs');
     if (selectedCellIds.some((id) => typeof id !== 'string')) throw new Error('Selected output IDs must be strings');
@@ -119,14 +123,24 @@ export class ComposerBatchRenderer {
       || new Set(batch.hookIds).size !== batch.hookIds.length
     ) throw new Error('Composer batch asset membership is invalid');
 
-    const [originals, hooks] = await Promise.all([
-      Promise.all(batch.originalIds.map((id) => this.assets.requireReadyAsset(id, 'original'))),
-      Promise.all(batch.hookIds.map((id) => this.assets.requireReadyAsset(id, 'hook'))),
-    ]);
-    this.validateDraftGroups(batch, hooks);
+    const [originals, hooks] = assetSnapshot
+      ? [
+        batch.originalIds.map((id) => assetSnapshot.find((asset) => asset.id === id && asset.kind === 'original' && asset.status === 'ready')),
+        batch.hookIds.map((id) => assetSnapshot.find((asset) => asset.id === id && asset.kind === 'hook' && asset.status === 'ready')),
+      ]
+      : await Promise.all([
+        Promise.all(batch.originalIds.map((id) => this.assets.requireReadyAsset(id, 'original'))),
+        Promise.all(batch.hookIds.map((id) => this.assets.requireReadyAsset(id, 'hook'))),
+      ]);
+    if (originals.some((asset) => !asset) || hooks.some((asset) => !asset)) {
+      throw new Error('Composer asset snapshot does not match this batch');
+    }
+    const readyOriginals = originals as ComposerAsset[];
+    const readyHooks = hooks as ComposerAsset[];
+    this.validateDraftGroups(batch, readyHooks);
 
     const reviews = new Map(Object.entries(batch.configurations).map(([id, value]) => [id, { reviewed: value.reviewed }]));
-    const cells = deriveComposerMatrix(originals, hooks, reviews);
+    const cells = deriveComposerMatrix(readyOriginals, readyHooks, reviews);
     const cellsById = new Map(cells.map((cell) => [`${cell.originalId}:${cell.hookId}`, cell]));
     const selected = selectedCellIds.map((id) => {
       const cell = cellsById.get(id);
@@ -134,10 +148,10 @@ export class ComposerBatchRenderer {
       return cell;
     }).sort((left, right) => left.originalId.localeCompare(right.originalId) || left.hookId.localeCompare(right.hookId));
 
-    const originalById = new Map(originals.map((item) => [item.id, item]));
-    const hookById = new Map(hooks.map((item) => [item.id, item]));
-    const originalRangeById = new Map(originals.map((item) => [item.id, getEffectiveSourceRange(item)]));
-    const hookRangeById = new Map(hooks.map((item) => [item.id, getEffectiveSourceRange(item)]));
+    const originalById = new Map(readyOriginals.map((item) => [item.id, item]));
+    const hookById = new Map(readyHooks.map((item) => [item.id, item]));
+    const originalRangeById = new Map(readyOriginals.map((item) => [item.id, getEffectiveSourceRange(item)]));
+    const hookRangeById = new Map(readyHooks.map((item) => [item.id, getEffectiveSourceRange(item)]));
     let snapshots = selected.map((cell): RenderSnapshot => {
       const outputId = `${cell.originalId}:${cell.hookId}`;
       const original = originalById.get(cell.originalId)!;

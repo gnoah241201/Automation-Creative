@@ -54,8 +54,11 @@ interface LibraryDownloadBundleOptions {
 
 export class LibraryBundleValidationError extends Error {}
 export class LibraryBundleUnavailableError extends Error {
-  constructor(_id: string) {
+  readonly publicId: string;
+
+  constructor(id: string) {
     super('One or more selected library outputs are unavailable');
+    this.publicId = id;
   }
 }
 

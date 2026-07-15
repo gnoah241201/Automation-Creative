@@ -14,6 +14,7 @@ import {
   LibraryDownloadBundleService,
 } from '../server/services/libraryDownloadBundles.ts';
 import { LocalLibraryService } from '../server/services/localLibrary.ts';
+import { AuthSessionCodec } from '../server/services/authSession.ts';
 
 const createHarness = async () => {
   const managedRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'library-bundles-'));
@@ -59,7 +60,7 @@ const requestRawBundlePreparation = async (body: string, contentType = 'applicat
   const bundles = new LibraryDownloadBundleService(harness.library);
   const app = express();
   app.use('/api/library', (_req, res, next) => {
-    res.locals.authUsername = 'admin';
+    res.locals.authSessionOwnerKey = 'admin-session';
     next();
   }, buildLibraryRouter(harness.library, bundles));
   app.use(safeApplicationErrorHandler);
@@ -176,6 +177,86 @@ test('missing selection rolls back every acquired hold and creates no token', as
   await fs.rm(harness.managedRoot, { recursive: true, force: true });
 });
 
+test('unavailable selection preserves only its validated public ID in the typed route response', async () => {
+  const harness = await createHarness();
+  const entry = await harness.register('job-a', 'a.mp4');
+  const bundles = new LibraryDownloadBundleService(harness.library);
+  const app = express();
+  app.use('/api/library', (_req, res, next) => {
+    res.locals.authSessionOwnerKey = 'session-owner';
+    next();
+  }, buildLibraryRouter(harness.library, bundles));
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/api/library/download-bundles`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [entry.id, 'missing-public-id'] }),
+    });
+    assert.equal(response.status, 410);
+    assert.deepEqual(await response.json(), {
+      error: 'Gone',
+      message: 'One or more selected outputs are unavailable',
+      unavailableId: 'missing-public-id',
+    });
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await fs.rm(harness.managedRoot, { recursive: true, force: true });
+  }
+});
+
+test('bundle ownership isolates two login sessions with the same username', async () => {
+  const harness = await createHarness();
+  const entry = await harness.register('job-a', 'a.mp4');
+  const codec = new AuthSessionCodec({ secret: 'test-secret', maxAgeMs: 60_000 });
+  const sessionA = codec.read(codec.issue('admin'))!;
+  const sessionB = codec.read(codec.issue('admin'))!;
+  const ownerA = codec.ownershipKey(sessionA);
+  const ownerB = codec.ownershipKey(sessionB);
+  const service = new LibraryDownloadBundleService(harness.library);
+
+  const prepared = await service.prepare([entry.id], ownerA);
+  assert.equal(service.claim(prepared.token, ownerB).status, 'missing');
+  assert.equal(service.claim(prepared.token, ownerA).status, 'ready');
+  await service.complete(prepared.token);
+  await fs.rm(harness.managedRoot, { recursive: true, force: true });
+});
+
+test('download route conceals a same-username token from another login session without consuming it', async () => {
+  const harness = await createHarness();
+  const entry = await harness.register('job-a', 'a.mp4');
+  const bundles = new LibraryDownloadBundleService(harness.library);
+  const app = express();
+  app.use('/api/library', (req, res, next) => {
+    res.locals.authUsername = 'admin';
+    res.locals.authSessionOwnerKey = req.headers.authorization;
+    next();
+  }, buildLibraryRouter(harness.library, bundles));
+  const server = app.listen(0);
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const { port } = server.address() as AddressInfo;
+  const baseUrl = `http://127.0.0.1:${port}/api/library`;
+  try {
+    const prepare = await fetch(`${baseUrl}/download-bundles`, {
+      method: 'POST', headers: { authorization: 'session-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ ids: [entry.id] }),
+    });
+    const prepared = await prepare.json() as { token: string; downloadUrl: string };
+    assert.equal((await fetch(`${baseUrl}/download-bundles/${prepared.token}`, {
+      headers: { authorization: 'session-b' },
+    })).status, 404);
+    const claimed = await fetch(`http://127.0.0.1:${port}${prepared.downloadUrl}`, {
+      headers: { authorization: 'session-a' },
+    });
+    assert.equal(claimed.status, 200);
+    await claimed.arrayBuffer();
+  } finally {
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await fs.rm(harness.managedRoot, { recursive: true, force: true });
+  }
+});
+
 test('preparation accepts only 1-100 unique identifiers', async () => {
   const harness = await createHarness();
   const service = new LibraryDownloadBundleService(harness.library);
@@ -277,7 +358,7 @@ test('download route streams a session-bound ZIP and releases holds after comple
   const bundles = new LibraryDownloadBundleService(harness.library);
   const app = express();
   app.use('/api/library', (req, res, next) => {
-    res.locals.authUsername = req.headers.authorization;
+    res.locals.authSessionOwnerKey = req.headers.authorization;
     next();
   }, buildLibraryRouter(harness.library, bundles));
   const server = app.listen(0);
@@ -312,7 +393,7 @@ test('aborting a download releases holds exactly once', async () => {
   const bundles = new LibraryDownloadBundleService(harness.library);
   const app = express();
   app.use('/api/library', (req, res, next) => {
-    res.locals.authUsername = req.headers.authorization;
+    res.locals.authSessionOwnerKey = req.headers.authorization;
     next();
   }, buildLibraryRouter(harness.library, bundles));
   const server = app.listen(0);
@@ -346,7 +427,7 @@ test('a source disappearing after preparation fails the stream and releases its 
   const bundles = new LibraryDownloadBundleService(harness.library);
   const app = express();
   app.use('/api/library', (req, res, next) => {
-    res.locals.authUsername = req.headers.authorization;
+    res.locals.authSessionOwnerKey = req.headers.authorization;
     next();
   }, buildLibraryRouter(harness.library, bundles));
   const server = app.listen(0);

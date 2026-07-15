@@ -106,12 +106,18 @@ export class ComposerPreviewService {
     this.now = options.now ?? Date.now;
   }
 
-  async requestPreview(input: PreviewRequest): Promise<ExactPreviewResponse> {
+  async requestPreview(input: PreviewRequest, assetSnapshot?: readonly ComposerAsset[]): Promise<ExactPreviewResponse> {
     this.validateRequest(input);
-    const [original, hook] = await Promise.all([
-      this.assets.requireReadyAsset(input.originalId, 'original'),
-      this.assets.requireReadyAsset(input.hookId, 'hook'),
-    ]);
+    const [original, hook] = assetSnapshot
+      ? [
+        assetSnapshot.find((asset) => asset.id === input.originalId && asset.kind === 'original' && asset.status === 'ready'),
+        assetSnapshot.find((asset) => asset.id === input.hookId && asset.kind === 'hook' && asset.status === 'ready'),
+      ]
+      : await Promise.all([
+        this.assets.requireReadyAsset(input.originalId, 'original'),
+        this.assets.requireReadyAsset(input.hookId, 'hook'),
+      ]);
+    if (!original || !hook) throw new Error('Preview source snapshot is invalid');
     const snapshot = {
       ...structuredClone(input),
       originalCrop: original.crop,

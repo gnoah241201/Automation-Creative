@@ -99,7 +99,7 @@ test('trimmed sources, full-matrix Apply, render, library ZIP, and cleanup form 
   }));
   app.use('/api/composer', buildComposerBatchesRouter(assets, drafts, undefined, renderer));
   app.use('/api/library', (_req, res, next) => {
-    res.locals.authUsername = 'workflow-user';
+    res.locals.authSessionOwnerKey = 'workflow-session';
     next();
   }, buildLibraryRouter(library, bundles));
   const server = app.listen(0);
