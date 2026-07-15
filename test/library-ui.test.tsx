@@ -4,7 +4,18 @@ import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LocalLibraryEntry } from '../shared/composer-contract.ts';
 import { createLibraryUploadSessions, listLibraryEntries } from '../src/library/api.ts';
-import { LibrarySelectionCheckbox, LocalLibraryPage, LocalLibraryToolbar } from '../src/library/LocalLibraryPage.tsx';
+import {
+  finishLibraryOperation,
+  isUsableLibraryEntry,
+  libraryBundlePreparationError,
+  LibrarySelectionCheckbox,
+  LocalLibraryPage,
+  LocalLibraryToolbar,
+  normalizeLibrarySelection,
+  selectAllUsableLibraryEntries,
+  toggleLibrarySelection,
+  tryBeginLibraryOperation,
+} from '../src/library/LocalLibraryPage.tsx';
 import { ResizeBatchPanel } from '../src/render/ResizeBatchPanel.tsx';
 
 test('library API uses authenticated requests and sends IDs instead of video bytes', async () => {
@@ -60,6 +71,71 @@ test('library selection checkbox names the output file for assistive technology'
     assert.match(html, /<input[^>]+aria-label="Select named-output\.mp4"/);
 });
 
+const libraryEntry = (id: string, expiresAt: number): LocalLibraryEntry => ({
+  id,
+  batchId: 'batch-1',
+  jobId: `job-${id}`,
+  originalId: 'original-1',
+  hookId: 'hook-1',
+  filename: `${id}.mp4`,
+  duration: 4,
+  width: 1080,
+  height: 1920,
+  byteSize: 1000,
+  completedAt: 1,
+  expiresAt,
+  holds: [],
+});
+
+test('library selection keeps ordered unique usable IDs and prunes entries as they expire', () => {
+  const entries = [libraryEntry('a', 200), libraryEntry('b', 99), libraryEntry('a', 200)];
+
+  assert.equal(isUsableLibraryEntry(entries[0], 200), true);
+  assert.equal(isUsableLibraryEntry(entries[1], 100), false);
+  assert.deepEqual(selectAllUsableLibraryEntries(entries, 100), ['a']);
+  assert.deepEqual(normalizeLibrarySelection(['a', 'b', 'a', 'missing'], entries, 100), ['a']);
+  assert.deepEqual(normalizeLibrarySelection(['a'], entries, 201), []);
+  assert.deepEqual(toggleLibrarySelection(['a', 'a'], 'b', entries, 100), ['a']);
+});
+
+test('library selection caps API duplicates at one hundred IDs', () => {
+  const entries = Array.from({ length: 101 }, (_, index) => libraryEntry(`entry-${index}`, 200));
+  entries.splice(1, 0, entries[0]);
+
+  const selected = selectAllUsableLibraryEntries(entries, 100);
+
+  assert.equal(selected.length, 100);
+  assert.equal(new Set(selected).size, 100);
+  assert.deepEqual(selected.slice(0, 2), ['entry-0', 'entry-1']);
+});
+
+test('library operation guard rejects a second synchronous activation and resets safely', () => {
+  const guard = { current: false };
+
+  assert.equal(tryBeginLibraryOperation(guard), true);
+  assert.equal(tryBeginLibraryOperation(guard), false);
+  finishLibraryOperation(guard);
+  assert.equal(tryBeginLibraryOperation(guard), true);
+});
+
+test('library ZIP preparation errors never surface an arbitrary server message', () => {
+  assert.equal(
+    libraryBundlePreparationError(new Error('D:\\private\\render.mp4 failed')),
+    'Could not prepare ZIP download',
+  );
+});
+
+test('library checkbox is disabled during a bulk operation', () => {
+  const html = renderToStaticMarkup(<LibrarySelectionCheckbox
+    entry={libraryEntry('entry-1', 200)}
+    checked={false}
+    disabled
+    onChange={() => {}}
+  />);
+
+  assert.match(html, /<input[^>]+disabled=""/);
+});
+
 test('Local Library can select all outputs for ZIP while Resize remains capped at ten', () => {
   const html = renderToStaticMarkup(<LocalLibraryToolbar
     entryCount={25}
@@ -96,4 +172,16 @@ test('Local Library ZIP and Resize controls enforce independent selection limits
   assert.match(button(render(11), 'bg-blue-600'), /\sdisabled=""/);
   assert.doesNotMatch(button(render(100), 'bg-emerald-700'), /\sdisabled=""/);
   assert.match(button(render(101), 'bg-emerald-700'), /\sdisabled=""/);
+
+  const busyHtml = renderToStaticMarkup(<LocalLibraryToolbar
+    entryCount={10}
+    selectedCount={5}
+    busy
+    onSelectAll={() => {}}
+    onClear={() => {}}
+    onDownload={() => {}}
+    onDelete={() => {}}
+    onSendToResize={() => {}}
+  />);
+  assert.equal((busyHtml.match(/<button[^>]*\sdisabled=""[^>]*>/g) ?? []).length, 5);
 });

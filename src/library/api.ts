@@ -45,15 +45,22 @@ export const prepareLibraryDownloadBundle = async (
 }));
 
 export const startBundleDownload = (downloadUrl: string): void => {
-  if (!downloadUrl.startsWith('/api/library/download-bundles/')) {
+  if (!/^\/api\/library\/download-bundles\/[A-Za-z0-9_-]+$/.test(downloadUrl)) {
+    throw new Error('Invalid bundle download URL');
+  }
+  const resolvedUrl = new URL(downloadUrl, globalThis.location.origin);
+  if (resolvedUrl.origin !== globalThis.location.origin || resolvedUrl.pathname !== downloadUrl) {
     throw new Error('Invalid bundle download URL');
   }
   const anchor = document.createElement('a');
-  anchor.href = downloadUrl;
+  anchor.href = resolvedUrl.href;
   anchor.download = '';
   document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
+  try {
+    anchor.click();
+  } finally {
+    anchor.remove();
+  }
 };
 
 export const deleteLibraryEntry = async (id: string): Promise<void> => {

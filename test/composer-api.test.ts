@@ -36,6 +36,7 @@ test('bundle API posts IDs only and returns an authenticated same-origin URL', a
 
 test('bundle download uses a temporary anchor and rejects non-bundle URLs', (t) => {
   const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
   const clicked: string[] = [];
   const appended: unknown[] = [];
   const anchor = {
@@ -48,20 +49,72 @@ test('bundle download uses a temporary anchor and rejects non-bundle URLs', (t) 
     configurable: true,
     value: {
       createElement: () => anchor,
+      baseURI: 'https://untrusted.example.test/library',
       body: { append: (element: unknown) => { appended.push(element); } },
     },
+  });
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { origin: 'https://app.example.test' },
   });
   t.after(() => {
     if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor);
     else Reflect.deleteProperty(globalThis, 'document');
+    if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor);
+    else Reflect.deleteProperty(globalThis, 'location');
   });
 
   startBundleDownload('/api/library/download-bundles/bundle-token');
 
-  assert.deepEqual(clicked, ['/api/library/download-bundles/bundle-token']);
+  assert.deepEqual(clicked, ['https://app.example.test/api/library/download-bundles/bundle-token']);
   assert.equal(anchor.download, '');
   assert.equal(appended.length, 0);
-  assert.throws(() => startBundleDownload('https://example.com/bundle.zip'), /Invalid bundle download URL/);
+  for (const invalidUrl of [
+    '',
+    '/api/library/download-bundles/',
+    '/api/library/download-bundles/token/extra',
+    '/api/library/download-bundles/../entry',
+    '/api/library/download-bundles/%2Fentry',
+    '/api/library/download-bundles/token?download=1',
+    '/api/library/download-bundles/token#fragment',
+    '//example.com/api/library/download-bundles/token',
+    'https://example.com/api/library/download-bundles/token',
+  ]) {
+    assert.throws(() => startBundleDownload(invalidUrl), /Invalid bundle download URL/);
+  }
+});
+
+test('bundle download always removes its temporary anchor when activation throws', (t) => {
+  const documentDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'document');
+  const locationDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  const appended: unknown[] = [];
+  const anchor = {
+    href: '',
+    download: '',
+    click: () => { throw new Error('activation failed'); },
+    remove: () => { appended.pop(); },
+  };
+  Object.defineProperty(globalThis, 'document', {
+    configurable: true,
+    value: {
+      createElement: () => anchor,
+      baseURI: 'https://app.example.test/library',
+      body: { append: (element: unknown) => { appended.push(element); } },
+    },
+  });
+  Object.defineProperty(globalThis, 'location', {
+    configurable: true,
+    value: { origin: 'https://app.example.test' },
+  });
+  t.after(() => {
+    if (documentDescriptor) Object.defineProperty(globalThis, 'document', documentDescriptor);
+    else Reflect.deleteProperty(globalThis, 'document');
+    if (locationDescriptor) Object.defineProperty(globalThis, 'location', locationDescriptor);
+    else Reflect.deleteProperty(globalThis, 'location');
+  });
+
+  assert.throws(() => startBundleDownload('/api/library/download-bundles/token'), /activation failed/);
+  assert.equal(appended.length, 0);
 });
 
 test('unmount flush uses an authenticated keepalive request', async (t) => {

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, RefreshCw, Send, Trash2 } from 'lucide-react';
 import { LocalLibraryEntry } from '../../shared/composer-contract.ts';
 import { ResizeBatchSource } from '../render/librarySources.ts';
@@ -19,13 +19,15 @@ interface LocalLibraryPageProps {
 export function LibrarySelectionCheckbox({
   entry,
   checked,
+  disabled = false,
   onChange,
 }: {
   entry: LocalLibraryEntry;
   checked: boolean;
+  disabled?: boolean;
   onChange: () => void;
 }) {
-  return <input type="checkbox" aria-label={`Select ${entry.filename}`} checked={checked} onChange={onChange} className="absolute left-3 top-3 h-5 w-5" />;
+  return <input type="checkbox" aria-label={`Select ${entry.filename}`} checked={checked} disabled={disabled} onChange={onChange} className="absolute left-3 top-3 h-5 w-5" />;
 }
 
 export function LibrarySourceNames({ entry }: { entry: LocalLibraryEntry }) {
@@ -79,6 +81,59 @@ export function LocalLibraryToolbar({
   );
 }
 
+const MAX_LIBRARY_SELECTION = 100;
+
+export const isUsableLibraryEntry = (entry: LocalLibraryEntry, now: number): boolean => now <= entry.expiresAt;
+
+export const normalizeLibrarySelection = (
+  ids: string[],
+  entries: LocalLibraryEntry[],
+  now: number,
+): string[] => {
+  const usableIds = new Set(entries.filter((entry) => isUsableLibraryEntry(entry, now)).map((entry) => entry.id));
+  const selected: string[] = [];
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (selected.length === MAX_LIBRARY_SELECTION) break;
+    if (usableIds.has(id) && !seen.has(id)) {
+      seen.add(id);
+      selected.push(id);
+    }
+  }
+  return selected;
+};
+
+export const selectAllUsableLibraryEntries = (entries: LocalLibraryEntry[], now: number): string[] => (
+  normalizeLibrarySelection(entries.map((entry) => entry.id), entries, now)
+);
+
+export const toggleLibrarySelection = (
+  current: string[],
+  id: string,
+  entries: LocalLibraryEntry[],
+  now: number,
+): string[] => {
+  const selected = normalizeLibrarySelection(current, entries, now);
+  if (selected.includes(id)) return selected.filter((item) => item !== id);
+  return normalizeLibrarySelection([...selected, id], entries, now);
+};
+
+interface LibraryOperationGuard {
+  current: boolean;
+}
+
+export const tryBeginLibraryOperation = (guard: LibraryOperationGuard): boolean => {
+  if (guard.current) return false;
+  guard.current = true;
+  return true;
+};
+
+export const finishLibraryOperation = (guard: LibraryOperationGuard): void => {
+  guard.current = false;
+};
+
+export const libraryBundlePreparationError = (_cause: unknown): string => 'Could not prepare ZIP download';
+
 const bytes = (value: number): string => value >= 1_000_000
   ? `${(value / 1_000_000).toFixed(1)} MB`
   : `${Math.max(1, Math.round(value / 1_000))} KB`;
@@ -97,6 +152,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [now, setNow] = useState(Date.now());
+  const operationInFlight = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -104,8 +160,9 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
     try {
       const result = await listLibraryEntries();
       setEntries(result.entries);
-      const available = new Set(result.entries.map((entry) => entry.id));
-      setSelected((current) => current.filter((id) => available.has(id)));
+      const loadedAt = Date.now();
+      setNow(loadedAt);
+      setSelected((current) => normalizeLibrarySelection(current, result.entries, loadedAt));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not load local outputs');
     } finally {
@@ -119,39 +176,77 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    setSelected((current) => normalizeLibrarySelection(current, entries, now));
+  }, [entries, now]);
+
+  const usableSelected = useMemo(
+    () => normalizeLibrarySelection(selected, entries, now),
+    [entries, now, selected],
+  );
+
   const selectedEntries = useMemo(() => {
-    const ids = new Set(selected);
-    return entries.filter((entry) => ids.has(entry.id));
-  }, [entries, selected]);
+    const byId = new Map(entries
+      .filter((entry) => isUsableLibraryEntry(entry, now))
+      .map((entry) => [entry.id, entry]));
+    return usableSelected.map((id) => byId.get(id)).filter((entry): entry is LocalLibraryEntry => Boolean(entry));
+  }, [entries, now, usableSelected]);
 
-  const selectAll = () => setSelected(entries.slice(0, 100).map((entry) => entry.id));
-  const toggle = (id: string) => setSelected((current) => current.includes(id)
-    ? current.filter((item) => item !== id)
-    : current.length < 100 ? [...current, id] : current);
+  const usableEntryCount = useMemo(() => selectAllUsableLibraryEntries(entries, now).length, [entries, now]);
 
-  const canDownloadZip = selected.length >= 1 && selected.length <= 100 && !busy;
-  const canSendToResize = selected.length >= 1 && selected.length <= 10 && !busy;
+  const selectAll = () => {
+    if (operationInFlight.current) return;
+    setSelected(selectAllUsableLibraryEntries(entries, Date.now()));
+  };
+  const clearSelection = () => {
+    if (!operationInFlight.current) setSelected([]);
+  };
+  const toggle = (id: string) => {
+    if (operationInFlight.current) return;
+    setSelected((current) => toggleLibrarySelection(current, id, entries, Date.now()));
+  };
+
+  const beginOperation = (): boolean => {
+    if (!tryBeginLibraryOperation(operationInFlight)) return false;
+    setBusy(true);
+    return true;
+  };
+
+  const finishOperation = () => {
+    finishLibraryOperation(operationInFlight);
+    setBusy(false);
+  };
+
+  const refresh = async () => {
+    if (!beginOperation()) return;
+    try {
+      await load();
+    } finally {
+      finishOperation();
+    }
+  };
 
   const downloadSelected = async () => {
-    if (!canDownloadZip) return;
-    setBusy(true);
+    const ids = normalizeLibrarySelection(selected, entries, Date.now());
+    if (ids.length === 0 || !beginOperation()) return;
+    setSelected(ids);
     setError(null);
     setStatus('Preparing ZIP…');
     try {
-      const bundle = await prepareLibraryDownloadBundle(selected);
+      const bundle = await prepareLibraryDownloadBundle(ids);
       startBundleDownload(bundle.downloadUrl);
       setStatus('Download started');
     } catch (cause) {
-      const message = cause instanceof Error ? cause.message : 'Could not prepare ZIP download';
       await load();
-      setError(message);
+      setError(libraryBundlePreparationError(cause));
       setStatus(null);
     } finally {
-      setBusy(false);
+      finishOperation();
     }
   };
 
   const removeOne = async (id: string) => {
+    if (!beginOperation()) return;
     setError(null);
     try {
       await deleteLibraryEntry(id);
@@ -159,33 +254,44 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
       setSelected((current) => current.filter((item) => item !== id));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not delete output');
+    } finally {
+      finishOperation();
     }
   };
 
   const removeSelected = async () => {
-    if (selected.length === 0) return;
-    setBusy(true);
+    const ids = normalizeLibrarySelection(selected, entries, Date.now());
+    if (ids.length === 0 || !beginOperation()) return;
+    setSelected(ids);
     setError(null);
     try {
-      const result = await deleteLibraryEntries(selected);
+      const result = await deleteLibraryEntries(ids);
       const removed = new Set([...result.deleted, ...result.missing]);
-      setEntries((current) => current.filter((entry) => !removed.has(entry.id)));
-      setSelected(result.inUse);
+      const remainingEntries = entries.filter((entry) => !removed.has(entry.id));
+      setEntries(remainingEntries);
+      setSelected(normalizeLibrarySelection(result.inUse, remainingEntries, Date.now()));
       if (result.inUse.length > 0) setError('Some outputs are still being used by Resize');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Could not delete selected outputs');
     } finally {
-      setBusy(false);
+      finishOperation();
     }
   };
 
   const send = async () => {
-    if (!canSendToResize) return;
-    setBusy(true);
+    const ids = normalizeLibrarySelection(selected, entries, Date.now());
+    if (ids.length === 0 || ids.length > 10 || !beginOperation()) return;
+    const byId = new Map(selectedEntries.map((entry) => [entry.id, entry]));
+    const payloadEntries = ids.map((id) => byId.get(id)).filter((entry): entry is LocalLibraryEntry => Boolean(entry));
+    if (payloadEntries.length !== ids.length) {
+      finishOperation();
+      setSelected(payloadEntries.map((entry) => entry.id));
+      return;
+    }
+    setSelected(ids);
     setError(null);
     try {
-      const { sessions } = await createLibraryUploadSessions(selectedEntries.map((entry) => entry.id));
-      const byId = new Map(selectedEntries.map((entry) => [entry.id, entry]));
+      const { sessions } = await createLibraryUploadSessions(ids);
       onSendToResize(sessions.map((session) => {
         const entry = byId.get(session.libraryId)!;
         const stem = entry.filename.replace(/\.[^.]+$/, '');
@@ -204,7 +310,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
       setError(cause instanceof Error ? cause.message : 'Could not prepare outputs for Resize');
       await load();
     } finally {
-      setBusy(false);
+      finishOperation();
     }
   };
 
@@ -216,17 +322,17 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
             <h1 className="text-3xl font-bold">Local Library</h1>
             <p className="mt-2 text-neutral-400">Composer outputs stay here for 24 hours.</p>
           </div>
-          <button type="button" onClick={() => void load()} disabled={loading} className="rounded-lg bg-neutral-800 px-4 py-2 text-sm">
+          <button type="button" onClick={() => void refresh()} disabled={loading || busy} className="rounded-lg bg-neutral-800 px-4 py-2 text-sm disabled:opacity-50">
             <RefreshCw className="mr-2 inline h-4 w-4" /> Refresh
           </button>
         </div>
 
         <LocalLibraryToolbar
-          entryCount={entries.length}
-          selectedCount={selected.length}
+          entryCount={usableEntryCount}
+          selectedCount={usableSelected.length}
           busy={busy}
           onSelectAll={selectAll}
-          onClear={() => setSelected([])}
+          onClear={clearSelection}
           onDownload={() => void downloadSelected()}
           onDelete={() => void removeSelected()}
           onSendToResize={() => void send()}
@@ -241,7 +347,7 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
               <label className="block cursor-pointer">
                 <div className="relative aspect-[9/16] bg-black">
                   <video src={libraryDownloadUrl(entry.id)} preload="metadata" muted className="h-full w-full object-cover" />
-                  <LibrarySelectionCheckbox entry={entry} checked={selected.includes(entry.id)} onChange={() => toggle(entry.id)} />
+                  <LibrarySelectionCheckbox entry={entry} checked={usableSelected.includes(entry.id)} disabled={busy || !isUsableLibraryEntry(entry, now)} onChange={() => toggle(entry.id)} />
                 </div>
               </label>
               <div className="space-y-2 p-4">
@@ -249,8 +355,14 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
                 <LibrarySourceNames entry={entry} />
                 <p className="text-xs text-neutral-400">{entry.duration.toFixed(1)}s · {bytes(entry.byteSize)} · {remaining(entry.expiresAt, now)}</p>
                 <div className="flex gap-2 pt-2">
-                  <a href={libraryDownloadUrl(entry.id)} download={entry.filename} className="flex-1 rounded-lg bg-neutral-800 px-3 py-2 text-center text-xs"><Download className="mr-1 inline h-3.5 w-3.5" /> Download</a>
-                  <button type="button" aria-label={`Delete ${entry.filename}`} onClick={() => void removeOne(entry.id)} className="rounded-lg bg-red-950 px-3 py-2 text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
+                  <a
+                    href={busy || !isUsableLibraryEntry(entry, now) ? undefined : libraryDownloadUrl(entry.id)}
+                    aria-disabled={busy || !isUsableLibraryEntry(entry, now)}
+                    download={busy || !isUsableLibraryEntry(entry, now) ? undefined : entry.filename}
+                    onClick={(event) => { if (operationInFlight.current || !isUsableLibraryEntry(entry, Date.now())) event.preventDefault(); }}
+                    className="flex-1 rounded-lg bg-neutral-800 px-3 py-2 text-center text-xs aria-disabled:opacity-50"
+                  ><Download className="mr-1 inline h-3.5 w-3.5" /> Download</a>
+                  <button type="button" aria-label={`Delete ${entry.filename}`} onClick={() => void removeOne(entry.id)} disabled={busy || !isUsableLibraryEntry(entry, now)} className="rounded-lg bg-red-950 px-3 py-2 text-red-300 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /></button>
                 </div>
               </div>
             </article>
