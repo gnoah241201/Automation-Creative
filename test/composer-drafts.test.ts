@@ -531,6 +531,46 @@ test('bulk apply routes safely reject conflicts, invalid requests, missing draft
   });
 });
 
+test('bulk apply routes safely reject malformed and oversized JSON bodies', async (t) => {
+  const drafts = {
+    require: async () => { throw new Error('draft store must not receive an invalid JSON body'); },
+    applyConfigurations: async () => { throw new Error('draft store must not receive an invalid JSON body'); },
+  } as unknown as ComposerDraftStore;
+  const app = express();
+  app.use('/api/composer', buildComposerBatchesRouter({} as ComposerAssetStore, drafts));
+  const server = app.listen(0);
+  t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
+  await new Promise<void>((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const base = `http://127.0.0.1:${address.port}/api/composer/batches/batch-1`;
+
+  for (const route of ['apply-preview', 'apply']) {
+    const malformed = await fetch(`${base}/${route}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{',
+    });
+    const malformedBody = await malformed.text();
+    assert.equal(malformed.status, 400);
+    assert.equal(malformed.headers.get('content-type'), 'application/json; charset=utf-8');
+    assert.deepEqual(JSON.parse(malformedBody), {
+      error: 'InvalidJson', message: 'Request body must be valid JSON',
+    });
+    assert.doesNotMatch(malformedBody, /SyntaxError|composerBatches|node_modules|[A-Z]:\\/);
+
+    const oversized = await fetch(`${base}/${route}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify('x'.repeat(102_400)),
+    });
+    const oversizedBody = await oversized.text();
+    assert.equal(oversized.status, 413);
+    assert.equal(oversized.headers.get('content-type'), 'application/json; charset=utf-8');
+    assert.deepEqual(JSON.parse(oversizedBody), {
+      error: 'RequestTooLarge', message: 'Request body exceeds the allowed size',
+    });
+    assert.doesNotMatch(oversizedBody, /PayloadTooLargeError|composerBatches|node_modules|[A-Z]:\\/);
+  }
+});
+
 test('configuration route rejects an ID mismatch', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-draft-route-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

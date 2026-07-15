@@ -94,6 +94,26 @@ const sendDraftStale = (res: express.Response) => res.status(409).json({
   error: 'DraftStale', message: 'Composer sources changed; reload or create a fresh batch',
 });
 
+const sendBulkApplyBodyError = (
+  error: unknown,
+  _req: express.Request,
+  res: express.Response,
+  next: express.NextFunction,
+) => {
+  const bodyErrorType = error && typeof error === 'object' && 'type' in error
+    ? (error as { type?: unknown }).type
+    : undefined;
+  if (bodyErrorType === 'entity.parse.failed') {
+    res.status(400).json({ error: 'InvalidJson', message: 'Request body must be valid JSON' });
+    return;
+  }
+  if (bodyErrorType === 'entity.too.large') {
+    res.status(413).json({ error: 'RequestTooLarge', message: 'Request body exceeds the allowed size' });
+    return;
+  }
+  next(error);
+};
+
 const hydrateLegacyAssetRevisions = async (
   draft: Awaited<ReturnType<ComposerDraftStore['require']>>,
   assets: ComposerAssetStore,
@@ -227,7 +247,7 @@ export const buildComposerBatchesRouter = (
         sendInternalError(res, 'Unable to plan composer apply');
       }
     }
-  });
+  }, sendBulkApplyBodyError);
 
   router.post('/batches/:batchId/apply', express.json(), async (req, res) => {
     try {
@@ -258,7 +278,7 @@ export const buildComposerBatchesRouter = (
         sendInternalError(res, 'Unable to apply composer configurations');
       }
     }
-  });
+  }, sendBulkApplyBodyError);
 
   router.get('/batches/:batchId', async (req, res) => {
     try {
