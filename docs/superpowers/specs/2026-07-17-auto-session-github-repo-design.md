@@ -35,7 +35,7 @@ If session bootstrap fails, the application shows a retryable startup error rath
 
 ## GitHub Publication
 
-Create a new repository named `Automation Creative` on the connected GitHub account. Because GitHub repository URLs use a slug, the expected URL is `https://github.com/gnoah241201/Automation-Creative`.
+Create a new private repository named `Automation Creative` on the connected GitHub account. Private visibility is the safe default for publishing application source; it can be changed later in GitHub settings. Because GitHub repository URLs use a slug, the expected URL is `https://github.com/gnoah241201/Automation-Creative`.
 
 Set the new repository as `origin` for this worktree and push the current feature branch without force-pushing. Keep the worktree available after publication.
 
