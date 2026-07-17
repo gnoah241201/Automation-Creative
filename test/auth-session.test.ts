@@ -1,7 +1,29 @@
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import test from 'node:test';
-import { AuthSessionCodec } from '../server/services/authSession.ts';
+import { AuthSessionCodec, bootstrapAuthSession } from '../server/services/authSession.ts';
+
+test('missing token produces a new valid session token', () => {
+  const codec = new AuthSessionCodec({ secret: 'test-secret', maxAgeMs: 60_000, now: () => 1_000 });
+
+  const result = bootstrapAuthSession(codec, undefined, 'local-user');
+
+  assert.ok(result.token);
+  assert.deepEqual(codec.read(result.token), result.session);
+  assert.equal(result.session.username, 'local-user');
+});
+
+test('valid token is reused without replacement', () => {
+  const codec = new AuthSessionCodec({ secret: 'test-secret', maxAgeMs: 60_000, now: () => 1_000 });
+  const token = codec.issue('existing-user');
+  const existing = codec.read(token);
+
+  const result = bootstrapAuthSession(codec, token, 'local-user');
+
+  assert.ok(existing);
+  assert.deepEqual(result.session, existing);
+  assert.equal(result.token, undefined);
+});
 
 test('two logins for the same username receive distinct non-public ownership keys', () => {
   const codec = new AuthSessionCodec({ secret: 'test-secret', maxAgeMs: 60_000, now: () => 1_000 });

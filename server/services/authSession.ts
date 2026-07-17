@@ -6,6 +6,20 @@ export interface AuthSession {
   sid: string;
 }
 
+export const bootstrapAuthSession = (
+  codec: AuthSessionCodec,
+  token: string | undefined,
+  username: string,
+): { session: AuthSession; token?: string } => {
+  const existing = codec.read(token);
+  if (existing) return { session: existing };
+
+  const issuedToken = codec.issue(username);
+  const session = codec.read(issuedToken);
+  if (!session) throw new Error('Failed to issue automatic session');
+  return { session, token: issuedToken };
+};
+
 interface AuthSessionCodecOptions {
   secret: string;
   maxAgeMs: number;

@@ -19,7 +19,7 @@ import { ComposerBatchRenderer } from './services/composerBatchRenderer';
 import { ComposerCleanupCoordinator } from './services/composerCleanupCoordinator';
 import { LibraryDownloadBundleService } from './services/libraryDownloadBundles';
 import { safeApplicationErrorHandler } from './middleware/safeApplicationError';
-import { AuthSession, AuthSessionCodec } from './services/authSession';
+import { AuthSession, AuthSessionCodec, bootstrapAuthSession } from './services/authSession';
 
 // Validate environment variables at startup
 const PORT_ENV = process.env.PORT;
@@ -299,10 +299,14 @@ const start = async () => {
   });
 
   app.get('/api/auth/session', (req, res) => {
-    const session = getRequestSession(req);
+    const cookies = parseCookies(req.headers.cookie);
+    const result = bootstrapAuthSession(authSessions, cookies[authCookieName], 'local-user');
+    if (result.token) {
+      res.setHeader('Set-Cookie', buildCookie(result.token, authCookieMaxAgeMs));
+    }
     res.json({
-      authenticated: !!session,
-      username: session?.username ?? null,
+      authenticated: true,
+      username: result.session.username,
     });
   });
 
