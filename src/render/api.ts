@@ -1,7 +1,5 @@
 import {
-  AuthLoginRequest,
   AuthSessionResponse,
-  GoogleAuthRequest,
   CreateJobResponse,
   JobStateResponse,
   RenderSpec,
@@ -26,50 +24,6 @@ export const getAuthSession = async (): Promise<AuthSessionResponse> => {
   }
 
   return response.json();
-};
-
-export const login = async (params: AuthLoginRequest): Promise<AuthSessionResponse> => {
-  const response = await fetch(`${AUTH_BASE}/login`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-
-  if (!response.ok) {
-    const error = await parseErrorResponse(response);
-    throw new Error(error.message);
-  }
-
-  return response.json();
-};
-
-export const loginWithGoogle = async (params: GoogleAuthRequest): Promise<AuthSessionResponse> => {
-  const response = await fetch(`${AUTH_BASE}/google`, {
-    method: 'POST',
-    credentials: 'include',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-
-  if (!response.ok) {
-    const error = await parseErrorResponse(response);
-    throw new Error(error.message);
-  }
-
-  return response.json();
-};
-
-export const logout = async (): Promise<void> => {
-  const response = await fetch(`${AUTH_BASE}/logout`, {
-    method: 'POST',
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    const error = await parseErrorResponse(response);
-    throw new Error(error.message);
-  }
 };
 
 export const createUploadSession = async (params: {

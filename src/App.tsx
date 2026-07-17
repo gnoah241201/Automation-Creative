@@ -5,7 +5,7 @@ import { NamingMeta, parseVideoNamingMeta, buildOutputFilename } from './naming'
 import { RenderSpec } from '../shared/render-contract';
 import { buildRenderSpec } from './render/renderSpec';
 import { createOverlayPng } from './render/overlay';
-import { cancelRenderJob, createRenderJob, createTrimJob, createUploadSession, downloadRenderJob, getAuthSession, getRenderJob, login as loginRequest, loginWithGoogle, logout as logoutRequest } from './render/api';
+import { cancelRenderJob, createRenderJob, createTrimJob, createUploadSession, downloadRenderJob, getAuthSession, getRenderJob } from './render/api';
 import { deriveOutputs, OutputConfig } from './render/outputDerivation';
 import { getJobDisplayName } from './render/jobDisplay';
 import {
@@ -507,21 +507,12 @@ type DropZone = 'foreground' | 'bgVideo' | 'bgImage' | 'logo' | 'buttonImage' | 
 type DropZoneKey = Exclude<DropZone, null>;
 
 export default function App() {
-  const googleClientId = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID as string | undefined;
-  const googleWorkspaceDomain = import.meta.env.VITE_GOOGLE_WORKSPACE_DOMAIN as string | undefined;
-
-  const [authLoading, setAuthLoading] = useState(true);
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [authUsername, setAuthUsername] = useState<string | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [sessionRetry, setSessionRetry] = useState(0);
   const [activeTab, setActiveTab] = useState<AppTab>('resize');
   const [resizeBatchState, setResizeBatchState] = useState(createResizeBatchState);
   const resizeBatchSources = resizeBatchState.sources;
   const [isBatchSubmitting, setIsBatchSubmitting] = useState(false);
-  const [loginUsername, setLoginUsername] = useState('admin');
-  const [loginPassword, setLoginPassword] = useState('');
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const googleButtonRef = useRef<HTMLDivElement>(null);
-
   const [bgType, setBgType] = useState<'video' | 'image'>('video');
   const [bgVideo, setBgVideo] = useState<string | null>(null);
   const [bgVideoFile, setBgVideoFile] = useState<File | null>(null);
@@ -581,16 +572,13 @@ export default function App() {
       try {
         const session = await getAuthSession();
         if (cancelled) return;
-        setIsAuthenticated(session.authenticated);
-        setAuthUsername(session.username);
+        if (!session.authenticated) {
+          throw new Error('Session bootstrap did not authenticate');
+        }
+        setSessionStatus('ready');
       } catch {
         if (cancelled) return;
-        setIsAuthenticated(false);
-        setAuthUsername(null);
-      } finally {
-        if (!cancelled) {
-          setAuthLoading(false);
-        }
+        setSessionStatus('error');
       }
     };
 
@@ -599,106 +587,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    if (!googleClientId || isAuthenticated) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const renderGoogleButton = () => {
-      const google = (window as Window & { google?: any }).google;
-      if (!google?.accounts?.id || !googleButtonRef.current || cancelled) {
-        return;
-      }
-
-      google.accounts.id.initialize({
-        client_id: googleClientId,
-        callback: async (response: { credential?: string }) => {
-          try {
-            setLoginError(null);
-            const credential = response.credential;
-            if (!credential) {
-              throw new Error('Google sign-in did not return a credential');
-            }
-
-            const session = await loginWithGoogle({ credential });
-            setIsAuthenticated(session.authenticated);
-            setAuthUsername(session.username);
-          } catch (error) {
-            setLoginError(error instanceof Error ? error.message : 'Failed to sign in with Google');
-          }
-        },
-      });
-
-      googleButtonRef.current.innerHTML = '';
-      google.accounts.id.renderButton(googleButtonRef.current, {
-        theme: 'outline',
-        size: 'large',
-        shape: 'pill',
-        width: 320,
-        text: 'signin_with',
-      });
-    };
-
-    const ensureScript = () => {
-      const existing = document.querySelector<HTMLScriptElement>('script[data-google-identity-services="true"]');
-      if (existing) {
-        if (existing.dataset.loaded === 'true') {
-          renderGoogleButton();
-          return;
-        }
-
-        existing.addEventListener('load', renderGoogleButton, { once: true });
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = 'https://accounts.google.com/gsi/client';
-      script.async = true;
-      script.defer = true;
-      script.dataset.googleIdentityServices = 'true';
-      script.addEventListener('load', () => {
-        script.dataset.loaded = 'true';
-        renderGoogleButton();
-      }, { once: true });
-      document.head.appendChild(script);
-    };
-
-    ensureScript();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [googleClientId, isAuthenticated]);
-
-  const handleLoginSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLoginError(null);
-
-    try {
-      const session = await loginRequest({
-        username: loginUsername,
-        password: loginPassword,
-      });
-      setIsAuthenticated(session.authenticated);
-      setAuthUsername(session.username);
-      setLoginPassword('');
-    } catch (error) {
-      setLoginError(error instanceof Error ? error.message : 'Failed to sign in');
-    }
-  };
-
-  const handleLogout = async () => {
-    try {
-      await logoutRequest();
-    } finally {
-      setIsAuthenticated(false);
-      setAuthUsername(null);
-    }
-  };
+  }, [sessionRetry]);
 
   const activeResizeInput = deriveResizeInput(resizeBatchState, { inputRatio, duration: fgDuration });
   const activeInputRatio = activeResizeInput.inputRatio;
@@ -1514,85 +1403,38 @@ export default function App() {
     setButtonImageFile(next.imageFile);
   };
 
-  if (authLoading) {
+  if (sessionStatus === 'loading') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white px-4">
         <div className="text-center max-w-sm">
           <div className="w-14 h-14 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mx-auto mb-4">
             <Film className="w-7 h-7 text-blue-400" />
           </div>
-          <p className="text-sm text-neutral-400">Checking session...</p>
+          <p className="text-sm text-neutral-400">Starting workspace...</p>
         </div>
       </div>
     );
   }
 
-  if (!isAuthenticated) {
+  if (sessionStatus === 'error') {
     return (
       <div className="min-h-screen flex items-center justify-center bg-neutral-950 text-white px-4">
-        <div className="w-full max-w-md rounded-3xl border border-neutral-800 bg-neutral-900/90 p-8 shadow-2xl">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-12 h-12 rounded-2xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-              <Film className="w-6 h-6 text-blue-400" />
-            </div>
-            <div>
-              <h1 className="text-xl font-semibold text-white">ResizeVideo Login</h1>
-              <p className="text-sm text-neutral-400">
-                {googleClientId ? 'Sign in with Google Workspace to continue' : 'Sign in to continue'}
-              </p>
-            </div>
+        <div className="w-full max-w-sm rounded-3xl border border-neutral-800 bg-neutral-900/90 p-8 text-center shadow-2xl">
+          <div className="w-12 h-12 rounded-2xl bg-red-500/10 border border-red-500/20 flex items-center justify-center mx-auto mb-4">
+            <Film className="w-6 h-6 text-red-400" />
           </div>
-
-          {googleClientId ? (
-            <div className="space-y-4">
-              <div ref={googleButtonRef} className="flex justify-center" />
-              {googleWorkspaceDomain && (
-                <p className="text-xs text-neutral-500 text-center">
-                  Workspace domain: {googleWorkspaceDomain}
-                </p>
-              )}
-              <div className="relative py-2">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-neutral-800" />
-                </div>
-                <div className="relative flex justify-center text-[11px] uppercase tracking-[0.3em] text-neutral-500">
-                  <span className="bg-neutral-900 px-2">or</span>
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          <form className="space-y-4" onSubmit={handleLoginSubmit}>
-            <div>
-              <label className="block text-sm text-neutral-300 mb-1.5">Username</label>
-              <input
-                type="text"
-                value={loginUsername}
-                onChange={(event) => setLoginUsername(event.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-blue-500"
-                autoComplete="username"
-              />
-            </div>
-            <div>
-              <label className="block text-sm text-neutral-300 mb-1.5">Password</label>
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(event) => setLoginPassword(event.target.value)}
-                className="w-full rounded-xl border border-neutral-700 bg-neutral-950 px-4 py-3 text-sm text-white outline-none transition-colors focus:border-blue-500"
-                autoComplete="current-password"
-              />
-            </div>
-            {loginError && (
-              <p className="text-sm text-red-400">{loginError}</p>
-            )}
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-blue-500"
-            >
-              Sign in
-            </button>
-          </form>
+          <h1 className="text-lg font-semibold text-white">Workspace unavailable</h1>
+          <p className="mt-2 text-sm text-neutral-400">Could not start the workspace session.</p>
+          <button
+            type="button"
+            onClick={() => {
+              setSessionStatus('loading');
+              setSessionRetry((current) => current + 1);
+            }}
+            className="mt-6 rounded-xl bg-blue-600 px-5 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-500"
+          >
+            Retry
+          </button>
         </div>
       </div>
     );
@@ -2037,16 +1879,6 @@ export default function App() {
           <div className="w-full flex justify-between items-center mb-6 sticky top-0 z-50 bg-neutral-950/90 backdrop-blur-md py-4 border-b border-neutral-800">
             <h2 className="text-2xl font-bold text-white">Previews</h2>
             <div className="flex items-center gap-3">
-              <div className="hidden md:flex items-center gap-2 px-3 py-2 rounded-full bg-neutral-800 text-neutral-300 text-sm border border-neutral-700">
-                <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                <span>{authUsername ?? 'Signed in'}</span>
-              </div>
-              <button
-                onClick={handleLogout}
-                className="px-4 py-2 flex items-center gap-2 text-sm font-medium bg-neutral-800 text-white rounded-full hover:bg-neutral-700 transition-colors"
-              >
-                Logout
-              </button>
               <button
                 onClick={toggleMute}
                 className="px-4 py-2 flex items-center gap-2 text-sm font-medium bg-neutral-800 text-white rounded-full hover:bg-neutral-700 transition-colors"
