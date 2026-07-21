@@ -144,7 +144,7 @@ sudo docker compose down -v
 
 ## 8. Gan domain bang Nginx tren host VM
 
-Domain dang dung: `resize1.bravestars.com`
+Domain dang dung: `resize.bravestars.com`
 
 Repo da co 2 file mau:
 
@@ -164,7 +164,7 @@ sudo systemctl reload nginx
 Kiem tra:
 
 ```bash
-curl -I http://resize1.bravestars.com
+curl -I http://resize.bravestars.com
 ```
 
 ### Buoc 8.2: Cap SSL bang certbot standalone
@@ -175,7 +175,7 @@ Neu `certbot --nginx` bi loi vi cert chua ton tai, dung standalone de cap cert l
 sudo apt-get update
 sudo apt-get install -y certbot
 sudo systemctl stop nginx
-sudo certbot certonly --standalone -d resize1.bravestars.com
+sudo certbot certonly --standalone -d resize.bravestars.com
 sudo systemctl start nginx
 ```
 
@@ -194,19 +194,19 @@ Ban co the thu ban nay truoc de giam nguy co upload cham qua domain: no da tat `
 Sau do kiem tra lai block cert da dung 2 duong dan sau:
 
 ```nginx
-ssl_certificate /etc/letsencrypt/live/resize1.bravestars.com/fullchain.pem;
-ssl_certificate_key /etc/letsencrypt/live/resize1.bravestars.com/privkey.pem;
+ssl_certificate /etc/letsencrypt/live/resize.bravestars.com/fullchain.pem;
+ssl_certificate_key /etc/letsencrypt/live/resize.bravestars.com/privkey.pem;
 ```
 
 Cuoi cung:
 
 ```bash
-curl -I https://resize1.bravestars.com
+curl -I https://resize.bravestars.com
 ```
 
 ### Cach test tung phuong an
 
-1. Upload cung 1 file qua `http://SERVER_IP:8080` va qua `https://resize1.bravestars.com`.
+1. Upload cung 1 file qua `http://SERVER_IP:8080` va qua `https://resize.bravestars.com`.
 2. Neu IP nhanh nhung domain cham, reload Nginx voi ban HTTPS da tat `http2`.
 3. Neu van cham, kiem tra DNS/IPv6 hoac middlebox tren duong di.
 4. Neu muon, tam thoi test qua HTTP tren domain neu moi truong cho phep.
@@ -225,8 +225,8 @@ Truoc khi bat app, can tao OAuth client tren Google Cloud Console:
 2. Chon **Internal** neu chi dung trong cong ty Google Workspace.
 3. Tao **OAuth Client ID** loai **Web application**.
 4. Them **Authorized JavaScript origins**:
-  - `http://resize1.bravestars.com`
-  - `https://resize1.bravestars.com`
+  - `http://resize.bravestars.com`
+  - `https://resize.bravestars.com`
   - `http://localhost:8080` (neu test local)
 5. Copy **Client ID** vao bien moi truong:
   - `GOOGLE_OAUTH_CLIENT_ID`
@@ -256,9 +256,9 @@ Neu da co HTTPS, doi sang:
 APP_AUTH_COOKIE_SECURE=true
 ```
 
-### 10.2 Gan domain `resize1.bravestars.com` ve `10.1.1.50` tren Mikrotik
+### 10.2 Gan domain `resize.bravestars.com` ve `10.1.1.50` tren Mikrotik
 
-Muc tieu la moi may trong LAN go `resize1.bravestars.com` se tro ve server Ubuntu `10.1.1.50`.
+Muc tieu la moi may trong LAN go `resize.bravestars.com` se tro ve server Ubuntu `10.1.1.50`.
 
 #### Cach lam bang GUI
 
@@ -267,7 +267,7 @@ Muc tieu la moi may trong LAN go `resize1.bravestars.com` se tro ve server Ubunt
 3. Bat **Allow Remote Requests**.
 4. Vao tab **Static** -> bam **+**.
 5. Dien:
-  - Name: `resize1.bravestars.com`
+  - Name: `resize.bravestars.com`
   - Address: `10.1.1.50`
 6. Save.
 
@@ -275,7 +275,7 @@ Muc tieu la moi may trong LAN go `resize1.bravestars.com` se tro ve server Ubunt
 
 ```bash
 /ip dns set allow-remote-requests=yes
-/ip dns static add name=resize1.bravestars.com address=10.1.1.50
+/ip dns static add name=resize.bravestars.com address=10.1.1.50
 ```
 
 ### 10.3 De client trong LAN tu dong dung DNS cua router
@@ -302,7 +302,7 @@ Thay `192.168.200.1` bang IP router Mikrotik cua ban neu router cua ban dung IP 
 Sau khi xong:
 
 ```text
-http://resize1.bravestars.com
+http://resize.bravestars.com
 ```
 
 Khi vao app, ban se thay nut dang nhap Google Workspace. Chi cac tai khoan thuoc domain `bravestars.com` moi dang nhap duoc.
