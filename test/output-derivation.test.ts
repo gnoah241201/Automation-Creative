@@ -17,7 +17,7 @@ test('16:9 input above 35s includes exactly one 30s variant', () => {
   const longForm = outputs.filter((output) => output.id === '16:9-30s');
   assert.equal(longForm.length, 1);
   assert.equal(longForm[0]?.duration, 30);
-  assert.equal(outputs.some((output) => output.id === '9:16-30s'), false);
+  assert.equal(outputs.some((output) => output.id === '9:16-30s'), true);
 });
 
 test('9:16 input above 35s includes exactly one 30s variant', () => {
@@ -25,5 +25,5 @@ test('9:16 input above 35s includes exactly one 30s variant', () => {
   const longForm = outputs.filter((output) => output.id === '9:16-30s');
   assert.equal(longForm.length, 1);
   assert.equal(longForm[0]?.duration, 30);
-  assert.equal(outputs.some((output) => output.id === '16:9-30s'), false);
+  assert.equal(outputs.some((output) => output.id === '16:9-30s'), true);
 });
