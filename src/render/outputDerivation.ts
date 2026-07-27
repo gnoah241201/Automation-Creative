@@ -1,8 +1,9 @@
 import { InputRatio, AspectRatio } from '../../shared/render-contract';
 
 /**
- * Duration threshold for adding long-form output variant.
- * If fgDuration > DURATION_THRESHOLD, add 30s output variant.
+ * Duration threshold for adding the 30s long-form output variant.
+ * If fgDuration > DURATION_THRESHOLD, add 30s output variant (Rule A).
+ * For 60/90/120s tiers, see LONG_TIERS thresholds.
  */
 export const DURATION_THRESHOLD = 35;
 
@@ -25,7 +26,7 @@ export interface OutputConfig {
   /** Duration in seconds. undefined means full video. */
   duration?: number;
   label: string;
-  /** Flag indicating this is a long-form extension (30s variant) */
+  /** Flag indicating this is a same-ratio long-form render: 30s variant, or the longest active tier from 60/90/120s duration-tiered outputs. */
   isLongFormExtension?: boolean;
   /** If set, this output should be trimmed from the full-length output with this ID (stream copy, no re-encode). */
   trimFrom?: string;
@@ -96,17 +97,22 @@ function appendTieredLongOutputs(
 
 /**
  * Derives the list of output configurations based on input ratio and foreground duration.
- * 
+ *
  * Rule A (Long-Video Output - same ratio):
  * - If fgDuration <= 35: no 30s output variant
  * - If fgDuration > 35: add exactly 1 output 30s with ratio matching input
- * 
+ *
  * Rule B (Extended cross-ratio outputs):
  * - If fgDuration > 35: add cross-ratio 30s/15s variants that trim from full-length outputs
  * - Input 9:16: add 16:9 30s, 16:9 15s, 4:5 30s, 1:1 30s
  * - Input 16:9: add 9:16 30s, 9:16 15s, 4:5 30s, 1:1 30s
  * - These are trim-only jobs (stream copy from the full-length output of the same ratio)
- * 
+ *
+ * Rule C (Duration-tiered long outputs):
+ * - For 9:16 and 16:9 ratios only: add 60/90/120s outputs when fgDuration exceeds the respective thresholds (70/100/130).
+ * - Same-ratio: longest active tier is a real render (no trimFrom); shorter tiers trim from it.
+ * - Cross-ratio: all tiers trim from the full-length cross primary.
+ *
  * @param inputRatio - The aspect ratio of the input video (16:9 or 9:16)
  * @param fgDuration - The duration of the foreground video in seconds (undefined if not yet loaded)
  * @returns Array of output configurations
