@@ -7,6 +7,16 @@ import { InputRatio, AspectRatio } from '../../shared/render-contract';
 export const DURATION_THRESHOLD = 35;
 
 /**
+ * Long-form duration tiers. When fgDuration > `threshold`, add an output of
+ * `seconds` length. Applies to the 9:16 and 16:9 output ratios only.
+ */
+export const LONG_TIERS: ReadonlyArray<{ seconds: number; threshold: number }> = [
+  { seconds: 60, threshold: 70 },
+  { seconds: 90, threshold: 100 },
+  { seconds: 120, threshold: 130 },
+];
+
+/**
  * Output configuration for a single render variant.
  */
 export interface OutputConfig {
@@ -21,6 +31,67 @@ export interface OutputConfig {
   trimFrom?: string;
   /** Whether this output should show a preview box. Trim-only variants skip preview. */
   showPreview?: boolean;
+}
+
+/**
+ * Appends duration-tiered long-form outputs (60/90/120s) for the two primary
+ * ratios only (9:16 and 16:9).
+ *
+ * - Same-ratio (matching input): no full-length same-ratio source exists, so the
+ *   longest active tier is a real "master" render and shorter tiers trim from it.
+ * - Cross-ratio: trims (stream copy) from the full-length cross primary, whose
+ *   output id equals the cross ratio string ('9:16' or '16:9').
+ */
+function appendTieredLongOutputs(
+  outputs: OutputConfig[],
+  inputRatio: InputRatio,
+  fgDuration?: number,
+): void {
+  if (fgDuration === undefined) {
+    return;
+  }
+  const active = LONG_TIERS.filter((tier) => fgDuration > tier.threshold);
+  if (active.length === 0) {
+    return;
+  }
+
+  const crossRatio: InputRatio = inputRatio === '16:9' ? '9:16' : '16:9';
+  const master = active[active.length - 1]; // longest active tier
+  const masterId = `${inputRatio}-${master.seconds}s`;
+
+  // Same-ratio master: real render (no trimFrom).
+  outputs.push({
+    id: masterId,
+    ratio: inputRatio,
+    duration: master.seconds,
+    label: `Output: ${inputRatio} (${master.seconds}s cut)`,
+    isLongFormExtension: true,
+    showPreview: false,
+  });
+
+  // Same-ratio shorter tiers: trim from the master.
+  for (const tier of active.slice(0, -1)) {
+    outputs.push({
+      id: `${inputRatio}-${tier.seconds}s`,
+      ratio: inputRatio,
+      duration: tier.seconds,
+      label: `Output: ${inputRatio} (${tier.seconds}s cut)`,
+      trimFrom: masterId,
+      showPreview: false,
+    });
+  }
+
+  // Cross-ratio tiers: trim from the full-length cross primary.
+  for (const tier of active) {
+    outputs.push({
+      id: `${crossRatio}-${tier.seconds}s`,
+      ratio: crossRatio,
+      duration: tier.seconds,
+      label: `Output: ${crossRatio} (${tier.seconds}s cut)`,
+      trimFrom: crossRatio,
+      showPreview: false,
+    });
+  }
 }
 
 /**
@@ -153,6 +224,8 @@ export function deriveOutputs(inputRatio: InputRatio, fgDuration?: number): Outp
       });
     }
   }
+
+  appendTieredLongOutputs(outputs, inputRatio, fgDuration);
 
   return outputs;
 }
