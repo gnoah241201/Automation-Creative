@@ -1,4 +1,5 @@
 import { execSync } from 'node:child_process';
+import os from 'node:os';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
 const BUNDLED_FFMPEG_PATH = ffmpegInstaller.path;
@@ -13,6 +14,32 @@ export function getFfmpegPath(): string {
 
 export function isUsingBundledFfmpeg(): boolean {
   return !process.env.FFMPEG_BINARY_PATH;
+}
+
+/**
+ * Compute how many CPU threads each concurrent FFmpeg job is allowed to use.
+ *
+ * Without an explicit limit, FFmpeg auto-detects and tries to use every
+ * available core per process. Running MAX_CONCURRENT_JOBS of those at once
+ * oversubscribes the CPU (N jobs x all cores), which causes context-switch
+ * thrashing and makes the whole batch slower, not faster. This spreads the
+ * host's cores evenly across the configured concurrency instead, and always
+ * reserves one core for Node/Express/nginx/OS so the server stays responsive
+ * while renders are running.
+ *
+ * Override with FFMPEG_THREADS_PER_JOB when you want to set the value
+ * explicitly (e.g. after benchmarking on a specific VM).
+ */
+export function computeFfmpegThreadLimit(maxConcurrentJobs: number, cpuCount = os.cpus().length): number {
+  const override = Number(process.env.FFMPEG_THREADS_PER_JOB);
+  if (Number.isFinite(override) && override > 0) {
+    return Math.floor(override);
+  }
+
+  const totalCpus = cpuCount > 0 ? cpuCount : 1;
+  const usableCpus = Math.max(1, totalCpus - 1);
+  const concurrency = Math.max(1, maxConcurrentJobs);
+  return Math.max(1, Math.floor(usableCpus / concurrency));
 }
 
 /**

@@ -1,7 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { buildComposerCommand } from '../ffmpeg/buildComposerCommand.ts';
 import { ComposerJobRecord } from '../types/renderJob.ts';
-import { getEncoder, observeFfmpegProcess, RenderProgress } from './renderRunner.ts';
+import { getEncoder, getFfmpegThreadLimit, observeFfmpegProcess, RenderProgress } from './renderRunner.ts';
 import { getFfmpegPath } from './encoderConfig.ts';
 
 export const runComposerJob = (
@@ -17,6 +17,7 @@ export const runComposerJob = (
     hookPath: job.files.backgroundVideoPath,
     outputPath: job.files.outputPath,
     encoder: getEncoder(),
+    threads: getFfmpegThreadLimit(),
     originalDuration: job.composer.original.duration,
     hookDuration: job.composer.hook.duration,
     originalSourceRange: job.composer.original.sourceRange,

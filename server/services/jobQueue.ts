@@ -5,7 +5,7 @@ import { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { RenderSpec } from '../../shared/render-contract';
 import { ComposerRenderSpec } from '../../shared/composer-contract';
 import { ensureTempRoot, cleanupJobByWorkDir, cleanupExpiredJobs, isManagedJobExpired } from './fileStore';
-import { runRenderJob, runTrimJob, RenderProgress, determineProgressMode } from './renderRunner';
+import { getInputDuration, runRenderJob, runTrimJob, RenderProgress, determineProgressMode } from './renderRunner';
 import { ComposerJobRecord, JobFiles, NativeJobRecord, RenderJobRecord } from '../types/renderJob';
 import { runComposerJob } from './composerRunner';
 import { JobStore } from './jobStore';
@@ -614,6 +614,17 @@ export class JobQueueService {
         child = result.child;
         completion = result.completion;
       } else if (isTrimJob && job.spec.duration) {
+        if (this.diskCapacityGuard) {
+          // Trim is a stream copy of a subset of the source output, so the
+          // source file's size is a safe upper bound on the trimmed output.
+          const sourceStat = await fs.stat(job.files.foregroundPath).catch(() => null);
+          if (sourceStat) {
+            await this.diskCapacityGuard.requireCapacity(
+              path.dirname(job.files.outputPath),
+              sourceStat.size,
+            );
+          }
+        }
         // Run trim job (stream copy, no re-encode)
         const result = runTrimJob(
           job.files.foregroundPath, // This is the source output path
@@ -624,6 +635,16 @@ export class JobQueueService {
         child = result.child;
         completion = result.completion;
       } else {
+        if (this.diskCapacityGuard) {
+          const bitrateKbps = job.spec.bitrate && job.spec.bitrate > 0 ? job.spec.bitrate : 6000;
+          const duration = job.spec.duration ?? getInputDuration(job.files.foregroundPath) ?? null;
+          if (duration) {
+            await this.diskCapacityGuard.requireCapacity(
+              path.dirname(job.files.outputPath),
+              Math.ceil((duration * bitrateKbps * 1000) / 8),
+            );
+          }
+        }
         // Run full render job
         const result = this.runRenderJobImpl(job, updateProgress);
         child = result.child;

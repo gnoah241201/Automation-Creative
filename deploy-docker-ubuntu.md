@@ -65,10 +65,20 @@ cd ResizeVideo
 
 Tao file bien moi truong cho docker compose:
 
+`MAX_CONCURRENT_JOBS` can chinh theo so vCPU cap cho VM (server tu dong chia thread FFmpeg theo cong thuc `(vCPU - 1) / MAX_CONCURRENT_JOBS`, luon chua lai it nhat 1 vCPU cho Node/nginx). Bang tham khao nhanh:
+
+| vCPU cap cho VM | MAX_CONCURRENT_JOBS de xuat | Ghi chu |
+|---|---|---|
+| 6 (cau hinh cu) | 5 | Da chua 1 vCPU du phong |
+| 8 (cau hinh moi) | 7 | Van chua 1 vCPU du phong |
+| 8 | 8-10 | Dung duoc, nhung mat phan du phong, CPU co the tranh chap nhe luc cao diem |
+
+Neu muon ep cung so thread/job thay vi de server tu tinh, dat them `FFMPEG_THREADS_PER_JOB=<so>` trong `.env`.
+
 ```bash
 cat > .env <<EOF
 APP_PORT=8080
-MAX_CONCURRENT_JOBS=5
+MAX_CONCURRENT_JOBS=7
 FFMPEG_ENCODER=libx264
 GOOGLE_OAUTH_CLIENT_ID=YOUR_GOOGLE_OAUTH_CLIENT_ID
 GOOGLE_WORKSPACE_DOMAIN=bravestars.com

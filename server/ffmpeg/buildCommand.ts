@@ -18,13 +18,21 @@ export const buildFfmpegCommand = (params: {
   overlayPath?: string;
   outputPath: string;
   encoder?: EncoderMode;
+  threads?: number;
 }) => {
   // Default to libx264 (CPU baseline) if not specified
   const encoder: EncoderMode = params.encoder || 'libx264';
   const { spec } = params;
   const { width: w, height: h } = getOutputDimensions(spec.outputRatio);
 
-  const args: string[] = ['-y', '-i', params.foregroundPath];
+  const args: string[] = ['-y'];
+  if (params.threads && params.threads > 0) {
+    // Caps the CPU threads used by filtering (scale/overlay), independent of
+    // the encoder thread cap set below - keeps concurrent jobs from
+    // oversubscribing the host's cores just via the filter graph.
+    args.push('-filter_complex_threads', String(params.threads));
+  }
+  args.push('-i', params.foregroundPath);
 
   if (spec.bgType === 'image' && params.backgroundImagePath) {
     args.push('-loop', '1', '-i', params.backgroundImagePath);
@@ -148,6 +156,11 @@ export const buildFfmpegCommand = (params: {
       '-map', '0:a?',
       '-c:v', 'libx264',
       '-preset', 'ultrafast',
+    );
+    if (params.threads && params.threads > 0) {
+      args.push('-threads', String(params.threads));
+    }
+    args.push(
       '-b:v', bitrateStr,
       '-maxrate', maxrateStr,
       '-bufsize', bufsizeStr,

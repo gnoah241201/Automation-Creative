@@ -17,6 +17,7 @@ export interface ComposerCommandParams {
   hookCrop?: ComposerCrop;
   outputPath: string;
   encoder: EncoderMode;
+  threads?: number;
 }
 
 const validateCrop = (crop: ComposerCrop | undefined, name: string): void => {
@@ -175,9 +176,19 @@ export const buildComposerCommand = (params: ComposerCommandParams): string[] =>
   const codec = params.encoder === 'h264_nvenc'
     ? ['-c:v', 'h264_nvenc', '-preset', 'slow']
     : ['-c:v', 'libx264', '-preset', 'ultrafast'];
+  // Only libx264 is CPU-bound; NVENC's encode is on the GPU so it has no
+  // software thread cap here (the filter graph below is still capped).
+  if (params.encoder === 'libx264' && params.threads && params.threads > 0) {
+    codec.push('-threads', String(params.threads));
+  }
+
+  const filterComplexThreads = params.threads && params.threads > 0
+    ? ['-filter_complex_threads', String(params.threads)]
+    : [];
 
   return [
     '-y',
+    ...filterComplexThreads,
     '-autorotate', '1', '-i', params.originalPath,
     '-autorotate', '1', '-i', params.hookPath,
     '-filter_complex', filters.join(';'),

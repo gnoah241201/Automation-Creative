@@ -1,8 +1,8 @@
 import express from 'express';
 import { buildJobsRouter } from './routes/jobs';
 import { JobQueueService } from './services/jobQueue';
-import { getEncoderConfig, getFfmpegPath } from './services/encoderConfig';
-import { setEncoder } from './services/renderRunner';
+import { computeFfmpegThreadLimit, getEncoderConfig, getFfmpegPath } from './services/encoderConfig';
+import { setEncoder, setFfmpegThreadLimit } from './services/renderRunner';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -199,6 +199,13 @@ if (encoderConfig.fallbackBehavior === 'fail') {
 }
 setEncoder(encoderConfig.effectiveEncoder);
 
+// Cap per-job FFmpeg thread usage so MAX_CONCURRENT_JOBS jobs running at once
+// don't oversubscribe the host's CPU cores (each FFmpeg process otherwise
+// tries to use every core). See computeFfmpegThreadLimit for the formula;
+// override with FFMPEG_THREADS_PER_JOB if you've benchmarked a better value.
+const ffmpegThreadLimit = computeFfmpegThreadLimit(maxConcurrentJobs);
+setFfmpegThreadLimit(ffmpegThreadLimit);
+
 const start = async () => {
   const app = express();
   const localLibrary = new LocalLibraryService({
@@ -311,11 +318,12 @@ const start = async () => {
   });
 
   app.get('/api/health', (_req, res) => {
-    res.json({ 
-      ok: true, 
+    res.json({
+      ok: true,
       port,
       maxConcurrentJobs,
       encoder: encoderConfig.effectiveEncoder,
+      ffmpegThreadsPerJob: ffmpegThreadLimit,
     });
   });
 
@@ -371,6 +379,7 @@ const start = async () => {
   app.listen(port, () => {
     console.log(`Native render server listening on port ${port}`);
     console.log(`Max concurrent jobs: ${maxConcurrentJobs}`);
+    console.log(`FFmpeg threads per job: ${ffmpegThreadLimit}`);
   });
 };
 

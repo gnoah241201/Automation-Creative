@@ -195,6 +195,29 @@ The `MAX_CONCURRENT_JOBS` setting controls how many videos can render simultaneo
 
 **Note**: Each render job uses significant CPU and memory. Increasing concurrency beyond your machine's capacity will cause jobs to fail or the system to become unresponsive. You can override the default by setting `MAX_CONCURRENT_JOBS` environment variable.
 
+### FFmpeg is CPU-bound, not RAM-bound
+
+Video rendering here is limited primarily by CPU (FFmpeg encoding), not RAM. More RAM alone mostly reduces out-of-memory risk when running many jobs at once — it does not let a fixed number of vCPUs finish more encodes per second.
+
+At startup the backend computes how many threads each concurrent job may use, based on the host's core count:
+
+```
+threadsPerJob = floor((vCPU count - 1) / MAX_CONCURRENT_JOBS)
+```
+
+One vCPU is always reserved for Node/Express/nginx/the cleanup scheduler so the server stays responsive under full render load. This runs automatically (`server/services/encoderConfig.ts`); you rarely need to touch it, but `FFMPEG_THREADS_PER_JOB` overrides the computed value if you've benchmarked a better setting for your hardware. `/api/health` reports the effective value as `ffmpegThreadsPerJob`.
+
+Sizing table (values keep the 1-vCPU reservation intact; going above the top row per tier still works but starts trading away that headroom):
+
+| vCPU available to the server | MAX_CONCURRENT_JOBS | threads/job |
+|---|---|---|
+| 2 | 1 | 1 |
+| 6 | 5 | 1 |
+| 8 | 7 | 1 |
+| 12 | 11 | 1 |
+
+Regular resize/trim jobs (not just Hook Composer) also preflight-check free disk space before starting, sized from the target bitrate and duration (or the source file size for trims), so a burst of concurrent jobs fails fast with a clear error instead of running out of disk mid-render.
+
 ## Hook Composer
 
 Hook Composer accepts 1-10 vertical originals and 1-10 vertical hooks, creates a cross-product of selected pairs, and stores final `1080x1920` outputs in Local Library for 24 hours. Sources with another ratio must be cropped to `9:16`. Exact previews are rendered on demand at `360x640`; final and preview jobs share `MAX_CONCURRENT_JOBS`.

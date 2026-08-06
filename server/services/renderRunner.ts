@@ -23,6 +23,25 @@ export function getEncoder(): EncoderMode {
   return currentEncoder;
 }
 
+// Per-job FFmpeg thread cap - set at startup from computeFfmpegThreadLimit()
+let currentThreadLimit = 1;
+
+/**
+ * Set how many CPU threads each concurrent FFmpeg job may use.
+ * Called at server startup, sized to the host's core count and MAX_CONCURRENT_JOBS.
+ */
+export function setFfmpegThreadLimit(threads: number): void {
+  currentThreadLimit = Math.max(1, Math.floor(threads));
+  console.log(`[renderRunner] FFmpeg per-job thread limit set to: ${currentThreadLimit}`);
+}
+
+/**
+ * Get the current per-job FFmpeg thread cap
+ */
+export function getFfmpegThreadLimit(): number {
+  return currentThreadLimit;
+}
+
 const toSeconds = (timecode: string): number => {
   const [hh, mm, ss] = timecode.split(':');
   const seconds = Number(hh) * 3600 + Number(mm) * 60 + Number(ss);
@@ -74,7 +93,7 @@ export const observeFfmpegProcess = (
  * Try to get duration from input file using ffprobe
  * Returns duration in seconds, or null if unable to determine
  */
-const getInputDuration = (inputPath: string): number | null => {
+export const getInputDuration = (inputPath: string): number | null => {
   try {
     const output = execSync(
       `"${ffprobeInstaller.path}" -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "${inputPath}"`,
@@ -130,6 +149,7 @@ export const runRenderJob = (
     overlayPath: job.files.overlayPath,
     outputPath: job.files.outputPath,
     encoder: currentEncoder,
+    threads: currentThreadLimit,
   });
 
   const child = spawn(getFfmpegPath(), args, {
