@@ -53,11 +53,11 @@ npm run dev
 
 ### Run locally with a custom domain
 
-If you want to open the app as `resize1.bravestars.com` on your own machine:
+If you want to open the app as `resize.bravestars.com` on your own machine:
 
 1. Add a hosts entry on your machine:
    ```text
-   127.0.0.1 resize1.bravestars.com
+   127.0.0.1 resize.bravestars.com
    ```
 2. Copy [.env.example](.env.example) to `.env.local` and set:
    ```bash
@@ -66,14 +66,14 @@ If you want to open the app as `resize1.bravestars.com` on your own machine:
    APP_AUTH_SECRET=change-this-secret
    VITE_GOOGLE_OAUTH_CLIENT_ID=YOUR_GOOGLE_OAUTH_CLIENT_ID
    VITE_GOOGLE_WORKSPACE_DOMAIN=bravestars.com
-   VITE_ALLOWED_HOSTS=resize1.bravestars.com,localhost,127.0.0.1
+   VITE_ALLOWED_HOSTS=resize.bravestars.com,localhost,127.0.0.1
    VITE_DEV_HOST=0.0.0.0
    ```
 3. Start the server and dev client as usual.
 
 When the app opens, you will see a Google Workspace sign-in button. Use your company account from the `bravestars.com` domain.
 
-Before that, create a Google OAuth Client ID in Google Cloud Console and add `http://resize1.bravestars.com`, `https://resize1.bravestars.com`, and `http://localhost:8080` to the authorized JavaScript origins.
+Before that, create a Google OAuth Client ID in Google Cloud Console and add `http://resize.bravestars.com`, `https://resize.bravestars.com`, and `http://localhost:8080` to the authorized JavaScript origins.
 
 ## Run with Docker
 
@@ -147,7 +147,7 @@ docker compose down -v
 | `VITE_GOOGLE_OAUTH_CLIENT_ID` | - | Google OAuth client ID exposed to the browser |
 | `VITE_GOOGLE_WORKSPACE_DOMAIN` | `bravestars.com` | Workspace domain shown on the login screen |
 | `VITE_DEV_HOST` | `0.0.0.0` | Host binding for Vite dev server |
-| `VITE_ALLOWED_HOSTS` | `resize1.bravestars.com,localhost,127.0.0.1` | Allowed hostnames for Vite dev server |
+| `VITE_ALLOWED_HOSTS` | `resize.bravestars.com,localhost,127.0.0.1` | Allowed hostnames for Vite dev server |
 
 ### Example: Custom backend port
 
