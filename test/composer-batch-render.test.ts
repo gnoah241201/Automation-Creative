@@ -47,6 +47,7 @@ const fixture = async (options: { failEnqueueAt?: number; duplicateNames?: boole
     getAllJobs: () => [...jobs.values()],
     getJob: (id: string) => jobs.get(id),
     cancelJob: async (id: string) => { cancelled.push(id); const job = jobs.get(id); if (job) job.status = 'cancelled'; return Boolean(job); },
+    getQueuePosition: () => null,
   };
   const renderer = new ComposerBatchRenderer({
     root,

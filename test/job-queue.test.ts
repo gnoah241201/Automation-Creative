@@ -174,6 +174,38 @@ test('fair-share scheduling gives each contending owner an equal slice instead o
   queue.stopCleanupScheduler();
 });
 
+test('queue position reflects fair-share order, not raw FIFO index', async () => {
+  const { queue, tempRoot } = await createQueueHarness(2);
+
+  // owner-a submits 4 jobs while alone: 2 run immediately, 2 stay queued (job-a-2, job-a-3).
+  const ownerAJobs = [];
+  for (let index = 0; index < 4; index += 1) {
+    const uploads = await createUploadPaths(tempRoot, `pos-owner-a-${index}`);
+    ownerAJobs.push(await queue.createJob(createSpec(index), { foregroundPath: uploads.foregroundPath }, 'owner-a'));
+  }
+  await waitFor(() => queue.getQueueStats().processing === 2);
+  const [queuedA2, queuedA3] = ownerAJobs.filter((job) => queue.getJob(job.id)!.status === 'queued');
+  assert.ok(queuedA2 && queuedA3);
+
+  // owner-b arrives after owner-a already queued backlog exists.
+  const uploads = await createUploadPaths(tempRoot, 'pos-owner-b-0');
+  const ownerBJob = await queue.createJob(createSpec(20), { foregroundPath: uploads.foregroundPath }, 'owner-b');
+
+  // Raw FIFO would say owner-b is 3rd in line (2 of owner-a's jobs precede it).
+  // Fair share (1 each, since both owners are now contending) says owner-b
+  // jumps ahead of owner-a's backlog and is next up.
+  const bPosition = queue.getQueuePosition(ownerBJob.id);
+  assert.equal(bPosition?.aheadOfYou, 0);
+  assert.equal(bPosition?.queuedTotal, 3);
+  assert.equal(bPosition?.activeSlots, 2);
+
+  // owner-a's own earliest queued job only has owner-b's fairness-boosted job ahead of it.
+  const aPosition = queue.getQueuePosition(queuedA2.id);
+  assert.equal(aPosition?.aheadOfYou, 1);
+
+  queue.stopCleanupScheduler();
+});
+
 test('restart recovery marks interrupted work failed and re-queues queued jobs', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'resize-video-recovery-'));
   const firstRun = await createQueueHarness(1, tempRoot);

@@ -437,6 +437,8 @@ export const buildJobsRouter = (
       }
     }
 
+    const queuePosition = job.status === 'queued' ? queue.getQueuePosition(job.id) ?? undefined : undefined;
+
     res.json({
       jobId: job.id,
       status: job.status,
@@ -445,6 +447,7 @@ export const buildJobsRouter = (
       error: publicJobError(job),
       outputFilename: job.outputFilename,
       downloadUrl,
+      queuePosition,
     });
   });
 

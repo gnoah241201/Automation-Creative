@@ -2,7 +2,7 @@ import React, { CSSProperties, useState, useRef, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { Upload, Play, Pause, Volume2, VolumeX, Image as ImageIcon, Film, Type, Move, Download, X, RefreshCw, RotateCcw } from 'lucide-react';
 import { NamingMeta, parseVideoNamingMeta, buildOutputFilename } from './naming';
-import { RenderSpec } from '../shared/render-contract';
+import { JobStateResponse, RenderSpec } from '../shared/render-contract';
 import { buildRenderSpec } from './render/renderSpec';
 import { createOverlayPng } from './render/overlay';
 import { cancelRenderJob, createRenderJob, createTrimJob, createUploadSession, downloadRenderJob, getAuthSession, getRenderJob } from './render/api';
@@ -74,6 +74,7 @@ type RenderJob = {
   lastActionError?: string;
   retryInputs?: BrowserRetryInputs | BatchRetryInputs;
   downloadUrl?: string;
+  queuePosition?: JobStateResponse['queuePosition'];
 };
 
 function PreviewBox({
@@ -1023,6 +1024,7 @@ export default function App() {
     onResult: (job, state) => setJobs((prev) => prev.map((item) => item.id === job.id ? {
       ...item, status: state.status, progress: state.progress, progressMode: state.progressMode,
       error: state.error, downloadUrl: state.downloadUrl, filename: state.outputFilename || item.filename,
+      queuePosition: state.queuePosition,
       lastPollError: undefined, lastActionError: undefined,
     } : item)),
     onError: (job, error) => setJobs((prev) => prev.map((item) => item.id === job.id ? {
@@ -2010,6 +2012,15 @@ export default function App() {
                       <p className={`text-xs mt-0.5 font-medium ${job.status === 'processing' ? 'text-blue-400 animate-pulse' : job.status === 'completed' ? 'text-green-400' : job.status === 'failed' ? 'text-red-400' : 'text-neutral-400 capitalize'}`}>
                         {job.status === 'processing' && job.progressMode === 'indeterminate' ? 'Processing...' : job.status}
                       </p>
+                      {/* Queue depth so a queued job doesn't read as stuck/broken */}
+                      {job.status === 'queued' && job.queuePosition && (
+                        <p className="text-[10px] mt-0.5 text-neutral-400">
+                          {job.queuePosition.aheadOfYou === 0
+                            ? 'Next up as soon as a slot frees'
+                            : `${job.queuePosition.aheadOfYou} job${job.queuePosition.aheadOfYou === 1 ? '' : 's'} ahead of you`}
+                          {' · '}{job.queuePosition.activeSlots}/{job.queuePosition.maxConcurrentJobs} running
+                        </p>
+                      )}
                       {/* Show polling error if exists */}
                       {job.lastPollError && (
                         <p className="text-[10px] mt-0.5 text-amber-400">Network error: {job.lastPollError}</p>

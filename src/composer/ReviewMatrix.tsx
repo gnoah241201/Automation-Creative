@@ -57,6 +57,14 @@ export function ReviewMatrix(props: Props) {
     {props.jobs.length > 0 && <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">{props.jobs.map((job) => <article key={job.jobId} className="rounded-xl border border-neutral-800 bg-neutral-950/60 p-3">
       <div className="flex items-start justify-between gap-2"><p className="truncate text-sm font-medium">{job.outputFilename}</p>{job.status === 'failed' ? <XCircle className="h-4 w-4 text-red-400" /> : job.status === 'completed' ? <CheckCircle2 className="h-4 w-4 text-emerald-400" /> : <LoaderCircle className="h-4 w-4 text-blue-300" />}</div>
       <p className="mt-2 text-xs capitalize text-neutral-400">{job.status} · {Math.max(0, job.progress)}%</p>
+      {job.status === 'queued' && job.queuePosition && (
+        <p className="mt-1 text-[11px] text-neutral-500">
+          {job.queuePosition.aheadOfYou === 0
+            ? 'Next up as soon as a slot frees'
+            : `${job.queuePosition.aheadOfYou} job${job.queuePosition.aheadOfYou === 1 ? '' : 's'} ahead of it`}
+          {' · '}{job.queuePosition.activeSlots}/{job.queuePosition.maxConcurrentJobs} running
+        </p>
+      )}
       <div className="mt-2 h-1.5 overflow-hidden rounded bg-neutral-800"><div className="h-full bg-blue-500" style={{ width: `${Math.max(0, job.progress)}%` }} /></div>
       {job.error && <p className="mt-2 text-xs text-red-300">{job.error}</p>}
       {job.status === 'failed' && job.retryable && <button type="button" onClick={() => props.onRetry(job.jobId)} className="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-blue-300"><RotateCcw className="h-3 w-3" />Retry</button>}

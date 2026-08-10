@@ -26,6 +26,12 @@ type QueueLike = {
   getAllJobs(): NativeJobRecord[];
   getJob(id: string): NativeJobRecord | undefined;
   cancelJob(id: string): Promise<boolean>;
+  getQueuePosition(id: string): {
+    aheadOfYou: number;
+    queuedTotal: number;
+    activeSlots: number;
+    maxConcurrentJobs: number;
+  } | null;
 };
 
 type DiskGuardLike = { requireCapacity(targetPath: string, estimatedBytes: number): Promise<void> };
@@ -57,14 +63,6 @@ export class ComposerStorageError extends Error {}
 export class ComposerBatchActiveError extends Error {}
 export class ComposerRetrySupersededError extends Error {}
 
-const jobResponse = (job: ComposerJobRecord, retryable = false) => ({
-  jobId: job.id,
-  status: job.status,
-  outputFilename: job.spec.outputFilename,
-  progress: job.progress,
-  error: job.error ? 'Render failed. Retry this output or check the source media.' : undefined,
-  retryable,
-});
 
 export const allocateComposerOutputFilenames = (filenames: string[]): string[] => {
   const used = new Set<string>();
@@ -243,7 +241,7 @@ export class ComposerBatchRenderer {
       console.error('[composerBatchRenderer] Partial enqueue failure:', error);
       throw new ComposerPartialSubmissionError(created.map((job) => job.id));
     }
-    return { batchId: batch.id, jobs: created.map((job) => jobResponse(job)) };
+    return { batchId: batch.id, jobs: created.map((job) => this.jobResponse(job)) };
   }
 
   listBatchJobs(batchId: string) {
@@ -255,12 +253,24 @@ export class ComposerBatchRenderer {
       if (job.status === 'completed') completedCells.add(this.cellKey(job));
       if (job.status !== 'cancelled') latestByCell.set(this.cellKey(job), job.id);
     }
-    return jobs.map((job) => jobResponse(
+    return jobs.map((job) => this.jobResponse(
       job,
       job.status === 'failed'
         && !completedCells.has(this.cellKey(job))
         && latestByCell.get(this.cellKey(job)) === job.id,
     ));
+  }
+
+  private jobResponse(job: ComposerJobRecord, retryable = false) {
+    return {
+      jobId: job.id,
+      status: job.status,
+      outputFilename: job.spec.outputFilename,
+      progress: job.progress,
+      error: job.error ? 'Render failed. Retry this output or check the source media.' : undefined,
+      retryable,
+      queuePosition: job.status === 'queued' ? this.queue.getQueuePosition(job.id) ?? undefined : undefined,
+    };
   }
 
   async cancelBatch(batchId: string) {

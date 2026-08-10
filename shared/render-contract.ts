@@ -71,6 +71,13 @@ export interface JobStateResponse {
   error?: string;
   outputFilename?: string;
   downloadUrl?: string;
+  /** Present only while status is 'queued'. Point-in-time estimate of queue depth ahead of this job. */
+  queuePosition?: {
+    aheadOfYou: number;
+    queuedTotal: number;
+    activeSlots: number;
+    maxConcurrentJobs: number;
+  };
 }
 
 export interface CreateJobResponse {

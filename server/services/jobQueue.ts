@@ -481,14 +481,11 @@ export class JobQueueService {
     const failed = jobs.filter((j) => j.status === 'failed').length;
     const cancelled = jobs.filter((j) => j.status === 'cancelled').length;
 
-    const contendingOwners = new Set(
-      jobs
-        .filter((j) => j.status === 'queued' || j.status === 'processing' || (j.status as string) === 'cancelling')
-        .map((j) => this.ownerKeyOf(j)),
-    );
-    const fairShare = queued + processing > 0
-      ? Math.max(1, Math.ceil(this.maxConcurrentJobs / Math.max(1, contendingOwners.size)))
-      : this.maxConcurrentJobs;
+    const { activeByOwner, fairShare } = this.computeFairnessSnapshot();
+    const contendingOwners = new Set(activeByOwner.keys());
+    for (const job of jobs) {
+      if (job.status === 'queued') contendingOwners.add(this.ownerKeyOf(job));
+    }
 
     return {
       total: jobs.length,
@@ -500,7 +497,7 @@ export class JobQueueService {
       activeSlots: this.activeCount,
       maxConcurrentJobs: this.maxConcurrentJobs,
       contendingOwners: contendingOwners.size,
-      fairSharePerOwner: fairShare,
+      fairSharePerOwner: queued + processing > 0 ? fairShare : this.maxConcurrentJobs,
     };
   }
 
@@ -565,21 +562,12 @@ export class JobQueueService {
   }
 
   /**
-   * Find the index of the next pending job to admit, load-aware across owners
-   * instead of strict FIFO. Each distinct owner (session) currently queued or
-   * running is entitled to a fair share of the pool, recomputed from who is
-   * actually contending right now: `ceil(maxConcurrentJobs / contendingOwners)`.
-   * A lone user gets the full pool (fair share == maxConcurrentJobs); as more
-   * users show up, each user's share shrinks automatically. Already-running
-   * jobs are never preempted - this only gates which job gets the next free
-   * slot, so one user's large batch can't starve everyone else behind it in
-   * the queue. The ceil() rounding guarantees the sum of shares always covers
-   * the whole pool, so a free slot is never left idle for want of an eligible
-   * job when there is queued work.
+   * Snapshot of who currently holds an active slot and what each contending
+   * owner (queued or running) is entitled to right now:
+   * `ceil(maxConcurrentJobs / contendingOwners)`. Shared by the scheduler and
+   * by queue-position reporting so both use the exact same fairness math.
    */
-  private pickNextEligibleIndex(): number {
-    if (this.pending.length === 0) return -1;
-
+  private computeFairnessSnapshot(): { activeByOwner: Map<string, number>; fairShare: number } {
     const activeByOwner = new Map<string, number>();
     for (const job of this.jobs.values()) {
       if (job.status === 'processing' || (job.status as string) === 'cancelling') {
@@ -594,6 +582,22 @@ export class JobQueueService {
       if (job && job.status === 'queued') contendingOwners.add(this.ownerKeyOf(job));
     }
     const fairShare = Math.max(1, Math.ceil(this.maxConcurrentJobs / Math.max(1, contendingOwners.size)));
+    return { activeByOwner, fairShare };
+  }
+
+  /**
+   * Find the index of the next pending job to admit, load-aware across owners
+   * instead of strict FIFO. A lone user gets the full pool (fair share ==
+   * maxConcurrentJobs); as more users show up, each user's share shrinks
+   * automatically. Already-running jobs are never preempted - this only gates
+   * which job gets the next free slot, so one user's large batch can't starve
+   * everyone else behind it in the queue. The ceil() rounding guarantees the
+   * sum of shares always covers the whole pool, so a free slot is never left
+   * idle for want of an eligible job when there is queued work.
+   */
+  private pickNextEligibleIndex(): number {
+    if (this.pending.length === 0) return -1;
+    const { activeByOwner, fairShare } = this.computeFairnessSnapshot();
 
     for (let i = 0; i < this.pending.length; i += 1) {
       const job = this.jobs.get(this.pending[i]);
@@ -603,6 +607,48 @@ export class JobQueueService {
     // Every contending owner is already at/above their share - fall back to
     // FIFO so a free slot is never left idle purely due to rounding.
     return 0;
+  }
+
+  /**
+   * How many currently-queued jobs would be admitted into a free slot ahead
+   * of this one, per the same fair-share rule as the scheduler. This is a
+   * point-in-time estimate for UI display (e.g. "3 jobs ahead of you") - it
+   * assumes the fairness snapshot holds steady and doesn't model currently
+   * *running* jobs finishing, which would open further slots sooner.
+   */
+  getQueuePosition(jobId: string): {
+    aheadOfYou: number;
+    queuedTotal: number;
+    activeSlots: number;
+    maxConcurrentJobs: number;
+  } | null {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== 'queued') return null;
+
+    const { activeByOwner, fairShare } = this.computeFairnessSnapshot();
+    const simulatedActive = new Map(activeByOwner);
+    const remaining = this.pending.filter((id) => this.jobs.get(id)?.status === 'queued');
+
+    let ahead = 0;
+    while (remaining.length > 0) {
+      let pickedIndex = remaining.findIndex((id) => {
+        const candidate = this.jobs.get(id)!;
+        return (simulatedActive.get(this.ownerKeyOf(candidate)) ?? 0) < fairShare;
+      });
+      if (pickedIndex === -1) pickedIndex = 0; // same FIFO fallback as the real scheduler
+      const [pickedId] = remaining.splice(pickedIndex, 1);
+      if (pickedId === jobId) break;
+      const pickedOwner = this.ownerKeyOf(this.jobs.get(pickedId)!);
+      simulatedActive.set(pickedOwner, (simulatedActive.get(pickedOwner) ?? 0) + 1);
+      ahead += 1;
+    }
+
+    return {
+      aheadOfYou: ahead,
+      queuedTotal: this.pending.length,
+      activeSlots: this.activeCount,
+      maxConcurrentJobs: this.maxConcurrentJobs,
+    };
   }
 
   private schedule() {
