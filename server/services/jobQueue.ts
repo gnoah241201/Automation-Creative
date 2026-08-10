@@ -32,6 +32,9 @@ type InputUploadPaths = {
 const FINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
 const TERMINAL_STATES = new Set(['completed', 'failed', 'cancelled']);
 
+/** Bucket for jobs with no session ownership (legacy/unauthenticated) so fairness math always has an owner to key on. */
+const UNKNOWN_OWNER_KEY = '__unknown__';
+
 const canonicalWorkDir = async (workDir: string): Promise<string> => {
   const resolved = await fs.realpath(workDir).catch(() => path.resolve(workDir));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
@@ -271,7 +274,7 @@ export class JobQueueService {
     }
   }
 
-  async createJob(spec: RenderSpec, uploads: InputUploadPaths): Promise<RenderJobRecord> {
+  async createJob(spec: RenderSpec, uploads: InputUploadPaths, ownerKey?: string): Promise<RenderJobRecord> {
     const id = randomUUID();
     const workDir = path.resolve(uploads.foregroundPath, '..', '..');
     const outputDir = path.join(workDir, 'output');
@@ -290,6 +293,7 @@ export class JobQueueService {
         outputPath,
         workDir,
       },
+      ownerKey,
       status: 'queued',
       progress: 0,
       outputFilename: spec.outputFilename,
@@ -312,7 +316,7 @@ export class JobQueueService {
    * Create a trim-only job that takes the output of a completed job and trims it.
    * Uses stream copy (no re-encode) for very fast processing.
    */
-  async createTrimJob(spec: RenderSpec, sourceJobId: string): Promise<RenderJobRecord> {
+  async createTrimJob(spec: RenderSpec, sourceJobId: string, ownerKey?: string): Promise<RenderJobRecord> {
     const sourceJob = this.jobs.get(sourceJobId);
     if (!sourceJob) {
       throw new Error(`Source job ${sourceJobId} not found`);
@@ -336,6 +340,8 @@ export class JobQueueService {
         outputPath,
         workDir: sourceJob.files.workDir,
       },
+      // Trims are a continuation of the same user's flow, so fall back to the source job's owner.
+      ownerKey: ownerKey ?? sourceJob.ownerKey,
       status: 'queued',
       progress: 0,
       outputFilename: spec.outputFilename,
@@ -424,6 +430,7 @@ export class JobQueueService {
     spec: ComposerRenderSpec,
     files: JobFiles,
     composer: ComposerJobRecord['composer'],
+    ownerKey?: string,
   ): Promise<ComposerJobRecord> {
     if (!files.backgroundVideoPath) {
       throw new Error('Composer hook path is required');
@@ -435,6 +442,7 @@ export class JobQueueService {
       spec: structuredClone(spec),
       files: structuredClone(files),
       composer: structuredClone(composer),
+      ownerKey,
       status: 'queued',
       progress: 0,
       progressMode: 'determinate',
@@ -473,6 +481,15 @@ export class JobQueueService {
     const failed = jobs.filter((j) => j.status === 'failed').length;
     const cancelled = jobs.filter((j) => j.status === 'cancelled').length;
 
+    const contendingOwners = new Set(
+      jobs
+        .filter((j) => j.status === 'queued' || j.status === 'processing' || (j.status as string) === 'cancelling')
+        .map((j) => this.ownerKeyOf(j)),
+    );
+    const fairShare = queued + processing > 0
+      ? Math.max(1, Math.ceil(this.maxConcurrentJobs / Math.max(1, contendingOwners.size)))
+      : this.maxConcurrentJobs;
+
     return {
       total: jobs.length,
       queued,
@@ -482,6 +499,8 @@ export class JobQueueService {
       cancelled,
       activeSlots: this.activeCount,
       maxConcurrentJobs: this.maxConcurrentJobs,
+      contendingOwners: contendingOwners.size,
+      fairSharePerOwner: fairShare,
     };
   }
 
@@ -541,10 +560,58 @@ export class JobQueueService {
     }
   }
 
+  private ownerKeyOf(job: NativeJobRecord): string {
+    return job.ownerKey ?? UNKNOWN_OWNER_KEY;
+  }
+
+  /**
+   * Find the index of the next pending job to admit, load-aware across owners
+   * instead of strict FIFO. Each distinct owner (session) currently queued or
+   * running is entitled to a fair share of the pool, recomputed from who is
+   * actually contending right now: `ceil(maxConcurrentJobs / contendingOwners)`.
+   * A lone user gets the full pool (fair share == maxConcurrentJobs); as more
+   * users show up, each user's share shrinks automatically. Already-running
+   * jobs are never preempted - this only gates which job gets the next free
+   * slot, so one user's large batch can't starve everyone else behind it in
+   * the queue. The ceil() rounding guarantees the sum of shares always covers
+   * the whole pool, so a free slot is never left idle for want of an eligible
+   * job when there is queued work.
+   */
+  private pickNextEligibleIndex(): number {
+    if (this.pending.length === 0) return -1;
+
+    const activeByOwner = new Map<string, number>();
+    for (const job of this.jobs.values()) {
+      if (job.status === 'processing' || (job.status as string) === 'cancelling') {
+        const owner = this.ownerKeyOf(job);
+        activeByOwner.set(owner, (activeByOwner.get(owner) ?? 0) + 1);
+      }
+    }
+
+    const contendingOwners = new Set(activeByOwner.keys());
+    for (const jobId of this.pending) {
+      const job = this.jobs.get(jobId);
+      if (job && job.status === 'queued') contendingOwners.add(this.ownerKeyOf(job));
+    }
+    const fairShare = Math.max(1, Math.ceil(this.maxConcurrentJobs / Math.max(1, contendingOwners.size)));
+
+    for (let i = 0; i < this.pending.length; i += 1) {
+      const job = this.jobs.get(this.pending[i]);
+      if (!job || job.status !== 'queued') return i; // let the caller drop the stale id
+      if ((activeByOwner.get(this.ownerKeyOf(job)) ?? 0) < fairShare) return i;
+    }
+    // Every contending owner is already at/above their share - fall back to
+    // FIFO so a free slot is never left idle purely due to rounding.
+    return 0;
+  }
+
   private schedule() {
-    while (this.activeCount < this.maxConcurrentJobs && this.pending.length > 0) {
-      const nextJobId = this.pending.shift()!;
+    while (this.activeCount < this.maxConcurrentJobs) {
+      const nextIndex = this.pickNextEligibleIndex();
+      if (nextIndex === -1) break;
+      const nextJobId = this.pending[nextIndex];
       const nextJob = this.jobs.get(nextJobId);
+      this.pending.splice(nextIndex, 1);
       if (!nextJob || nextJob.status !== 'queued') {
         continue;
       }

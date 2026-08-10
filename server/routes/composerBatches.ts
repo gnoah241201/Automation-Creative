@@ -339,7 +339,11 @@ export const buildComposerBatchesRouter = (
           trimEnd: validation.config.trimEnd,
           transition: validation.config.transition,
         };
-        res.status(202).json(await previews.requestPreview(request, snapshot.all));
+        res.status(202).json(await previews.requestPreview(
+          request,
+          snapshot.all,
+          res.locals.authSessionOwnerKey as string | undefined,
+        ));
       } catch (error) {
         if (error instanceof ComposerDraftNotFoundError) sendNotFound(res);
         else if (error instanceof ComposerDraftStaleAssetsError) sendDraftStale(res);
@@ -389,7 +393,12 @@ export const buildComposerBatchesRouter = (
       }
       try {
         const selectedCellIds = Array.isArray(req.body?.selectedCellIds) ? req.body.selectedCellIds : [];
-        res.status(202).json(await renderer.submit(draft, selectedCellIds, snapshot.all));
+        res.status(202).json(await renderer.submit(
+          draft,
+          selectedCellIds,
+          snapshot.all,
+          res.locals.authSessionOwnerKey as string | undefined,
+        ));
       } catch (error) {
         if (error instanceof ComposerBatchActiveError) res.status(409).json({
           error: 'BatchActive', message: 'This composer batch already has active render jobs',
@@ -416,7 +425,11 @@ export const buildComposerBatchesRouter = (
 
     router.post('/batches/:batchId/jobs/:jobId/retry', async (req, res) => {
       try {
-        const job = await renderer.retry(req.params.batchId, req.params.jobId);
+        const job = await renderer.retry(
+          req.params.batchId,
+          req.params.jobId,
+          res.locals.authSessionOwnerKey as string | undefined,
+        );
         res.status(202).json({ batchId: req.params.batchId, ...jobResponseForRoute(job) });
       } catch (error) {
         if (error instanceof ComposerBatchActiveError) res.status(409).json({

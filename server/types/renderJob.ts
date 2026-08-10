@@ -14,6 +14,8 @@ export interface CommonNativeJobRecord {
   id: string;
   files: JobFiles;
   kind: 'resize' | 'trim' | 'compose' | 'compose-preview';
+  /** Session-derived ownership key used to fair-share queue slots across users. Absent for legacy/unauthenticated jobs. */
+  ownerKey?: string;
   status: RenderJobStatus;
   progress: number;
   /** Progress mode: 'determinate' (percentage) or 'indeterminate' (unknown duration) */

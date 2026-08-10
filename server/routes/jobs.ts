@@ -352,7 +352,7 @@ export const buildJobsRouter = (
           overlayPath: overlay
             ? path.resolve(uploadIdRaw && stagedWorkDir ? path.join(stagedWorkDir, 'input', path.basename(overlay.path)) : overlay.path)
             : undefined,
-        });
+        }, res.locals.authSessionOwnerKey as string | undefined);
 
         if (uploadIdRaw) {
           await cleanupTempDir(req.tempWorkDir);
@@ -398,7 +398,7 @@ export const buildJobsRouter = (
         return;
       }
 
-      const job = await queue.createTrimJob(spec, sourceJobId);
+      const job = await queue.createTrimJob(spec, sourceJobId, res.locals.authSessionOwnerKey as string | undefined);
 
       res.json({
         jobId: job.id,

@@ -140,6 +140,40 @@ test('cancelling an active job drains the next queued job', async () => {
   queue.stopCleanupScheduler();
 });
 
+test('fair-share scheduling gives each contending owner an equal slice instead of pure FIFO', async () => {
+  const { queue, controls, tempRoot } = await createQueueHarness(2);
+
+  for (let index = 0; index < 4; index += 1) {
+    const uploads = await createUploadPaths(tempRoot, `owner-a-${index}`);
+    await queue.createJob(createSpec(index), { foregroundPath: uploads.foregroundPath }, 'owner-a');
+  }
+
+  await waitFor(() => queue.getQueueStats().processing === 2);
+  // owner-a was alone when it submitted, so it fairly holds both slots.
+  assert.deepEqual(
+    new Set(queue.getAllJobs().filter((job) => job.status === 'processing').map((job) => job.ownerKey)),
+    new Set(['owner-a']),
+  );
+
+  for (let index = 0; index < 2; index += 1) {
+    const uploads = await createUploadPaths(tempRoot, `owner-b-${index}`);
+    await queue.createJob(createSpec(10 + index), { foregroundPath: uploads.foregroundPath }, 'owner-b');
+  }
+
+  // Free one of owner-a's slots. With two contending owners, fair share is now
+  // 1 each, so the freed slot must go to owner-b, not to more of owner-a's backlog.
+  const ownerAProcessing = queue.getAllJobs().find(
+    (job) => job.status === 'processing' && job.ownerKey === 'owner-a',
+  )!;
+  controls.get(ownerAProcessing.id)!.resolve();
+
+  await waitFor(() => queue.getAllJobs().some((job) => job.ownerKey === 'owner-b' && job.status === 'processing'));
+  const processingOwners = queue.getAllJobs().filter((job) => job.status === 'processing').map((job) => job.ownerKey);
+  assert.deepEqual(new Set(processingOwners), new Set(['owner-a', 'owner-b']));
+
+  queue.stopCleanupScheduler();
+});
+
 test('restart recovery marks interrupted work failed and re-queues queued jobs', async () => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'resize-video-recovery-'));
   const firstRun = await createQueueHarness(1, tempRoot);

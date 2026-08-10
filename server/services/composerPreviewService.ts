@@ -49,6 +49,7 @@ interface PreviewQueue {
     spec: ComposerRenderSpec,
     files: JobFiles,
     composer: ComposerJobRecord['composer'],
+    ownerKey?: string,
   ): Promise<ComposerJobRecord>;
   getJob(jobId: string): ComposerJobRecord | undefined;
 }
@@ -106,7 +107,11 @@ export class ComposerPreviewService {
     this.now = options.now ?? Date.now;
   }
 
-  async requestPreview(input: PreviewRequest, assetSnapshot?: readonly ComposerAsset[]): Promise<ExactPreviewResponse> {
+  async requestPreview(
+    input: PreviewRequest,
+    assetSnapshot?: readonly ComposerAsset[],
+    ownerKey?: string,
+  ): Promise<ExactPreviewResponse> {
     this.validateRequest(input);
     const [original, hook] = assetSnapshot
       ? [
@@ -135,7 +140,7 @@ export class ComposerPreviewService {
       return result;
     }
 
-    const request = this.requestPreviewOnce(key, snapshot, original, hook);
+    const request = this.requestPreviewOnce(key, snapshot, original, hook, ownerKey);
     const lifecycle = {
       promise: request,
       expiresAt: input.draftExpiresAt,
@@ -189,6 +194,7 @@ export class ComposerPreviewService {
     input: PreviewRequest & Pick<PreviewCacheInput, 'originalSourceRange' | 'hookSourceRange'>,
     original: ComposerAsset,
     hook: ComposerAsset,
+    ownerKey?: string,
   ): Promise<ExactPreviewResponse> {
     let record = await this.readRecord(key);
     const existingJob = record ? this.queue.getJob(record.jobId) : undefined;
@@ -260,7 +266,7 @@ export class ComposerPreviewService {
         crop: hook.crop,
       },
     };
-    const job = await this.queue.createComposerJob(spec, files, composer);
+    const job = await this.queue.createComposerJob(spec, files, composer, ownerKey);
     composerPreviewCache.inc({ result: 'miss' });
     await this.writeRecord({
       id: key,

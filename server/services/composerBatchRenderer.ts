@@ -17,7 +17,12 @@ type AssetStoreLike = {
 };
 
 type QueueLike = {
-  createComposerJob(spec: ComposerRenderSpec, files: JobFiles, composer: ComposerJobRecord['composer']): Promise<ComposerJobRecord>;
+  createComposerJob(
+    spec: ComposerRenderSpec,
+    files: JobFiles,
+    composer: ComposerJobRecord['composer'],
+    ownerKey?: string,
+  ): Promise<ComposerJobRecord>;
   getAllJobs(): NativeJobRecord[];
   getJob(id: string): NativeJobRecord | undefined;
   cancelJob(id: string): Promise<boolean>;
@@ -95,13 +100,18 @@ export class ComposerBatchRenderer {
     this.disk = options.disk;
   }
 
-  async submit(batch: ComposerBatchDraft, selectedCellIds: string[], assetSnapshot?: readonly ComposerAsset[]) {
+  async submit(
+    batch: ComposerBatchDraft,
+    selectedCellIds: string[],
+    assetSnapshot?: readonly ComposerAsset[],
+    ownerKey?: string,
+  ) {
     if (this.batchMutationClaims.has(batch.id) || this.hasActiveJobs(batch.id)) {
       throw new ComposerBatchActiveError('Composer batch already has active render work');
     }
     this.batchMutationClaims.add(batch.id);
     try {
-      return await this.submitClaimed(batch, selectedCellIds, assetSnapshot);
+      return await this.submitClaimed(batch, selectedCellIds, assetSnapshot, ownerKey);
     } finally {
       this.batchMutationClaims.delete(batch.id);
     }
@@ -111,6 +121,7 @@ export class ComposerBatchRenderer {
     batch: ComposerBatchDraft,
     selectedCellIds: string[],
     assetSnapshot?: readonly ComposerAsset[],
+    ownerKey?: string,
   ) {
     if (!Array.isArray(selectedCellIds) || selectedCellIds.length === 0) throw new Error('Select at least one output');
     if (selectedCellIds.length > 100) throw new Error('A composer batch can render at most 100 outputs');
@@ -224,7 +235,7 @@ export class ComposerBatchRenderer {
     const created: ComposerJobRecord[] = [];
     try {
       for (const item of staged) {
-        created.push(await this.queue.createComposerJob(item.snapshot.spec, item.files, item.snapshot.composer));
+        created.push(await this.queue.createComposerJob(item.snapshot.spec, item.files, item.snapshot.composer, ownerKey));
       }
     } catch (error) {
       await Promise.allSettled(created.map((job) => this.queue.cancelJob(job.id)));
@@ -260,19 +271,19 @@ export class ComposerBatchRenderer {
     return { batchId, jobs: results };
   }
 
-  async retry(batchId: string, jobId: string): Promise<ComposerJobRecord> {
+  async retry(batchId: string, jobId: string, ownerKey?: string): Promise<ComposerJobRecord> {
     if (this.batchMutationClaims.has(batchId)) {
       throw new ComposerBatchActiveError('Composer batch already has a render mutation in progress');
     }
     this.batchMutationClaims.add(batchId);
     try {
-      return await this.retryClaimed(batchId, jobId);
+      return await this.retryClaimed(batchId, jobId, ownerKey);
     } finally {
       this.batchMutationClaims.delete(batchId);
     }
   }
 
-  private async retryClaimed(batchId: string, jobId: string): Promise<ComposerJobRecord> {
+  private async retryClaimed(batchId: string, jobId: string, ownerKey?: string): Promise<ComposerJobRecord> {
     const source = this.queue.getJob(jobId);
     if (!source || source.kind !== 'compose' || source.spec.batchId !== batchId) throw new ComposerJobNotFoundError('Composer job was not found in this batch');
     const cellJobs = this.queue.getAllJobs().filter((job): job is ComposerJobRecord => (
@@ -302,7 +313,7 @@ export class ComposerBatchRenderer {
     catch { throw new ComposerStorageError('Composer storage capacity is unavailable'); }
     const files = await this.stage(snapshot);
     try {
-      return await this.queue.createComposerJob(snapshot.spec, files, snapshot.composer);
+      return await this.queue.createComposerJob(snapshot.spec, files, snapshot.composer, ownerKey);
     } catch (error) {
       await fs.rm(files.workDir, { recursive: true, force: true }).catch(() => {});
       throw error;
