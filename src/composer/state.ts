@@ -44,6 +44,75 @@ export type ComposerAction =
   | { type: 'setTool'; tool: ComposerTool }
   | { type: 'setStage'; stage: ComposerStage };
 
+export const sameComposerDurationGroup = (a: HookDurationGroup, b: HookDurationGroup): boolean =>
+  a.id === b.id
+  && a.minDuration === b.minDuration
+  && a.maxDuration === b.maxDuration
+  && a.hookIds.length === b.hookIds.length
+  && a.hookIds.every((hookId, index) => hookId === b.hookIds[index]);
+
+export const sameComposerConfiguration = (a: ComposerVariantConfig, b: ComposerVariantConfig): boolean =>
+  a.id === b.id
+  && a.originalId === b.originalId
+  && a.durationGroupId === b.durationGroupId
+  && a.representativeHookId === b.representativeHookId
+  && a.insertAt === b.insertAt
+  && a.trimStart === b.trimStart
+  && a.trimEnd === b.trimEnd
+  && a.transition === b.transition
+  && a.reviewed === b.reviewed;
+
+/**
+ * Rebuilds `durationGroups` while reusing the identity of every group whose contents are
+ * unchanged, and the identity of the array itself when no group changed. A fresh identity here
+ * refires the variant effect in HookComposerPage, which reassigns `editingConfig` and triggers
+ * another autosave -- a save loop, because every save bumps the draft revision server-side.
+ */
+const mergeComposerDurationGroups = (
+  previous: HookDurationGroup[],
+  next: readonly HookDurationGroup[],
+): HookDurationGroup[] => {
+  const merged = next.map((group) => {
+    const existing = previous.find((candidate) => candidate.id === group.id);
+    return existing && sameComposerDurationGroup(existing, group)
+      ? existing
+      : { ...group, hookIds: [...group.hookIds] };
+  });
+  return merged.length === previous.length && merged.every((group, index) => group === previous[index])
+    ? previous
+    : merged;
+};
+
+/** Same identity-preserving merge as `mergeComposerDurationGroups`, for the configuration map. */
+const mergeComposerConfigurations = (
+  previous: Record<string, ComposerVariantConfig>,
+  next: Readonly<Record<string, ComposerVariantConfig>>,
+): Record<string, ComposerVariantConfig> => {
+  const keys = Object.keys(next);
+  let changed = keys.length !== Object.keys(previous).length;
+  const merged: Record<string, ComposerVariantConfig> = {};
+  for (const key of keys) {
+    const existing = previous[key];
+    if (existing && sameComposerConfiguration(existing, next[key])) merged[key] = existing;
+    else {
+      merged[key] = next[key];
+      changed = true;
+    }
+  }
+  return changed ? merged : previous;
+};
+
+/** Same identity-preserving merge, for the asset revision map. */
+const mergeComposerAssetRevisions = (
+  previous: Record<string, number>,
+  next: Readonly<Record<string, number>>,
+): Record<string, number> => {
+  const keys = Object.keys(next);
+  const unchanged = keys.length === Object.keys(previous).length
+    && keys.every((key) => previous[key] === next[key]);
+  return unchanged ? previous : { ...next };
+};
+
 export const composerReducer = (state: ComposerState, action: ComposerAction): ComposerState => {
   switch (action.type) {
     case 'assetsLoaded':
@@ -106,12 +175,21 @@ export const composerReducer = (state: ComposerState, action: ComposerAction): C
         || !configurationsAreCanonical
         || !assetRevisionsAreValid
       ) return state;
+      const durationGroups = mergeComposerDurationGroups(state.durationGroups, action.draft.durationGroups);
+      const configurations = mergeComposerConfigurations(state.configurations, action.draft.configurations);
+      const assetRevisions = mergeComposerAssetRevisions(state.assetRevisions, action.draft.assetRevisions);
+      if (
+        state.draftRevision === action.draft.revision
+        && durationGroups === state.durationGroups
+        && configurations === state.configurations
+        && assetRevisions === state.assetRevisions
+      ) return state;
       return {
         ...state,
         draftRevision: action.draft.revision,
-        assetRevisions: { ...action.draft.assetRevisions },
-        durationGroups: action.draft.durationGroups.map((group) => ({ ...group, hookIds: [...group.hookIds] })),
-        configurations: { ...action.draft.configurations },
+        assetRevisions,
+        durationGroups,
+        configurations,
       };
     }
     case 'selectVariant': {

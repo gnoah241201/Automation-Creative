@@ -27,7 +27,9 @@ import {
   runWithSourceDiscardGuard, SourceEditBackground, SourceEditDrawer, SourceEditTab,
 } from './SourceEditDrawer.tsx';
 import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets.ts';
-import { composerReducer, ComposerStage, initialComposerState } from './state.ts';
+import {
+  composerReducer, ComposerStage, initialComposerState, sameComposerConfiguration,
+} from './state.ts';
 import { ReviewMatrix } from './ReviewMatrix.tsx';
 import { useJobPolling } from '../render/useJobPolling.ts';
 import { clearPersistedComposerBatchId, isCurrentComposerRestore, persistComposerBatchId, restorePersistedComposerDraft } from './restoreDraft.ts';
@@ -258,6 +260,14 @@ export function HookComposerPage() {
       !state.batchId || !state.draftRevision || !editingConfig
       || state.stage !== 'edit' || configurationConflict.current
     ) return;
+    // A save that would not change anything still bumps the draft revision server-side, which
+    // invalidates any open bulk-apply preview. Skip it.
+    const persisted = state.configurations[editingConfig.id];
+    if (persisted && sameComposerConfiguration(persisted, editingConfig)) {
+      setSaveState('saved');
+      setSaveError(undefined);
+      return;
+    }
     const revision = ++configRevision.current;
     const controller = new AbortController();
     saveRequest.current?.abort();
@@ -266,7 +276,7 @@ export function HookComposerPage() {
     const timeout = window.setTimeout(async () => {
       try {
         const batch = await saveComposerConfiguration(
-          state.batchId!, editingConfig, state.draftRevision!, controller.signal,
+          state.batchId!, editingConfig, latestDraftRevision.current!, controller.signal,
         );
         if (controller.signal.aborted || revision !== configRevision.current) return;
         dispatch({ type: 'draftReplaced', draft: batch });
@@ -279,7 +289,11 @@ export function HookComposerPage() {
         if (error instanceof ComposerApiError && error.status === 409) {
           configurationConflict.current = true;
           setEditingConfig((current) => current?.reviewed ? { ...current, reviewed: false } : current);
-          setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+          if (await resyncDraftAfterConflict()) {
+            setSaveError('This draft changed elsewhere; the newer version was loaded. Check this variant and save again.');
+          } else {
+            setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+          }
         } else {
           setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
         }
@@ -406,6 +420,24 @@ export function HookComposerPage() {
     }
   };
 
+  /**
+   * A 409 means our `expectedRevision` was behind the stored draft. Pull the current draft so the
+   * next save carries a fresh revision, instead of latching `configurationConflict` until the user
+   * reloads the page by hand -- that latch also blocks bulk apply, which must save first.
+   */
+  const resyncDraftAfterConflict = async (): Promise<ComposerBatchDraft | undefined> => {
+    const batchId = latestBatchId.current;
+    if (!batchId) return undefined;
+    try {
+      const draft = await getComposerBatch(batchId);
+      dispatch({ type: 'draftReplaced', draft });
+      configurationConflict.current = false;
+      return draft;
+    } catch {
+      return undefined;
+    }
+  };
+
   const changeConfiguration = (next: ComposerVariantConfig) => {
     if (bulkCommitBusy) return;
     bulkApplyRequest.current?.abort();
@@ -419,9 +451,14 @@ export function HookComposerPage() {
 
   const persistCurrentConfiguration = async (): Promise<ComposerBatchDraft | undefined> => {
     if (!state.batchId || !state.draftRevision || !editingConfig) return undefined;
+    let revision = state.draftRevision;
     if (configurationConflict.current) {
-      setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
-      return undefined;
+      const resynced = await resyncDraftAfterConflict();
+      if (!resynced) {
+        setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+        return undefined;
+      }
+      revision = resynced.revision;
     }
     const controller = new AbortController();
     saveRequest.current?.abort();
@@ -429,7 +466,7 @@ export function HookComposerPage() {
     setSaveState('saving');
     try {
       const batch = await saveComposerConfiguration(
-        state.batchId, editingConfig, state.draftRevision, controller.signal,
+        state.batchId, editingConfig, revision, controller.signal,
       );
       if (controller.signal.aborted) return undefined;
       const saved = batch.configurations[editingConfig.id];
@@ -445,7 +482,11 @@ export function HookComposerPage() {
       if (error instanceof ComposerApiError && error.status === 409) {
         configurationConflict.current = true;
         setEditingConfig((current) => current?.reviewed ? { ...current, reviewed: false } : current);
-        setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+        if (await resyncDraftAfterConflict()) {
+          setSaveError('This draft changed elsewhere; the newer version was loaded. Review this variant and try again.');
+        } else {
+          setSaveError('This draft changed. Reload it before saving or marking this variant reviewed.');
+        }
       } else {
         setSaveError(error instanceof Error ? error.message : 'Configuration could not be saved');
       }
