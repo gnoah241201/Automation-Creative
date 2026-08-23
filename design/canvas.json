@@ -1,16 +1,69 @@
 {
   "pages": [
-    { "id": "van-de", "name": "Vấn đề (đo được)" },
-    { "id": "phuong-an", "name": "Phương án" }
+    {
+      "id": "van-de",
+      "name": "Vấn đề (đo được)"
+    },
+    {
+      "id": "phuong-an",
+      "name": "Phương án"
+    }
   ],
   "artboards": [
-    { "file": "Problem-1279.dc.html", "page": "van-de", "x": 0, "y": 0, "w": 1279, "h": 2400, "title": "Hiện tại · 1279×900" },
-    { "file": "Problem-1280x720.dc.html", "page": "van-de", "x": 1400, "y": 0, "w": 1280, "h": 980, "title": "Hiện tại · 1280×720" },
-
-    { "file": "Main.dc.html", "page": "phuong-an", "x": 0, "y": 0, "w": 1280, "h": 720, "title": "Đề xuất · Edit screen 1280×720" },
-    { "file": "Option-A-SidePanel.dc.html", "page": "phuong-an", "x": 0, "y": 860, "w": 1280, "h": 720, "title": "A · Panel neo phải" },
-    { "file": "Option-B-Modal.dc.html", "page": "phuong-an", "x": 1400, "y": 860, "w": 1280, "h": 720, "title": "B · Modal giữa" },
-    { "file": "Option-C-BottomSheet.dc.html", "page": "phuong-an", "x": 2800, "y": 860, "w": 1280, "h": 720, "title": "C · Sheet đáy" }
+    {
+      "file": "Problem-1279.dc.html",
+      "page": "van-de",
+      "x": 0,
+      "y": 0,
+      "w": 1279,
+      "h": 2400,
+      "title": "Hiện tại · 1279×900"
+    },
+    {
+      "file": "Problem-1280x720.dc.html",
+      "page": "van-de",
+      "x": 1400,
+      "y": 0,
+      "w": 1280,
+      "h": 980,
+      "title": "Hiện tại · 1280×720"
+    },
+    {
+      "file": "Main.dc.html",
+      "page": "phuong-an",
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 720,
+      "title": "Đề xuất · Edit screen 1280×720"
+    },
+    {
+      "file": "Option-A-SidePanel.dc.html",
+      "page": "phuong-an",
+      "x": 0,
+      "y": 860,
+      "w": 1280,
+      "h": 720,
+      "title": "A · Panel neo phải"
+    },
+    {
+      "file": "Option-B-Modal.dc.html",
+      "page": "phuong-an",
+      "x": 1400,
+      "y": 860,
+      "w": 1280,
+      "h": 720,
+      "title": "B · Modal giữa"
+    },
+    {
+      "file": "Option-C-BottomSheet.dc.html",
+      "page": "phuong-an",
+      "x": 2800,
+      "y": 860,
+      "w": 1280,
+      "h": 720,
+      "title": "C · Sheet đáy"
+    }
   ],
   "annotations": [
     {
@@ -67,8 +120,11 @@
       "x": -420,
       "y": 620,
       "w": 380,
-      "text": "Bản Edit screen đề xuất, vẽ đúng 1280×720.\n\nĐổi thêm ngoài phần overlay:\n· 3 thẻ stepper cao → một rail ngang, lấy lại ~110px\n  chiều cao mà màn 720px đang thiếu\n· Mark reviewed + Apply xuống thanh hành động ghim\n  đáy cửa sổ, cùng cách chống khuyết như overlay\n· Trạng thái lưu nháp lên rail trên, không còn nằm\n  lẫn giữa sidebar\n· Insert/Trim/Crop thành segmented control\n· Chỉ vùng làm việc cuộn, khung app đứng yên\n\nBật tweak showPanel để xem panel phương án A."
+      "text": "Bản Edit screen đề xuất, vẽ đúng 1280×720.\n\nĐã implement, số đo thật trên app:\n· 3 thẻ stepper cao → một rail ngang: 114px → 46px,\n  lấy lại 68px (không phải ~110px như ghi chú cũ)\n· Mark reviewed + Apply: trước ở đáy sidebar, tại\n  1280×720 nằm ở y=1291, khuyết 613px. Giờ ở thanh\n  neo đáy viewport, trên màn ở mọi vị trí cuộn\n· Thanh này dùng position: fixed chứ không sticky —\n  sticky bị clamp vào top của containing block nên ở\n  màn 480px vẫn tụt 34px dưới màn\n· Insert/Trim/Crop thành segmented control 3 cột đều\n· Trạng thái lưu nháp lên rail trên\n\nBật tweak showPanel để xem panel phương án A."
     }
   ],
-  "launch": { "view": "canvas", "page": "phuong-an" }
+  "launch": {
+    "view": "canvas",
+    "page": "phuong-an"
+  }
 }

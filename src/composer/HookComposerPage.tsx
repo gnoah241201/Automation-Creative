@@ -774,28 +774,42 @@ export function HookComposerPage() {
         </div>
       </header>
 
-      <ol aria-label="Composer stages" className="mb-6 grid gap-2 sm:grid-cols-3">
-        {stages.map((stage) => {
-          const active = state.stage === stage.id;
-          return (
-            <li key={stage.id}>
-              <button
-                type="button"
-                aria-current={active ? 'step' : undefined}
-                disabled={bulkCommitBusy || continuing || (stage.id !== 'sources' && !state.batchId)}
-                onClick={() => void changeStage(stage.id)}
-                className={active
-                  ? 'w-full rounded-xl border border-blue-500 bg-blue-500/10 p-3 text-left'
-                  : 'w-full rounded-xl border border-neutral-800 bg-neutral-900/70 p-3 text-left text-neutral-400 hover:border-neutral-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-800 disabled:hover:text-neutral-400'}
-              >
-                <span className="block text-xs font-semibold uppercase tracking-wider">Step {stage.step}</span>
-                <span className="mt-1 block font-semibold text-white">{stage.label}</span>
-                <span className="mt-1 block text-xs">{stage.description}</span>
-              </button>
-            </li>
-          );
-        })}
-      </ol>
+      {/*
+        A single rail rather than three stacked cards: the cards cost ~110px of vertical space that
+        a 720px-tall window does not have, which is the same budget that pushed panel actions off
+        screen. Each stage's description stays available to screen readers.
+      */}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <ol aria-label="Composer stages" className="flex flex-wrap items-center gap-2">
+          {stages.map((stage) => {
+            const active = state.stage === stage.id;
+            return (
+              <li key={stage.id}>
+                <button
+                  type="button"
+                  aria-current={active ? 'step' : undefined}
+                  disabled={bulkCommitBusy || continuing || (stage.id !== 'sources' && !state.batchId)}
+                  onClick={() => void changeStage(stage.id)}
+                  className={active
+                    ? 'rounded-full border border-blue-500 bg-blue-500/10 px-3.5 py-1.5 text-xs font-semibold text-white'
+                    : 'rounded-full border border-neutral-800 px-3.5 py-1.5 text-xs text-neutral-400 hover:border-neutral-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-neutral-800 disabled:hover:text-neutral-400'}
+                >
+                  <span aria-hidden="true" className="mr-1.5 text-neutral-500">{stage.step}</span>
+                  {stage.label}
+                  <span className="sr-only"> — {stage.description}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+        {state.stage === 'edit' && editingConfig && (
+          <div className="text-xs">
+            {saveState === 'saving' && <p className="inline-flex items-center gap-2 text-neutral-400"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Saving draft…</p>}
+            {saveState === 'saved' && <p className="inline-flex items-center gap-2 text-emerald-300"><Check className="h-3.5 w-3.5" /> Draft saved</p>}
+            {saveState === 'error' && <p role="alert" className="text-red-300">{saveError}</p>}
+          </div>
+        )}
+      </div>
 
       <section aria-live="polite" className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4 sm:p-6 lg:p-8">
         <div className="mb-6">
@@ -838,6 +852,8 @@ export function HookComposerPage() {
             )}
           </div>
         ) : state.stage === 'edit' && activeOriginal && activeGroup && representativeHook && editingConfig ? (
+          <>
+          <div className="flex flex-col gap-5 pb-28 sm:pb-24">
           <div className="grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
             <aside className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-4">
               <h3 className="text-sm font-semibold">Variation</h3>
@@ -857,21 +873,14 @@ export function HookComposerPage() {
                   {activeHooks.map((hook) => <option key={hook.id} value={hook.id}>{hook.originalFilename}</option>)}
                 </select>
               </label>
-              <div className="mt-5 grid grid-cols-2 gap-2">
-                {(['insert', 'trim', 'crop'] as const).map((tool) => <button key={tool} type="button" disabled={bulkApplyBusy} onClick={() => dispatch({ type: 'setTool', tool })} className={state.tool === tool ? 'rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold capitalize text-white disabled:opacity-50' : 'rounded-lg border border-neutral-700 px-3 py-2 text-xs font-semibold capitalize text-neutral-300 hover:bg-neutral-800 disabled:opacity-50'}>{tool}</button>)}
+              <div aria-label="Configuration tool" className="mt-5 grid grid-cols-3 gap-1 rounded-lg bg-neutral-900 p-1">
+                {(['insert', 'trim', 'crop'] as const).map((tool) => <button key={tool} type="button" aria-pressed={state.tool === tool} disabled={bulkApplyBusy} onClick={() => dispatch({ type: 'setTool', tool })} className={state.tool === tool ? 'rounded-md bg-blue-600 px-2 py-1.5 text-xs font-semibold capitalize text-white disabled:opacity-50' : 'rounded-md px-2 py-1.5 text-xs font-semibold capitalize text-neutral-400 hover:text-white disabled:opacity-50'}>{tool}</button>)}
               </div>
               <ComposerToolGuidance
                 tool={state.tool}
                 originalDuration={getEffectiveSourceDuration(activeOriginal)}
                 maxHookDuration={activeGroup.maxDuration}
               />
-              <div className="mt-6 border-t border-neutral-800 pt-4 text-xs">
-                {saveState === 'saving' && <p className="inline-flex items-center gap-2 text-neutral-400"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Saving draft…</p>}
-                {saveState === 'saved' && <p className="inline-flex items-center gap-2 text-emerald-300"><Check className="h-3.5 w-3.5" /> Draft saved</p>}
-                {saveState === 'error' && <p role="alert" className="text-red-300">{saveError}</p>}
-              </div>
-              <button type="button" disabled={editingConfig.reviewed || bulkApplyBusy} onClick={() => changeConfiguration({ ...editingConfig, reviewed: true })} className="mt-4 w-full rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-default disabled:bg-emerald-900 disabled:text-emerald-200"><Check className="mr-2 inline h-4 w-4" />{editingConfig.reviewed ? 'Reviewed' : 'Mark reviewed'}</button>
-              <button type="button" disabled={bulkApplyBusy} onClick={() => void openBulkApply()} className="mt-2 w-full rounded-xl border border-blue-500/50 px-4 py-2.5 text-sm font-semibold text-blue-200 hover:bg-blue-500/10 disabled:opacity-50">Apply</button>
             </aside>
             <section aria-label="Composer preview workspace" className="flex min-w-0 flex-col gap-5">
               <div className="relative flex-1 rounded-2xl border border-neutral-800 bg-[radial-gradient(circle_at_center,_#262626,_#0a0a0a_65%)] p-4 sm:p-6">
@@ -901,6 +910,25 @@ export function HookComposerPage() {
               />
             )}
           </div>
+          </div>
+          {/*
+            Anchored to the viewport, not sticky: `sticky` clamps to the top of its containing block,
+            and on a short window that block starts low enough that the bar still landed below the
+            fold -- the same failure the drawers had. These two actions used to sit at the bottom of
+            the sidebar, 613px off screen in a 1280x720 window.
+          */}
+          <div className="fixed inset-x-0 bottom-0 z-[70] border-t border-neutral-800 bg-neutral-950/95 px-4 py-3 backdrop-blur sm:px-5">
+            <div className="mx-auto flex max-w-[1800px] flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-neutral-400">
+                {activeOriginal.originalFilename} · nhóm {activeGroup.maxDuration.toFixed(3)}s · {reviewedConfigurationIds.size}/{reviewTotal} biến thể đã kiểm tra
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" disabled={bulkApplyBusy} onClick={() => void openBulkApply()} className="inline-flex items-center gap-2 rounded-xl border border-blue-500/50 px-4 py-2.5 text-sm font-semibold text-blue-200 hover:bg-blue-500/10 disabled:opacity-50">Apply</button>
+                <button type="button" disabled={editingConfig.reviewed || bulkApplyBusy} onClick={() => changeConfiguration({ ...editingConfig, reviewed: true })} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-default disabled:bg-emerald-900 disabled:text-emerald-200"><Check className="h-4 w-4" />{editingConfig.reviewed ? 'Reviewed' : 'Mark reviewed'}</button>
+              </div>
+            </div>
+          </div>
+          </>
         ) : state.stage === 'review' ? (
           <ReviewMatrix
             originals={state.originals}
