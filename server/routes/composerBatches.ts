@@ -78,9 +78,27 @@ const buildBulkApplyPlan = async (
   scope: ComposerBulkApplyScope,
   snapshot: ComposerAssetSnapshot,
 ): Promise<ComposerBulkApplyPlan> => {
-  const originalDurations = Object.fromEntries(
-    snapshot.originals.map((original) => [original.id, getEffectiveSourceDuration(original)]),
-  );
+  // getEffectiveSourceDuration throws on a source whose stored trim range cannot be resolved.
+  // Report which source is at fault instead of letting it surface as "Unable to plan composer
+  // apply", which tells the user nothing and looks like a server fault.
+  let originalDurations: Record<string, number>;
+  try {
+    originalDurations = Object.fromEntries(
+      snapshot.originals.map((original) => [original.id, getEffectiveSourceDuration(original)]),
+    );
+  } catch (error) {
+    const culprit = snapshot.originals.find((original) => {
+      try {
+        getEffectiveSourceDuration(original);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+    throw new ComposerBulkApplyValidationError(
+      `Source ${culprit?.originalFilename ?? 'in this batch'} has an unusable trim range: ${toMessage(error)}`,
+    );
+  }
   const plan = planComposerBulkApply(draft, sourceConfigurationId, scope, originalDurations);
   const source = draft.configurations[sourceConfigurationId];
   const sourceValidation = validateComposerConfiguration(
@@ -153,6 +171,7 @@ export const buildComposerBatchesRouter = (
   router.post('/batches', express.json(), async (req, res) => {
     let originals;
     let hooks;
+    let durationGroups;
     try {
       const originalIds = Array.isArray(req.body?.originalIds) ? req.body.originalIds : [];
       const hookIds = Array.isArray(req.body?.hookIds) ? req.body.hookIds : [];
@@ -168,6 +187,10 @@ export const buildComposerBatchesRouter = (
       hooks = await Promise.all(
         hookIds.map((id: string) => assets.requireReadyAsset(id, 'hook')),
       );
+      // Grouping reads every hook's effective duration and throws on an unusable trim range.
+      // Do it before creating the draft so a bad hook answers 400 here rather than 500 below,
+      // and leaves no orphaned draft behind.
+      durationGroups = groupHooksByDuration(hooks);
     } catch (error) {
       res.status(400).json({ error: 'ValidationError', message: toMessage(error) });
       return;
@@ -178,7 +201,7 @@ export const buildComposerBatchesRouter = (
         hooks.map((item) => item.id),
         Object.fromEntries([...originals, ...hooks].map((item) => [item.id, item.revision])),
       );
-      draft.durationGroups = groupHooksByDuration(hooks);
+      draft.durationGroups = durationGroups;
       await drafts.save(draft);
       res.status(201).json(draft);
     } catch (error) {
