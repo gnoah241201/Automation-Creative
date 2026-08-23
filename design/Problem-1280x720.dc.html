@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: oklch(0.145 0 0); color: #fff; }
+    a { color: oklch(0.882 0.059 254.128); }
+    a:hover { color: #fff; }
+    .lbl { font-size: 12px; color: oklch(0.708 0 0); }
+  </style>
+</helmet>
+
+<div style="width: 1280px; display: flex; flex-direction: column;">
+
+  <div style="display: flex; align-items: center; gap: 24px; padding: 12px 20px; border-bottom: 1px solid oklch(0.269 0 0); background: oklch(0.145 0 0 / 0.95);">
+    <span style="font-size: 15px; font-weight: 700;">ResizeVideo</span>
+    <div style="display: flex; gap: 4px;">
+      <span style="font-size: 13px; color: oklch(0.708 0 0); padding: 6px 12px;">Resize</span>
+      <span style="font-size: 13px; font-weight: 600; color: #fff; background: oklch(0.546 0.245 262.881); border-radius: 8px; padding: 6px 12px;">Hook Composer</span>
+      <span style="font-size: 13px; color: oklch(0.708 0 0); padding: 6px 12px;">Local Library</span>
+    </div>
+  </div>
+
+  <div style="padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <span style="font-size: 11px; font-weight: 600; letter-spacing: 1.2px; color: oklch(0.623 0.214 259.815);">HOOK COMPOSER</span>
+      <span style="font-size: 30px; font-weight: 700; line-height: 34px; letter-spacing: -0.7px;">Create every original × hook variation</span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px;">
+      <div style="border: 1px solid oklch(0.269 0 0); border-radius: 12px; background: oklch(0.205 0 0 / 0.7); padding: 12px; display: flex; flex-direction: column; gap: 2px;">
+        <span style="font-size: 10px; letter-spacing: 1px; color: oklch(0.556 0 0);">STEP 1</span>
+        <span style="font-size: 14px; font-weight: 600;">Sources</span>
+      </div>
+      <div style="border: 1px solid oklch(0.623 0.214 259.815); border-radius: 12px; background: oklch(0.623 0.214 259.815 / 0.1); padding: 12px; display: flex; flex-direction: column; gap: 2px;">
+        <span style="font-size: 10px; letter-spacing: 1px; color: oklch(0.708 0 0);">STEP 2</span>
+        <span style="font-size: 14px; font-weight: 600;">Edit</span>
+      </div>
+      <div style="border: 1px solid oklch(0.269 0 0); border-radius: 12px; background: oklch(0.205 0 0 / 0.7); padding: 12px; display: flex; flex-direction: column; gap: 2px;">
+        <span style="font-size: 10px; letter-spacing: 1px; color: oklch(0.556 0 0);">STEP 3</span>
+        <span style="font-size: 14px; font-weight: 600;">Review</span>
+      </div>
+    </div>
+
+    <!-- three columns: this part works -->
+    <div style="display: grid; grid-template-columns: 260px minmax(0, 1fr) 380px; gap: 20px; align-items: start;">
+      <div style="border: 1px solid oklch(0.269 0 0); border-radius: 16px; background: oklch(0.145 0 0 / 0.7); padding: 16px; display: flex; flex-direction: column; gap: 12px;">
+        <span style="font-size: 14px; font-weight: 600;">Variation</span>
+        <span class="lbl">4/4 configurations reviewed</span>
+        <div style="height: 39px; border: 1px solid oklch(0.371 0 0); border-radius: 8px; background: oklch(0.205 0 0); display: flex; align-items: center; padding: 0 12px; font-size: 13px;">original-a.mp4</div>
+        <div style="height: 39px; border: 1px solid oklch(0.371 0 0); border-radius: 8px; background: oklch(0.205 0 0); display: flex; align-items: center; padding: 0 12px; font-size: 13px;">2.035–2.035s · 1 hook</div>
+        <div style="display: flex; gap: 6px;">
+          <span style="flex-grow: 1; text-align: center; font-size: 12px; font-weight: 600; color: #fff; background: oklch(0.546 0.245 262.881); border-radius: 8px; padding: 8px 6px;">Insert</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 12px; font-weight: 600; color: oklch(0.87 0 0); border: 1px solid oklch(0.371 0 0); border-radius: 8px; padding: 8px 6px;">Trim</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 12px; font-weight: 600; color: oklch(0.87 0 0); border: 1px solid oklch(0.371 0 0); border-radius: 8px; padding: 8px 6px;">Crop</span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 20px;">
+        <div style="border: 1px solid oklch(0.269 0 0); border-radius: 16px; background: oklch(0.16 0 0); height: 420px; display: grid; place-items: center;">
+          <div style="width: 150px; height: 267px; border-radius: 14px; border: 1px solid oklch(0.371 0 0); background: linear-gradient(160deg, oklch(0.3 0 0), oklch(0.18 0 0));"></div>
+        </div>
+      </div>
+
+      <!-- the drawer, in flow, starting at y=514 -->
+      <div style="border: 1px solid oklch(0.371 0 0); border-radius: 16px; background: oklch(0.145 0 0 / 0.95); padding: 16px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);">
+        <span style="font-size: 14px; font-weight: 600;">Apply configuration</span>
+        <span class="lbl">From original-a.mp4 · Group 2.0s</span>
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.8px; color: oklch(0.556 0 0);">SCOPE</span>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span style="width: 14px; height: 14px; border: 1px solid oklch(0.556 0 0); border-radius: 3px; background: oklch(0.546 0.245 262.881);"></span>
+            <span style="font-size: 14px; color: oklch(0.87 0 0);">All hook groups for this original</span>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <span style="width: 14px; height: 14px; border: 1px solid oklch(0.556 0 0); border-radius: 3px; background: oklch(0.546 0.245 262.881);"></span>
+            <span style="font-size: 14px; color: oklch(0.87 0 0);">This hook group for all originals</span>
+          </div>
+        </div>
+        <span style="font-size: 14px; color: oklch(0.87 0 0);">4 variants will be reviewed</span>
+        <div style="display: flex; flex-direction: column; gap: 8px;">
+          <span style="text-align: center; font-size: 14px; font-weight: 600; color: oklch(0.882 0.059 254.128); border: 1px solid oklch(0.546 0.245 262.881); border-radius: 12px; padding: 10px 12px;">Retry preview</span>
+          <span style="text-align: center; font-size: 14px; font-weight: 600; color: #fff; background: oklch(0.596 0.145 163.225); border-radius: 12px; padding: 10px 12px;">Apply &amp; mark reviewed (4 variants)</span>
+          <span style="text-align: center; font-size: 14px; color: oklch(0.87 0 0); padding: 10px 12px;">Cancel</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- fold at 720 -->
+  <div style="position: relative; height: 0;">
+    <div style="position: absolute; left: 0; right: 0; top: -1px; border-top: 2px dashed oklch(0.808 0.114 19.571);"></div>
+    <div style="position: absolute; right: 16px; top: 8px; background: oklch(0.808 0.114 19.571); color: oklch(0.145 0 0); font-size: 12px; font-weight: 700; border-radius: 6px; padding: 4px 10px;">
+      Màn hình 720px kết thúc ở đây
+    </div>
+    <div style="position: absolute; left: 900px; top: -78px; width: 360px; border-left: 2px solid oklch(0.808 0.114 19.571); padding-left: 10px;">
+      <span style="font-size: 12px; font-weight: 600; color: oklch(0.808 0.114 19.571);">Apply và Cancel bị khuyết 93px<br>Layout 3 cột vẫn "đúng" — chiều cao mới là vấn đề</span>
+    </div>
+  </div>
+
+  <div style="height: 120px;"></div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

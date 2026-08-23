@@ -118,7 +118,6 @@ export function HookComposerPage() {
   const [sourceEdit, setSourceEdit] = useState<{ asset: ComposerAsset; tab: SourceEditTab }>();
   const [sourceCrop, setSourceCrop] = useState<ComposerCrop>();
   const [sourceEditDirty, setSourceEditDirty] = useState(false);
-  const [sourceEditModal, setSourceEditModal] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const [continueError, setContinueError] = useState<string>();
   const [sourceUrls, setSourceUrls] = useState<Record<string, string>>({});
@@ -380,7 +379,6 @@ export function HookComposerPage() {
 
   const closeSourceEditor = () => {
     setSourceEditDirty(false);
-    setSourceEditModal(false);
     setSourceEdit(undefined);
   };
 
@@ -809,8 +807,8 @@ export function HookComposerPage() {
           </p>
         </div>
         {state.stage === 'sources' ? (
-          <div className={sourceEdit ? 'grid min-w-0 gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(320px,420px)]' : 'min-w-0'}>
-            <SourceEditBackground modal={sourceEditModal}>
+          <div className="min-w-0">
+            <SourceEditBackground modal={Boolean(sourceEdit)}>
               <MediaPanel
                 originals={originals}
                 hooks={hooks}
@@ -832,7 +830,6 @@ export function HookComposerPage() {
                 videoRef={sourceEditVideoRef}
                 confirmDiscard={() => window.confirm('Discard unsaved source changes?')}
                 onDirtyChange={setSourceEditDirty}
-                onModalChange={setSourceEditModal}
                 onCropChange={setSourceCrop}
                 onSaveCrop={saveCrop}
                 onSaveTrim={saveSourceTrim}
@@ -841,9 +838,7 @@ export function HookComposerPage() {
             )}
           </div>
         ) : state.stage === 'edit' && activeOriginal && activeGroup && representativeHook && editingConfig ? (
-          <div className={bulkApply && bulkApply.batchId === state.batchId && bulkApply.sourceConfigurationId === editingConfig.id
-            ? 'grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)_minmax(320px,380px)]'
-            : 'grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)]'}>
+          <div className="grid min-h-[700px] gap-5 xl:grid-cols-[260px_minmax(0,1fr)]">
             <aside className="rounded-2xl border border-neutral-800 bg-neutral-950/70 p-4">
               <h3 className="text-sm font-semibold">Variation</h3>
               <p className="mt-2 text-xs text-neutral-400">{reviewedConfigurationIds.size}/{reviewTotal} configurations reviewed</p>

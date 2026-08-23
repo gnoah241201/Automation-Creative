@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { ComposerAsset } from '../shared/composer-contract.ts';
@@ -10,7 +11,6 @@ import {
   runWithSourceDiscardGuard,
   SourceEditBackground,
   canCloseSourceEditor,
-  sourceDrawerIsModal,
   SourceEditDrawer,
 } from '../src/composer/SourceEditDrawer.tsx';
 import { clampSourceTrim, pointerToSourceTime, sourceTrimRangeForKey } from '../src/composer/sourceTrimGeometry.ts';
@@ -103,9 +103,28 @@ test('dirty source editor asks before closing while a clean editor closes direct
   assert.equal(confirmations, 1);
 });
 
-test('source drawer is modal only below its desktop breakpoint', () => {
-  assert.equal(sourceDrawerIsModal(1279), true);
-  assert.equal(sourceDrawerIsModal(1280), false);
+test('the source drawer is anchored to the viewport at every width, never placed in the page flow', () => {
+  const source = readFileSync(new URL('../src/composer/SourceEditDrawer.tsx', import.meta.url), 'utf8');
+  const shell = /className="(source-edit-drawer[^"]*)"/.exec(source)?.[1] ?? '';
+
+  // An `xl:static` shell fell back into a grid column, which put Save and Cancel below the fold on
+  // a short window; a viewport width must no longer decide whether the actions are reachable.
+  assert.doesNotMatch(shell, /xl:static/);
+  assert.match(shell, / fixed /);
+  assert.match(shell, /xl:inset-y-0/);
+  assert.match(shell, /xl:right-0/);
+  // Its own scroll container plus a non-shrinking action row keeps the buttons on screen.
+  assert.match(shell, /flex-col/);
+  assert.match(source, /min-h-0 flex-1 overflow-y-auto/);
+  assert.match(source, /flex shrink-0 justify-end gap-3 border-t/);
+});
+
+test('the source drawer no longer tracks the viewport width to decide its own modality', () => {
+  const source = readFileSync(new URL('../src/composer/SourceEditDrawer.tsx', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(source, /sourceDrawerIsModal/);
+  assert.doesNotMatch(source, /addEventListener\('resize'/);
+  assert.match(source, /aria-modal="true"/);
 });
 
 test('switching away from a dirty trim or crop tab confirms and resets that tab', () => {
@@ -143,7 +162,7 @@ test('parent source interactions run only after the shared discard guard allows 
   assert.deepEqual(actions, ['remove']);
 });
 
-test('narrow source edit background is inert and hidden from assistive technology', () => {
+test('the source edit background is inert and hidden from assistive technology while the drawer is open', () => {
   const html = renderToStaticMarkup(<SourceEditBackground modal><button type="button">Remove</button></SourceEditBackground>);
   assert.match(html, /inert=""/);
   assert.match(html, /aria-hidden="true"/);

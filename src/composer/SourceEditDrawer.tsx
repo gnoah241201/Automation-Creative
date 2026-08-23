@@ -16,7 +16,6 @@ export interface SourceEditDrawerProps {
   videoRef: React.RefObject<HTMLVideoElement | null>;
   confirmDiscard(): boolean;
   onDirtyChange(dirty: boolean): void;
-  onModalChange?(modal: boolean): void;
   onCropChange(crop: ComposerCrop): void;
   onSaveCrop(crop: ComposerCrop): Promise<void>;
   onSaveTrim(range: SourceTimeRange): Promise<void>;
@@ -27,7 +26,6 @@ export const canCloseSourceEditor = (dirty: boolean, confirmDiscard: () => boole
   !dirty || confirmDiscard()
 );
 
-export const sourceDrawerIsModal = (viewportWidth: number): boolean => viewportWidth < 1280;
 
 export interface SourceTabTransition {
   tab: SourceEditTab;
@@ -154,26 +152,14 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
   const [dirtyTab, setDirtyTab] = useState<SourceEditTab>();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
-  const [modal, setModal] = useState(() => typeof window !== 'undefined' && sourceDrawerIsModal(window.innerWidth));
   const closeButton = useRef<HTMLButtonElement>(null);
   const dialog = useRef<HTMLElement>(null);
 
   useEffect(() => {
     const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
     closeButton.current?.focus();
-    const updateModal = () => {
-      const next = sourceDrawerIsModal(window.innerWidth);
-      setModal(next);
-      props.onModalChange?.(next);
-    };
-    updateModal();
-    window.addEventListener('resize', updateModal);
-    return () => {
-      window.removeEventListener('resize', updateModal);
-      props.onModalChange?.(false);
-      previouslyFocused?.focus();
-    };
-  }, [props.onModalChange]);
+    return () => { previouslyFocused?.focus(); };
+  }, []);
 
   const setDirty = (nextTab: SourceEditTab) => {
     setDirtyTab(nextTab);
@@ -222,7 +208,7 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
       requestClose();
       return;
     }
-    if (event.key !== 'Tab' || !modal) return;
+    if (event.key !== 'Tab') return;
     const focusable = Array.from(dialog.current?.querySelectorAll<HTMLElement>(
       'button:not([disabled]), input:not([disabled]), video[controls], [tabindex]:not([tabindex="-1"])',
     ) ?? []);
@@ -240,23 +226,29 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
 
   return (
     <>
-      {modal && <div data-source-edit-backdrop aria-hidden="true" onPointerDown={requestClose} className="fixed inset-0 z-[119] bg-black/70 xl:hidden" />}
+      <div data-source-edit-backdrop aria-hidden="true" onPointerDown={requestClose} className="fixed inset-0 z-[119] bg-black/70" />
+      {/*
+        Anchored to the viewport at every width. It used to become `xl:static` and sit in a grid
+        column, which put its Save and Cancel below the fold on a short window; now it is a bottom
+        sheet on narrow screens and a right-hand panel on wide ones, with its own scrolling body.
+      */}
       <aside
         ref={dialog}
         role="dialog"
-        aria-modal={modal || undefined}
+        aria-modal="true"
         aria-label={`Edit ${props.asset.originalFilename}`}
         data-modal-behavior="focus-trap"
         onKeyDown={handleDialogKeyDown}
-        className="source-edit-drawer fixed inset-x-0 bottom-0 z-[120] max-h-[92vh] overflow-y-auto rounded-t-2xl border border-neutral-700 bg-neutral-900 p-4 shadow-2xl xl:static xl:z-auto xl:max-h-none xl:w-full xl:max-w-[420px] xl:rounded-2xl"
+        className="source-edit-drawer fixed inset-x-0 bottom-0 z-[120] flex max-h-[85dvh] flex-col rounded-t-2xl border border-neutral-700 bg-neutral-900 shadow-2xl xl:inset-y-0 xl:left-auto xl:right-0 xl:max-h-none xl:w-[420px] xl:rounded-none xl:rounded-l-2xl"
       >
-      <div className="mb-4 flex items-start justify-between gap-3">
+      <div className="flex shrink-0 items-start justify-between gap-3 border-b border-neutral-800 p-4">
         <div className="min-w-0">
           <p className="text-xs font-semibold uppercase tracking-wider text-blue-400">Edit source</p>
           <h3 className="mt-1 truncate font-semibold text-white">{props.asset.originalFilename}</h3>
         </div>
         <button ref={closeButton} type="button" disabled={saving} onClick={requestClose} aria-label="Close source editor" className="rounded-lg p-2 text-neutral-400 hover:bg-neutral-800 hover:text-white"><X className="h-5 w-5" /></button>
       </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
       <SourceEditTabs value={tab} onChange={requestTabChange} />
       <div className="relative mt-4 overflow-hidden rounded-xl bg-black" style={{ aspectRatio: `${props.asset.width}/${props.asset.height}` }}>
         <video ref={props.videoRef} src={props.sourceUrl} aria-label={`Source preview for ${props.asset.originalFilename}`} controls muted playsInline preload="metadata" onTimeUpdate={(event) => {
@@ -274,7 +266,8 @@ export function SourceEditDrawer(props: SourceEditDrawerProps) {
         }} />}
       </div>
       {error && <p role="alert" className="mt-4 text-sm text-red-300">{error}</p>}
-      <div className="mt-5 flex justify-end gap-3 border-t border-neutral-800 pt-4">
+      </div>
+      <div className="flex shrink-0 justify-end gap-3 border-t border-neutral-800 p-4">
         <button type="button" disabled={saving} onClick={requestClose} className="rounded-xl border border-neutral-700 px-4 py-2.5 text-sm font-medium text-neutral-200">Cancel</button>
         <button type="button" disabled={saving} onClick={() => void save()} className="inline-flex min-w-32 items-center justify-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50">
           {saving && <LoaderCircle className="h-4 w-4 animate-spin" />}{saving ? 'Saving...' : tab === 'trim' ? 'Save segment' : 'Save crop'}

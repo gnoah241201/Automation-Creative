@@ -127,3 +127,35 @@ test('a failed canonical save releases preview busy state for retry', () => {
 
   assert.match(preview, /if \(!savedDraft\)[\s\S]*operation: 'idle'/);
 });
+
+test('the apply drawer is anchored to the viewport, not laid out as a grid column', () => {
+  const source = readFileSync(new URL('../src/composer/BulkApplyDrawer.tsx', import.meta.url), 'utf8');
+  const shell = /className="(fixed inset-x-0[^"]*)"/.exec(source)?.[1] ?? '';
+
+  // A grid column only exists above xl, so an in-flow panel dropped to the bottom of the page
+  // below 1280px and pushed its own actions off a short screen even above it.
+  assert.match(shell, /^fixed /);
+  assert.match(shell, /xl:inset-y-0/);
+  assert.match(shell, /xl:right-0/);
+  assert.match(shell, /max-h-\[85dvh\]/);
+  assert.match(shell, /flex-col/);
+  // Body scrolls on its own; the action row cannot be pushed out of the panel.
+  assert.match(source, /min-h-0 flex-1 overflow-y-auto/);
+  assert.match(source, /grid shrink-0 gap-2 border-t/);
+});
+
+test('neither composer stage reserves a grid column for an overlay any more', () => {
+  const page = readFileSync(new URL('../src/composer/HookComposerPage.tsx', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(page, /xl:grid-cols-\[260px_minmax\(0,1fr\)_minmax\(320px,380px\)\]/);
+  assert.doesNotMatch(page, /xl:grid-cols-\[minmax\(0,1fr\)_minmax\(320px,420px\)\]/);
+  assert.match(page, /xl:grid-cols-\[260px_minmax\(0,1fr\)\]/);
+});
+
+test('the apply drawer closes on Escape and on a backdrop press', () => {
+  const source = readFileSync(new URL('../src/composer/BulkApplyDrawer.tsx', import.meta.url), 'utf8');
+
+  assert.match(source, /event\.key === 'Escape' && !busy/);
+  assert.match(source, /onPointerDown=\{busy \? undefined : onClose\}/);
+  assert.match(source, /aria-modal="true"/);
+});

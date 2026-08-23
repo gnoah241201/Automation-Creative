@@ -1,0 +1,116 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <style>
+    body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: oklch(0.145 0 0); color: #fff; }
+    a { color: oklch(0.882 0.059 254.128); }
+    a:hover { color: #fff; }
+    .lbl { font-size: 12px; color: oklch(0.708 0 0); }
+    .sel { height: 34px; border: 1px solid oklch(0.371 0 0); border-radius: 8px; background: oklch(0.205 0 0); display: flex; align-items: center; padding: 0 10px; font-size: 13px; color: oklch(0.87 0 0); }
+    .chip { display: flex; gap: 8px; align-items: center; border: 1px solid oklch(0.623 0.214 259.815); background: oklch(0.623 0.214 259.815 / 0.08); border-radius: 999px; padding: 8px 14px; }
+  </style>
+</helmet>
+
+<div style="width: 1280px; height: 720px; position: relative; overflow: hidden;">
+
+  <div style="position: absolute; inset: 0; display: flex; flex-direction: column;">
+    <div style="display: flex; align-items: center; gap: 24px; padding: 10px 20px; border-bottom: 1px solid oklch(0.269 0 0);">
+      <span style="font-size: 15px; font-weight: 700;">ResizeVideo</span>
+      <div style="display: flex; gap: 4px;">
+        <span style="font-size: 13px; color: oklch(0.708 0 0); padding: 6px 12px;">Resize</span>
+        <span style="font-size: 13px; font-weight: 600; background: oklch(0.546 0.245 262.881); border-radius: 8px; padding: 6px 12px;">Hook Composer</span>
+        <span style="font-size: 13px; color: oklch(0.708 0 0); padding: 6px 12px;">Local Library</span>
+      </div>
+    </div>
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 10px 20px; border-bottom: 1px solid oklch(0.269 0 0);">
+      <div style="display: flex; align-items: center; gap: 6px;">
+        <span style="font-size: 12px; color: oklch(0.708 0 0); padding: 5px 10px; border-radius: 999px; border: 1px solid oklch(0.269 0 0);">1 Sources</span>
+        <span style="font-size: 12px; font-weight: 600; padding: 5px 10px; border-radius: 999px; border: 1px solid oklch(0.623 0.214 259.815); background: oklch(0.623 0.214 259.815 / 0.12);">2 Edit</span>
+        <span style="font-size: 12px; color: oklch(0.708 0 0); padding: 5px 10px; border-radius: 999px; border: 1px solid oklch(0.269 0 0);">3 Review</span>
+      </div>
+      <span class="lbl">4/4 configurations reviewed</span>
+    </div>
+
+    <div style="flex-grow: 1; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; padding: 16px 20px 0 20px; min-height: 0;">
+      <div style="border: 1px solid oklch(0.269 0 0); border-radius: 16px; padding: 14px; display: flex; flex-direction: column; gap: 10px;">
+        <span style="font-size: 14px; font-weight: 600;">Variation</span>
+        <div class="sel">original-a.mp4</div>
+        <div class="sel">2.035s · 1 hook</div>
+        <div style="display: flex; gap: 6px;">
+          <span style="flex-grow: 1; text-align: center; font-size: 12px; font-weight: 600; background: oklch(0.546 0.245 262.881); border-radius: 8px; padding: 7px 4px;">Insert</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 12px; font-weight: 600; color: oklch(0.87 0 0); border: 1px solid oklch(0.371 0 0); border-radius: 8px; padding: 7px 4px;">Trim</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 12px; font-weight: 600; color: oklch(0.87 0 0); border: 1px solid oklch(0.371 0 0); border-radius: 8px; padding: 7px 4px;">Crop</span>
+        </div>
+      </div>
+      <div style="border: 1px solid oklch(0.269 0 0); border-radius: 16px; background: oklch(0.16 0 0); display: grid; place-items: center; min-height: 0;">
+        <div style="width: 106px; height: 189px; border-radius: 12px; border: 1px solid oklch(0.371 0 0); background: linear-gradient(160deg, oklch(0.3 0 0), oklch(0.18 0 0));"></div>
+      </div>
+    </div>
+    <div style="height: 232px;"></div>
+  </div>
+
+  <!-- docked sheet: same edge at every width, actions on the right of one row -->
+  <div style="position: absolute; left: 0; right: 0; bottom: 0; border-top: 1px solid oklch(0.371 0 0); background: oklch(0.145 0 0); box-shadow: 0 -24px 48px -12px rgba(0,0,0,0.7); display: flex; flex-direction: column;">
+    <div style="display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 20px; border-bottom: 1px solid oklch(0.269 0 0);">
+      <div style="display: flex; align-items: baseline; gap: 10px;">
+        <span style="font-size: 15px; font-weight: 600;">Apply configuration</span>
+        <span class="lbl">From original-a.mp4 · Group 2.0s</span>
+      </div>
+      <span style="width: 28px; height: 28px; border-radius: 8px; border: 1px solid oklch(0.269 0 0); display: grid; place-items: center;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="oklch(0.708 0 0)" stroke-width="2" stroke-linecap="round">
+          <path d="M18 6 6 18"></path><path d="M6 6l12 12"></path>
+        </svg>
+      </span>
+    </div>
+
+    <div style="display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 24px; padding: 16px 20px;">
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <span style="font-size: 11px; font-weight: 600; letter-spacing: 0.8px; color: oklch(0.556 0 0);">SCOPE</span>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+          <span class="chip">
+            <span style="width: 15px; height: 15px; border-radius: 4px; background: oklch(0.546 0.245 262.881); display: grid; place-items: center;">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"><path d="M20 6 9 17l-5-5"></path></svg>
+            </span>
+            <span style="font-size: 13px;">All hook groups for this original</span>
+          </span>
+          <span class="chip">
+            <span style="width: 15px; height: 15px; border-radius: 4px; background: oklch(0.546 0.245 262.881); display: grid; place-items: center;">
+              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round"><path d="M20 6 9 17l-5-5"></path></svg>
+            </span>
+            <span style="font-size: 13px;">This hook group for all originals</span>
+          </span>
+        </div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <span style="font-size: 11px; color: oklch(0.708 0 0); border: 1px solid oklch(0.269 0 0); border-radius: 6px; padding: 4px 8px;">original-a · 2.035s → 10.077s</span>
+          <span style="font-size: 11px; color: oklch(0.708 0 0); border: 1px solid oklch(0.269 0 0); border-radius: 6px; padding: 4px 8px;">original-a · 4.037s → 10.077s</span>
+          <span style="font-size: 11px; color: oklch(0.879 0.169 91.605); border: 1px solid oklch(0.269 0 0); border-radius: 6px; padding: 4px 8px;">original-b · 2.035s → 7.074s</span>
+          <span style="font-size: 11px; color: oklch(0.879 0.169 91.605); border: 1px solid oklch(0.269 0 0); border-radius: 6px; padding: 4px 8px;">original-b · 4.037s → 9.076s</span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px; justify-content: flex-end;">
+        <span style="font-size: 13px; color: #fff;">4 biến thể sẽ được đánh dấu đã kiểm tra</span>
+        <span style="text-align: center; font-size: 14px; font-weight: 600; color: #fff; background: oklch(0.596 0.145 163.225); border-radius: 12px; padding: 11px 12px;">Apply &amp; mark reviewed (4)</span>
+        <div style="display: flex; gap: 8px;">
+          <span style="flex-grow: 1; text-align: center; font-size: 13px; font-weight: 600; color: oklch(0.882 0.059 254.128); border: 1px solid oklch(0.546 0.245 262.881); border-radius: 12px; padding: 9px 12px;">Retry preview</span>
+          <span style="flex-grow: 1; text-align: center; font-size: 13px; color: oklch(0.87 0 0); border: 1px solid oklch(0.269 0 0); border-radius: 12px; padding: 9px 12px;">Cancel</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() { return {}; }
+}
+</script>
+</body>
+</html>

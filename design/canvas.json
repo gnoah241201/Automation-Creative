@@ -1,0 +1,74 @@
+{
+  "pages": [
+    { "id": "van-de", "name": "Vấn đề (đo được)" },
+    { "id": "phuong-an", "name": "Phương án" }
+  ],
+  "artboards": [
+    { "file": "Problem-1279.dc.html", "page": "van-de", "x": 0, "y": 0, "w": 1279, "h": 2400, "title": "Hiện tại · 1279×900" },
+    { "file": "Problem-1280x720.dc.html", "page": "van-de", "x": 1400, "y": 0, "w": 1280, "h": 980, "title": "Hiện tại · 1280×720" },
+
+    { "file": "Main.dc.html", "page": "phuong-an", "x": 0, "y": 0, "w": 1280, "h": 720, "title": "Đề xuất · Edit screen 1280×720" },
+    { "file": "Option-A-SidePanel.dc.html", "page": "phuong-an", "x": 0, "y": 860, "w": 1280, "h": 720, "title": "A · Panel neo phải" },
+    { "file": "Option-B-Modal.dc.html", "page": "phuong-an", "x": 1400, "y": 860, "w": 1280, "h": 720, "title": "B · Modal giữa" },
+    { "file": "Option-C-BottomSheet.dc.html", "page": "phuong-an", "x": 2800, "y": 860, "w": 1280, "h": 720, "title": "C · Sheet đáy" }
+  ],
+  "annotations": [
+    {
+      "id": "do-1279",
+      "page": "van-de",
+      "x": -420,
+      "y": 0,
+      "w": 380,
+      "text": "Dưới 1280px CSS px, grid rớt về 1 cột.\n\nDrawer Apply nằm ở y = 1948px, nút Apply ở y = 2167px.\nMàn hình cao 900px → phải cuộn 1303px mới thấy.\n\nĐây là lý do phải zoom nhỏ mới thấy: zoom nhỏ làm\nviewport tính theo CSS px vượt 1280 → grid nhảy về\n3 cột → drawer hiện ra."
+    },
+    {
+      "id": "do-1280",
+      "page": "van-de",
+      "x": 1400,
+      "y": -240,
+      "w": 380,
+      "text": "Ở 1280px grid ĐÚNG 3 cột, nhưng chiều cao vẫn hỏng.\n\nDrawer bắt đầu ở y = 514px. Trên màn 720px:\nApply ở y = 733–769, Cancel ở 777–813.\nCả hai bị khuyết 93px.\n\nNên sửa layout ngang là chưa đủ."
+    },
+    {
+      "id": "nguyen-nhan",
+      "page": "phuong-an",
+      "x": -420,
+      "y": 0,
+      "w": 380,
+      "text": "Gốc của lỗi: drawer là <aside> nằm TRONG luồng grid,\nnên nhìn thấy được hay không phụ thuộc cỡ cửa sổ và\nvị trí cuộn.\n\nCả 3 phương án đều neo overlay vào viewport\n(position: fixed) với thân cuộn riêng và hàng nút\nghim cố định — nút hành động không bao giờ rơi ra\nngoài màn hình, dù cửa sổ cao bao nhiêu.\n\nSourceEditDrawer đã làm đúng kiểu này khi màn hẹp\n(bottom sheet); BulkApplyDrawer không có xử lý nào."
+    },
+    {
+      "id": "danh-gia-a",
+      "page": "phuong-an",
+      "x": 0,
+      "y": 1620,
+      "w": 400,
+      "text": "A · Panel neo phải — đề xuất\n\nGiữ được timeline và preview trong tầm mắt, nên thấy\nrõ đang copy cấu hình TỪ biến thể nào. Gần nhất với\nlayout 3 cột hiện tại nên diff code nhỏ nhất.\n\nĐánh đổi: chiếm 380px bề ngang; dưới ~900px thì nên\nchuyển thành sheet đáy."
+    },
+    {
+      "id": "danh-gia-b",
+      "page": "phuong-an",
+      "x": 1400,
+      "y": 1620,
+      "w": 400,
+      "text": "B · Modal giữa\n\nRộng nhất nên đủ chỗ cho bảng 4 biến thể kèm trimEnd\n— chỗ dễ gây bất ngờ nhất (video ngắn bị rút trim).\nMột layout dùng cho mọi cỡ màn.\n\nĐánh đổi: che mất timeline, không đối chiếu được với\nbiến thể nguồn khi đang chọn scope."
+    },
+    {
+      "id": "danh-gia-c",
+      "page": "phuong-an",
+      "x": 2800,
+      "y": 1620,
+      "w": 400,
+      "text": "C · Sheet đáy\n\nMột cách bám cạnh cho mọi bề ngang, khớp sẵn với\nSourceEditDrawer đang làm. Preview vẫn thấy phía trên.\n\nĐánh đổi: ăn chiều cao — đúng thứ đang thiếu ở màn\n720px; và scope nằm ngang nên khó đọc hơn khi có\nnhiều nhóm hook."
+    },
+    {
+      "id": "ghi-chu-main",
+      "page": "phuong-an",
+      "x": -420,
+      "y": 620,
+      "w": 380,
+      "text": "Bản Edit screen đề xuất, vẽ đúng 1280×720.\n\nĐổi thêm ngoài phần overlay:\n· 3 thẻ stepper cao → một rail ngang, lấy lại ~110px\n  chiều cao mà màn 720px đang thiếu\n· Mark reviewed + Apply xuống thanh hành động ghim\n  đáy cửa sổ, cùng cách chống khuyết như overlay\n· Trạng thái lưu nháp lên rail trên, không còn nằm\n  lẫn giữa sidebar\n· Insert/Trim/Crop thành segmented control\n· Chỉ vùng làm việc cuộn, khung app đứng yên\n\nBật tweak showPanel để xem panel phương án A."
+    }
+  ],
+  "launch": { "view": "canvas", "page": "phuong-an" }
+}

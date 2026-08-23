@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+/* Design-canvas working files are mockups, not app source. Tailwind would otherwise scan them and
+   emit utilities for classes the app never uses — they nearly doubled the shipped stylesheet. */
+@source not "../design";
