@@ -28,7 +28,7 @@ import {
 } from './SourceEditDrawer.tsx';
 import { ComposerSourceChange, reduceComposerSourceAssets } from './sourceAssets.ts';
 import {
-  composerReducer, ComposerStage, initialComposerState, sameComposerConfiguration,
+  composerReducer, ComposerStage, ComposerTool, initialComposerState, sameComposerConfiguration,
 } from './state.ts';
 import { ReviewMatrix } from './ReviewMatrix.tsx';
 import { useJobPolling } from '../render/useJobPolling.ts';
@@ -67,6 +67,50 @@ export const createDefaultComposerConfiguration = (
   transition: 'cut',
   reviewed: false,
 });
+
+/**
+ * Vietnamese help text for the Insert / Trim / Crop tools. The numbers come from the active
+ * variation so the limits shown are the real ones for that original and duration group.
+ */
+export function ComposerToolGuidance({ tool, originalDuration, maxHookDuration }: {
+  tool: ComposerTool;
+  originalDuration: number;
+  maxHookDuration: number;
+}) {
+  const combinedDuration = originalDuration + maxHookDuration;
+  return (
+    <div className="mt-3 rounded-lg border border-neutral-800 bg-neutral-900/50 p-3 text-xs leading-5 text-neutral-400">
+      {tool === 'insert' && (
+        <p>
+          <strong className="font-semibold text-neutral-200">Chèn hook.</strong>{' '}
+          Kéo khối <em>Hook</em> trên timeline để chọn điểm chèn, trong khoảng 0–{originalDuration.toFixed(3)}s
+          của video gốc. Video xuất ra theo thứ tự: phần gốc trước điểm chèn, rồi hook, rồi phần gốc còn lại.
+          Khi bạn di chuyển hook, vùng trim tự nới ra để hook luôn nằm trọn bên trong.
+        </p>
+      )}
+      {tool === 'trim' && (
+        <p>
+          <strong className="font-semibold text-neutral-200">Cắt đoạn xuất ra.</strong>{' '}
+          Kéo hai tay cầm <em>Trim start</em> và <em>Trim end</em>. Timeline tính theo độ dài đã ghép
+          (gốc + hook = {combinedDuration.toFixed(3)}s). Trim start không vượt quá điểm chèn và Trim end
+          không lùi trước lúc hook kết thúc, nên hook dài nhất trong nhóm luôn được giữ đủ.
+        </p>
+      )}
+      {tool === 'crop' && (
+        <p>
+          <strong className="font-semibold text-neutral-200">Khung 9:16.</strong>{' '}
+          Khung cắt được chọn ở bước Sources và không làm thay đổi file gốc. Ở bước này chỉ để xem lại,
+          cả hai preview đều đã áp khung đó. Muốn sửa thì quay lại bước Sources rồi bấm Crop trên video cần đổi.
+        </p>
+      )}
+      {tool !== 'crop' && (
+        <p className="mt-2 text-neutral-500">
+          Mỗi lần đổi Insert hoặc Trim, biến thể này sẽ bị bỏ dấu đã kiểm tra — bấm “Mark reviewed” lại khi xong.
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function HookComposerPage() {
   const [state, dispatch] = useReducer(composerReducer, initialComposerState);
@@ -821,7 +865,11 @@ export function HookComposerPage() {
               <div className="mt-5 grid grid-cols-2 gap-2">
                 {(['insert', 'trim', 'crop'] as const).map((tool) => <button key={tool} type="button" disabled={bulkApplyBusy} onClick={() => dispatch({ type: 'setTool', tool })} className={state.tool === tool ? 'rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold capitalize text-white disabled:opacity-50' : 'rounded-lg border border-neutral-700 px-3 py-2 text-xs font-semibold capitalize text-neutral-300 hover:bg-neutral-800 disabled:opacity-50'}>{tool}</button>)}
               </div>
-              {state.tool === 'crop' && <p className="mt-3 text-xs leading-5 text-neutral-400">The non-destructive 9:16 crops selected during source import are applied to both previews.</p>}
+              <ComposerToolGuidance
+                tool={state.tool}
+                originalDuration={getEffectiveSourceDuration(activeOriginal)}
+                maxHookDuration={activeGroup.maxDuration}
+              />
               <div className="mt-6 border-t border-neutral-800 pt-4 text-xs">
                 {saveState === 'saving' && <p className="inline-flex items-center gap-2 text-neutral-400"><LoaderCircle className="h-3.5 w-3.5 animate-spin" /> Saving draft…</p>}
                 {saveState === 'saved' && <p className="inline-flex items-center gap-2 text-emerald-300"><Check className="h-3.5 w-3.5" /> Draft saved</p>}
