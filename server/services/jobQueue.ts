@@ -24,6 +24,8 @@ import {
 
 type InputUploadPaths = {
   foregroundPath: string;
+  /** Upload session this foreground was staged from, when there was one. */
+  sourceUploadId?: string;
   backgroundVideoPath?: string;
   backgroundImagePath?: string;
   overlayPath?: string;
@@ -294,6 +296,7 @@ export class JobQueueService {
         workDir,
       },
       ownerKey,
+      sourceUploadId: uploads.sourceUploadId,
       status: 'queued',
       progress: 0,
       outputFilename: spec.outputFilename,

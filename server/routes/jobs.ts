@@ -1,5 +1,6 @@
 import express from 'express';
 import multer from 'multer';
+import { ZipArchive } from 'archiver';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -13,6 +14,11 @@ import {
   LocalLibraryService,
   LocalLibraryValidationError,
 } from '../services/localLibrary.ts';
+import {
+  RenderBundleValidationError,
+  RenderDownloadBundleService,
+} from '../services/renderDownloadBundles.ts';
+import { resolveBackgroundVideoPath } from '../services/backgroundSource.ts';
 
 // Extend Express Request to track temp directories
 declare module 'express-serve-static-core' {
@@ -85,14 +91,81 @@ async function cleanupTempDir(tempWorkDir: string | undefined): Promise<void> {
 
 export const buildJobsRouter = (
   queue: JobQueueService,
-  deps?: { library: LocalLibraryService },
+  deps?: { library: LocalLibraryService; renderBundles?: RenderDownloadBundleService },
 ) => {
   const router = express.Router();
+  const renderBundles = deps?.renderBundles
+    ?? new RenderDownloadBundleService({ getJob: (jobId) => queue.getJob(jobId) });
   const publicJobError = (job: { status: string; error?: string }): string | undefined => (
     job.status === 'failed' && job.error
       ? 'Render failed. Retry the job or check the source media.'
       : undefined
   );
+
+  // Registered before '/:id' so a bundle path is never read as a job id.
+  router.post('/download-bundles', express.json(), async (req, res) => {
+    try {
+      const owner = res.locals.authSessionOwnerKey as string | undefined;
+      renderBundles.pruneExpired();
+      const bundles = await renderBundles.prepare(req.body?.jobIds, owner);
+      res.status(201).json({ bundles });
+    } catch (error) {
+      if (error instanceof RenderBundleValidationError) {
+        res.status(400).json({ error: 'ValidationError', message: error.message });
+        return;
+      }
+      console.error('[jobs] Failed to prepare download bundles:', error);
+      res.status(500).json({ error: 'InternalError', message: 'Could not prepare ZIP download' });
+    }
+  });
+
+  router.get('/download-bundles/:token', async (req, res) => {
+    const owner = res.locals.authSessionOwnerKey as string | undefined;
+    const claim = renderBundles.claim(req.params.token, owner);
+    if (claim.status === 'expired') {
+      res.status(410).json({ error: 'Gone', message: 'Download bundle is no longer available' });
+      return;
+    }
+    if (claim.status === 'missing') {
+      res.status(404).json({ error: 'NotFound', message: 'Download bundle not found' });
+      return;
+    }
+
+    const bundle = claim.bundle;
+    try {
+      res.attachment(bundle.filename).type('application/zip');
+      // Outputs are already H.264; deflating them again costs CPU for nothing.
+      const archive = new ZipArchive({ statConcurrency: 1, zlib: { level: 0 } });
+      let streamFailed = false;
+      const failStream = () => {
+        if (streamFailed) return;
+        streamFailed = true;
+        console.error(`[jobs] ZIP stream failed for bundle ${bundle.token}`);
+        archive.abort();
+        res.destroy();
+      };
+      archive.on('error', failStream);
+      archive.on('warning', failStream);
+      res.once('close', () => {
+        if (!res.writableFinished) archive.abort();
+      });
+      res.once('finish', () => {
+        renderBundles.release(bundle.token);
+        for (const jobId of bundle.jobIds) {
+          queue.markJobDownloaded(jobId).catch((error) => {
+            console.error(`[jobs] Failed to record download for job ${jobId}:`, error);
+          });
+        }
+      });
+      archive.pipe(res);
+      for (const entry of bundle.entries) archive.file(entry.path, { name: entry.archiveName });
+      await archive.finalize();
+    } catch (error) {
+      console.error(`[jobs] Failed to stream bundle ${bundle.token}:`, error);
+      if (res.headersSent) res.destroy();
+      else res.status(500).json({ error: 'InternalError', message: 'Failed to stream ZIP download' });
+    }
+  });
 
   router.post('/uploads/from-library', express.json(), async (req, res) => {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
@@ -320,6 +393,15 @@ export const buildJobsRouter = (
           }
         }
 
+        // A clip acting as its own background needs no uploaded file; the
+        // renderer just takes the foreground as its second input.
+        if (foregroundPath) {
+          backgroundVideoPath = resolveBackgroundVideoPath(spec, {
+            foregroundPath,
+            uploadedBackgroundVideoPath: backgroundVideoPath,
+          });
+        }
+
         // Validate spec and file combinations
         const validationErrors = validateRenderSpec(spec, {
           hasForeground: !!foregroundPath,
@@ -347,6 +429,7 @@ export const buildJobsRouter = (
 
         const job = await queue.createJob(spec, {
           foregroundPath: foregroundPath!,
+          sourceUploadId: uploadIdRaw || undefined,
           backgroundVideoPath,
           backgroundImagePath,
           overlayPath: overlay

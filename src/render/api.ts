@@ -180,3 +180,51 @@ export const createTrimJob = async (params: {
 
   return response.json();
 };
+
+export interface PreparedRenderBundle {
+  token: string;
+  zipFilename: string;
+  entryCount: number;
+  expiresAt: number;
+  downloadUrl: string;
+}
+
+/**
+ * Groups completed outputs into one ZIP per game/version/suffix. Each bundle is
+ * fetched separately, so the caller gets a list of download URLs, not a file.
+ */
+export const prepareRenderDownloadBundles = async (
+  jobIds: string[],
+): Promise<PreparedRenderBundle[]> => {
+  const response = await fetch(`${API_BASE}/download-bundles`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jobIds }),
+  });
+
+  if (!response.ok) {
+    const error = await parseErrorResponse(response);
+    throw new Error(error.message);
+  }
+
+  const body = await response.json() as { bundles?: PreparedRenderBundle[] };
+  return body.bundles ?? [];
+};
+
+/** Navigates to a bundle URL, rejecting anything that is not one of ours. */
+export const startRenderBundleDownload = (downloadUrl: string): void => {
+  if (!/^\/api\/jobs\/download-bundles\/[A-Za-z0-9_-]+$/.test(downloadUrl)) {
+    throw new Error('Invalid bundle download URL');
+  }
+  const resolvedUrl = new URL(downloadUrl, globalThis.location.origin);
+  if (resolvedUrl.origin !== globalThis.location.origin || resolvedUrl.pathname !== downloadUrl) {
+    throw new Error('Invalid bundle download URL');
+  }
+  const anchor = document.createElement('a');
+  anchor.href = resolvedUrl.href;
+  anchor.download = '';
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+};
