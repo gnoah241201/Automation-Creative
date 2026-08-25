@@ -1,21 +1,29 @@
 import { InputRatio, AspectRatio } from '../../shared/render-contract';
 
 /**
- * Duration threshold for adding the 30s long-form output variant.
- * If fgDuration > DURATION_THRESHOLD, add 30s output variant (Rule A).
- * For 60/90/120s tiers, see LONG_TIERS thresholds.
+ * Cut lengths offered on the two primary ratios (9:16 and 16:9).
+ *
+ * Short tiers are produced as real encodes on the input's own ratio so their
+ * duration is exact — `buildTrimCommand` stream-copies (`-t N -c copy`), which
+ * lands on a packet boundary and can be up to one GOP off. That slack is
+ * acceptable for a 120s cut and not for a 6s one.
+ *
+ * Long tiers keep the single-master scheme: one same-ratio encode at the
+ * longest active length, everything shorter trimmed from it.
  */
-export const DURATION_THRESHOLD = 35;
+export const SHORT_TIERS = [6, 10, 12, 15] as const;
+export const LONG_TIERS = [30, 60, 90, 120] as const;
+
+/** 4:5 and 1:1 never get the full tier table — only the full length and one 30s cut. */
+const SECONDARY_RATIOS = ['4:5', '1:1'] as const;
+const SECONDARY_CUT_SECONDS = 30;
 
 /**
- * Long-form duration tiers. When fgDuration > `threshold`, add an output of
- * `seconds` length. Applies to the 9:16 and 16:9 output ratios only.
+ * Short tiers that get a preview box. Preview shows composition, which is
+ * identical across cut lengths of one ratio, so only the two lengths that were
+ * previewed before the tier table existed keep a box.
  */
-export const LONG_TIERS: ReadonlyArray<{ seconds: number; threshold: number }> = [
-  { seconds: 60, threshold: 70 },
-  { seconds: 90, threshold: 100 },
-  { seconds: 120, threshold: 130 },
-];
+const PREVIEWED_SHORT_TIERS: ReadonlySet<number> = new Set([6, 15]);
 
 /**
  * Output configuration for a single render variant.
@@ -26,212 +34,198 @@ export interface OutputConfig {
   /** Duration in seconds. undefined means full video. */
   duration?: number;
   label: string;
-  /** Flag indicating this is a same-ratio long-form render: 30s variant, or the longest active tier from 60/90/120s duration-tiered outputs. */
+  /** Marks the one same-ratio long-form encode that shorter long tiers trim from. */
   isLongFormExtension?: boolean;
   /** If set, this output should be trimmed from the full-length output with this ID (stream copy, no re-encode). */
   trimFrom?: string;
   /** Whether this output should show a preview box. Trim-only variants skip preview. */
   showPreview?: boolean;
+  /**
+   * Same-ratio long-form member. These share one encode: exactly one of them is
+   * rendered and the rest are trimmed from it. Which one is the encode depends
+   * on what the user selected, so `planSelectedOutputs` decides it, not this
+   * module.
+   */
+  sameRatioLongForm?: boolean;
 }
 
+const cutLabel = (ratio: AspectRatio, seconds: number): string =>
+  `Output: ${ratio} (${seconds}s cut)`;
+
 /**
- * Appends duration-tiered long-form outputs (60/90/120s) for the two primary
- * ratios only (9:16 and 16:9).
- *
- * - Same-ratio (matching input): no full-length same-ratio source exists, so the
- *   longest active tier is a real "master" render and shorter tiers trim from it.
- * - Cross-ratio: trims (stream copy) from the full-length cross primary, whose
- *   output id equals the cross ratio string ('9:16' or '16:9').
+ * A tier qualifies when the source is strictly longer than the cut — a cut the
+ * source cannot fill is just the source again under a misleading name.
+ * A missing or non-finite duration qualifies for nothing.
  */
-function appendTieredLongOutputs(
+const activeTiers = (
+  tiers: ReadonlyArray<number>,
+  fgDuration: number | undefined,
+): number[] => (fgDuration === undefined || !Number.isFinite(fgDuration)
+  ? []
+  : tiers.filter((tier) => fgDuration > tier));
+
+/**
+ * Same-ratio outputs. There is no full-length same-ratio primary to trim from,
+ * so short tiers are real encodes and the longest long tier becomes the master
+ * that the remaining long tiers trim from.
+ *
+ * When the source is too short for any tier, the full length is offered instead
+ * so the ratio is still reachable at all.
+ */
+const appendSameRatioOutputs = (
   outputs: OutputConfig[],
-  inputRatio: InputRatio,
-  fgDuration?: number,
-): void {
-  if (fgDuration === undefined) {
-    return;
-  }
-  const active = LONG_TIERS.filter((tier) => fgDuration > tier.threshold);
-  if (active.length === 0) {
+  ratio: InputRatio,
+  shortActive: number[],
+  longActive: number[],
+): void => {
+  if (shortActive.length === 0 && longActive.length === 0) {
+    outputs.push({ id: ratio, ratio, label: `Output: ${ratio}`, showPreview: true });
     return;
   }
 
-  const crossRatio: InputRatio = inputRatio === '16:9' ? '9:16' : '16:9';
-  const master = active[active.length - 1]; // longest active tier
-  const masterId = `${inputRatio}-${master.seconds}s`;
+  for (const seconds of shortActive) {
+    outputs.push({
+      id: `${ratio}-${seconds}s`,
+      ratio,
+      duration: seconds,
+      label: cutLabel(ratio, seconds),
+      showPreview: PREVIEWED_SHORT_TIERS.has(seconds),
+    });
+  }
 
-  // Same-ratio master: real render (no trimFrom).
+  if (longActive.length === 0) return;
+
+  const masterSeconds = longActive[longActive.length - 1];
+  const masterId = `${ratio}-${masterSeconds}s`;
   outputs.push({
     id: masterId,
-    ratio: inputRatio,
-    duration: master.seconds,
-    label: `Output: ${inputRatio} (${master.seconds}s cut)`,
+    ratio,
+    duration: masterSeconds,
+    label: cutLabel(ratio, masterSeconds),
     isLongFormExtension: true,
+    sameRatioLongForm: true,
     showPreview: false,
   });
 
-  // Same-ratio shorter tiers: trim from the master.
-  for (const tier of active.slice(0, -1)) {
+  for (const seconds of longActive.slice(0, -1)) {
     outputs.push({
-      id: `${inputRatio}-${tier.seconds}s`,
-      ratio: inputRatio,
-      duration: tier.seconds,
-      label: `Output: ${inputRatio} (${tier.seconds}s cut)`,
+      id: `${ratio}-${seconds}s`,
+      ratio,
+      duration: seconds,
+      label: cutLabel(ratio, seconds),
       trimFrom: masterId,
+      sameRatioLongForm: true,
       showPreview: false,
     });
   }
-
-  // Cross-ratio tiers: trim from the full-length cross primary.
-  for (const tier of active) {
-    outputs.push({
-      id: `${crossRatio}-${tier.seconds}s`,
-      ratio: crossRatio,
-      duration: tier.seconds,
-      label: `Output: ${crossRatio} (${tier.seconds}s cut)`,
-      trimFrom: crossRatio,
-      showPreview: false,
-    });
-  }
-}
+};
 
 /**
- * Derives the list of output configurations based on input ratio and foreground duration.
+ * Resolves a selection into an executable plan.
  *
- * Rule A (Long-Video Output - same ratio):
- * - If fgDuration <= 35: no 30s output variant
- * - If fgDuration > 35: add exactly 1 output 30s with ratio matching input
+ * The same-ratio long-form outputs share one encode. Which one carries it
+ * depends on the selection, not on what the source could theoretically produce:
+ * picking only the 30s cut must render 30s, not render 120s and trim 30s off it.
+ * So the longest *selected* member becomes the encode and the rest trim from it.
  *
- * Rule B (Extended cross-ratio outputs):
- * - If fgDuration > 35: add cross-ratio 30s/15s variants that trim from full-length outputs
- * - Input 9:16: add 16:9 30s, 16:9 15s, 4:5 30s, 1:1 30s
- * - Input 16:9: add 9:16 30s, 9:16 15s, 4:5 30s, 1:1 30s
- * - These are trim-only jobs (stream copy from the full-length output of the same ratio)
+ * Everything else passes through untouched — cross-ratio cuts already trim from
+ * a full-length primary that is always present, and short same-ratio cuts are
+ * independent encodes.
+ */
+export const planSelectedOutputs = (
+  available: OutputConfig[],
+  selectedIds: ReadonlySet<string>,
+): OutputConfig[] => {
+  const selected = available.filter((output) => selectedIds.has(output.id));
+
+  // Resolved per ratio: a batch catalog is the union of several sources and can
+  // hold long-form families for both orientations at once. One master across
+  // the whole list would re-parent 9:16 cuts onto a longer 16:9 encode.
+  const masterByRatio = new Map<AspectRatio, OutputConfig>();
+  for (const output of selected) {
+    if (!output.sameRatioLongForm) continue;
+    const current = masterByRatio.get(output.ratio);
+    if (!current || (output.duration ?? 0) > (current.duration ?? 0)) {
+      masterByRatio.set(output.ratio, output);
+    }
+  }
+  if (masterByRatio.size === 0) return selected;
+
+  return selected.map((output) => {
+    if (!output.sameRatioLongForm) return output;
+    const master = masterByRatio.get(output.ratio);
+    if (!master || output.id === master.id) {
+      return { ...output, trimFrom: undefined, isLongFormExtension: true };
+    }
+    return { ...output, trimFrom: master.id, isLongFormExtension: undefined };
+  });
+};
+
+/**
+ * Cross-ratio outputs. The full-length primary always exists here, so every
+ * cut is a stream-copy trim from it and costs no extra encode.
+ */
+const appendCrossRatioOutputs = (
+  outputs: OutputConfig[],
+  ratio: InputRatio,
+  shortActive: number[],
+  longActive: number[],
+): void => {
+  outputs.push({ id: ratio, ratio, label: `Output: ${ratio}`, showPreview: true });
+
+  for (const seconds of [...shortActive, ...longActive]) {
+    outputs.push({
+      id: `${ratio}-${seconds}s`,
+      ratio,
+      duration: seconds,
+      label: cutLabel(ratio, seconds),
+      trimFrom: ratio,
+      showPreview: false,
+    });
+  }
+};
+
+/**
+ * Derives the list of output configurations from the input ratio and the
+ * foreground duration.
  *
- * Rule C (Duration-tiered long outputs):
- * - For 9:16 and 16:9 ratios only: add 60/90/120s outputs when fgDuration exceeds the respective thresholds (70/100/130).
- * - Same-ratio: longest active tier is a real render (no trimFrom); shorter tiers trim from it.
- * - Cross-ratio: all tiers trim from the full-length cross primary.
+ * - 9:16 and 16:9 each offer the full tier table (6/10/12/15/30/60/90/120s),
+ *   gated on `fgDuration > tier`.
+ * - 4:5 and 1:1 offer the full length plus a 30s cut on the same gate.
+ * - Full-length primaries are always offered for every ratio other than the
+ *   input's own, which has no full-length form.
  *
  * @param inputRatio - The aspect ratio of the input video (16:9 or 9:16)
- * @param fgDuration - The duration of the foreground video in seconds (undefined if not yet loaded)
+ * @param fgDuration - The duration of the foreground video in seconds (undefined if not yet probed)
  * @returns Array of output configurations
  */
 export function deriveOutputs(inputRatio: InputRatio, fgDuration?: number): OutputConfig[] {
   const outputs: OutputConfig[] = [];
-  
-  // Threshold check for Rule A & B
-  const shouldAddLongForm = fgDuration !== undefined && fgDuration > DURATION_THRESHOLD;
+  const shortActive = activeTiers(SHORT_TIERS, fgDuration);
+  const longActive = activeTiers(LONG_TIERS, fgDuration);
 
-  if (inputRatio === '16:9') {
-    // Standard outputs for 16:9 input
-    outputs.push({ id: '9:16', ratio: '9:16', label: 'Output: 9:16', showPreview: true });
-    outputs.push({ id: '16:9-6s', ratio: '16:9', duration: 6, label: 'Output: 16:9 (6s cut)', showPreview: true });
-    outputs.push({ id: '16:9-15s', ratio: '16:9', duration: 15, label: 'Output: 16:9 (15s cut)', showPreview: true });
-    outputs.push({ id: '4:5', ratio: '4:5', label: 'Output: 4:5', showPreview: true });
-    outputs.push({ id: '1:1', ratio: '1:1', label: 'Output: 1:1', showPreview: true });
-    
-    // Rule A: Add long-form 30s variant (same ratio) if duration > 35
-    if (shouldAddLongForm) {
-      outputs.push({ 
-        id: '16:9-30s', 
-        ratio: '16:9', 
-        duration: 30, 
-        label: 'Output: 16:9 (30s cut)',
-        isLongFormExtension: true,
-        showPreview: false,
-      });
-
-      // Rule B: Add cross-ratio extended outputs (trim from full-length)
-      outputs.push({
-        id: '9:16-30s',
-        ratio: '9:16',
-        duration: 30,
-        label: 'Output: 9:16 (30s cut)',
-        trimFrom: '9:16',
-        showPreview: false,
-      });
-      outputs.push({
-        id: '9:16-15s',
-        ratio: '9:16',
-        duration: 15,
-        label: 'Output: 9:16 (15s cut)',
-        trimFrom: '9:16',
-        showPreview: false,
-      });
-      outputs.push({
-        id: '4:5-30s',
-        ratio: '4:5',
-        duration: 30,
-        label: 'Output: 4:5 (30s cut)',
-        trimFrom: '4:5',
-        showPreview: false,
-      });
-      outputs.push({
-        id: '1:1-30s',
-        ratio: '1:1',
-        duration: 30,
-        label: 'Output: 1:1 (30s cut)',
-        trimFrom: '1:1',
-        showPreview: false,
-      });
+  // Primary ratios, listed 9:16 then 16:9 to keep the preview order stable.
+  for (const ratio of ['9:16', '16:9'] as const) {
+    if (ratio === inputRatio) {
+      appendSameRatioOutputs(outputs, ratio, shortActive, longActive);
+    } else {
+      appendCrossRatioOutputs(outputs, ratio, shortActive, longActive);
     }
-  } else {
-    // Standard outputs for 9:16 input
-    outputs.push({ id: '9:16-6s', ratio: '9:16', duration: 6, label: 'Output: 9:16 (6s cut)', showPreview: true });
-    outputs.push({ id: '9:16-15s', ratio: '9:16', duration: 15, label: 'Output: 9:16 (15s cut)', showPreview: true });
-    outputs.push({ id: '16:9', ratio: '16:9', label: 'Output: 16:9', showPreview: true });
-    outputs.push({ id: '4:5', ratio: '4:5', label: 'Output: 4:5', showPreview: true });
-    outputs.push({ id: '1:1', ratio: '1:1', label: 'Output: 1:1', showPreview: true });
-    
-    // Rule A: Add long-form 30s variant (same ratio) if duration > 35
-    if (shouldAddLongForm) {
-      outputs.push({ 
-        id: '9:16-30s', 
-        ratio: '9:16', 
-        duration: 30, 
-        label: 'Output: 9:16 (30s cut)',
-        isLongFormExtension: true,
-        showPreview: false,
-      });
+  }
 
-      // Rule B: Add cross-ratio extended outputs (trim from full-length)
+  for (const ratio of SECONDARY_RATIOS) {
+    outputs.push({ id: ratio, ratio, label: `Output: ${ratio}`, showPreview: true });
+    if (fgDuration !== undefined && Number.isFinite(fgDuration) && fgDuration > SECONDARY_CUT_SECONDS) {
       outputs.push({
-        id: '16:9-30s',
-        ratio: '16:9',
-        duration: 30,
-        label: 'Output: 16:9 (30s cut)',
-        trimFrom: '16:9',
-        showPreview: false,
-      });
-      outputs.push({
-        id: '16:9-15s',
-        ratio: '16:9',
-        duration: 15,
-        label: 'Output: 16:9 (15s cut)',
-        trimFrom: '16:9',
-        showPreview: false,
-      });
-      outputs.push({
-        id: '4:5-30s',
-        ratio: '4:5',
-        duration: 30,
-        label: 'Output: 4:5 (30s cut)',
-        trimFrom: '4:5',
-        showPreview: false,
-      });
-      outputs.push({
-        id: '1:1-30s',
-        ratio: '1:1',
-        duration: 30,
-        label: 'Output: 1:1 (30s cut)',
-        trimFrom: '1:1',
+        id: `${ratio}-${SECONDARY_CUT_SECONDS}s`,
+        ratio,
+        duration: SECONDARY_CUT_SECONDS,
+        label: cutLabel(ratio, SECONDARY_CUT_SECONDS),
+        trimFrom: ratio,
         showPreview: false,
       });
     }
   }
-
-  appendTieredLongOutputs(outputs, inputRatio, fgDuration);
 
   return outputs;
 }
