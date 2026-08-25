@@ -185,6 +185,19 @@ video means nothing across a run:
 `backgroundSource` is optional in `RenderSpec`; absent reads as `upload`, so
 pre-existing jobs are unaffected.
 
+**The foreground decides how long a render is.** The overlay in
+`buildCommand.ts` carries `shortest=1` for every background, not just the
+looped image it started on. Two backgrounds are endless — a still image under
+`-loop 1`, and the lavfi colour fallback taken when `bgType` is video and no
+file resolved — and a full-length output carries no `-t`, so an endless
+background left to decide the length produced a render with no end at all
+(measured: a 20s source still encoding past 225MB after ten minutes). Validation
+keeps that fallback unreachable through the submit route; the graph no longer
+depends on it staying that way. This also ended the frozen tail on an uploaded
+background longer than its foreground: a 12s background behind a 5s clip used to
+yield 12s of video, the last 7 of them a held frame, and now yields 5s. A clip
+that is its own background is unchanged, both inputs being one file.
+
 ## Output naming
 
 Config lives in `localStorage` (`src/naming/namingConfig.ts`) and **locks** the

@@ -240,3 +240,88 @@ test('precomposed mode 16:9 keeps existing behavior', () => {
   assert.ok(!filterComplex.includes('scale=3240'), 'precomposed mode 16:9 should not apply 3x scale');
   assert.ok(!filterComplex.includes('crop=1920:1080:1920'), 'precomposed mode 16:9 should not apply lower-center crop');
 });
+
+// --- Where the render ends ---
+//
+// Every background can outlast the foreground: a looped image and the lavfi
+// colour fallback are infinite, and an uploaded background video is whatever
+// length it happens to be. The foreground is the content, so it decides the
+// length — and an infinite background left to decide never ends at all.
+
+const videoBgSpec = (over = {}) => ({
+  inputRatio: '9:16' as const,
+  outputRatio: '9:16' as const,
+  fgPosition: 'center' as const,
+  bgType: 'video' as const,
+  backgroundImageMode: 'clean' as const,
+  blurAmount: 24,
+  logoX: 0, logoY: 0, logoSize: 100,
+  buttonType: 'text' as const, buttonX: 0, buttonY: 0, buttonSize: 100,
+  naming: { gameName: 'Game', version: 'v1', suffix: 'A' },
+  outputFilename: 'output.mp4',
+  ...over,
+});
+
+const overlayStep = (args: string[]): string => {
+  const filterComplex = args[args.indexOf('-filter_complex') + 1];
+  const step = filterComplex.split(';').map((s) => s.trim()).find((s) => s.includes('overlay='));
+  assert.ok(step, 'the graph must overlay the foreground onto the background');
+  return step;
+};
+
+test('an uploaded background video does not extend the render past the foreground', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec(),
+    foregroundPath: '/input/fg.mp4',
+    backgroundVideoPath: '/input/bg.mp4',
+    outputPath: '/output/result.mp4',
+  });
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+test('a clip that is its own background ends with itself', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec({ backgroundSource: 'self' }),
+    foregroundPath: '/input/fg.mp4',
+    backgroundVideoPath: '/input/fg.mp4',
+    outputPath: '/output/result.mp4',
+  });
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+test('the black fallback background cannot outrun the foreground', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec(),
+    foregroundPath: '/input/fg.mp4',
+    // No background file resolved: the builder falls back to a lavfi colour
+    // source, which produces frames forever.
+    outputPath: '/output/result.mp4',
+  });
+  assert.ok(args.join(' ').includes('color=c=black'), 'this is the infinite-source path');
+  assert.match(
+    overlayStep(args),
+    /shortest=1/,
+    'an endless background must not be what decides the length',
+  );
+});
+
+test('a full-length render carries no -t, so only the graph can end it', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec(),
+    foregroundPath: '/input/fg.mp4',
+    outputPath: '/output/result.mp4',
+  });
+  assert.equal(args.includes('-t'), false, 'nothing outside the graph bounds this render');
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+test('an image background still ends with the foreground', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec({ bgType: 'image' }),
+    foregroundPath: '/input/fg.mp4',
+    backgroundImagePath: '/input/bg.jpg',
+    outputPath: '/output/result.mp4',
+  });
+  assert.ok(args.join(' ').includes('-loop'), 'a still image is looped, so it never ends on its own');
+  assert.match(overlayStep(args), /shortest=1/);
+});

@@ -114,11 +114,12 @@ export const buildFfmpegCommand = (params: {
 
   filterGroups.push(`[0:v]${fgScaleStr}[fg_ready]`);
 
-  if (spec.bgType === 'image' && params.backgroundImagePath) {
-    filterGroups.push(`[bg_ready][fg_ready]overlay=${fgPosX}:${fgPosY}:shortest=1[bg_fg]`);
-  } else {
-    filterGroups.push(`[bg_ready][fg_ready]overlay=${fgPosX}:${fgPosY}[bg_fg]`);
-  }
+  // The foreground decides where the render ends. Every background here can
+  // outlast it: a looped still image and the lavfi colour fallback both produce
+  // frames forever, and an uploaded background video is whatever length it
+  // happens to be. Without this, an endless background means a render with no
+  // end — full-length outputs carry no '-t', so nothing else would stop it.
+  filterGroups.push(`[bg_ready][fg_ready]overlay=${fgPosX}:${fgPosY}:shortest=1[bg_fg]`);
 
   if (hasOverlay) {
     filterGroups.push(`[bg_fg][2:v]overlay=0:0[final_v]`);
