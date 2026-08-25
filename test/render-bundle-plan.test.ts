@@ -204,3 +204,27 @@ test('every entry carries the job it came from for error reporting', () => {
   const [group] = planRenderBundles([job({ jobId: 'abc' })]);
   assert.equal(group.entries.find((entry) => entry.kind === 'output')?.jobId, 'abc');
 });
+
+// --- Why the group key is encoded, not joined ---
+
+test('namings that differ only in where the field boundary falls stay apart', () => {
+  // Joined on any separator these two collapse into one zip, because the
+  // boundary is guessable from the fields themselves. The key encodes instead,
+  // so a field cannot contain an unescaped delimiter.
+  const groups = planRenderBundles([
+    job({ jobId: 'a', naming: { gameName: 'Hero', version: 'Wars_v3', suffix: 'UGC' } }),
+    job({ jobId: 'b', naming: { gameName: 'Hero_Wars', version: 'v3', suffix: 'UGC' } }),
+  ]);
+  assert.equal(groups.length, 2, 'two distinct namings, two zips');
+});
+
+test('a naming carrying control characters cannot forge a group boundary', () => {
+  const groups = planRenderBundles([
+    job({ jobId: 'a', naming: { gameName: 'Hero\u0000Wars', version: 'v3', suffix: 'UGC' } }),
+    job({ jobId: 'b', naming: { gameName: 'Hero', version: 'Wars\u0000v3', suffix: 'UGC' } }),
+  ]);
+  assert.equal(groups.length, 2, 'a smuggled separator does not merge two configs');
+  for (const group of groups) {
+    assert.ok(!group.zipFilename.includes('\u0000'), 'no control character reaches a filename');
+  }
+});
