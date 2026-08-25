@@ -1,4 +1,4 @@
-import { RenderSpec, InputRatio, AspectRatio, BackgroundType, ForegroundPosition, ButtonType, BackgroundImageMode } from '../../shared/render-contract';
+import { RenderSpec, InputRatio, AspectRatio, BackgroundType, BackgroundSource, ForegroundPosition, ButtonType, BackgroundImageMode } from '../../shared/render-contract';
 
 export interface ValidationError {
   error: string;
@@ -16,6 +16,7 @@ const VALID_INPUT_RATIOS: InputRatio[] = ['16:9', '9:16'];
 const VALID_OUTPUT_RATIOS: AspectRatio[] = ['9:16', '16:9', '4:5', '1:1'];
 const VALID_BG_TYPES: BackgroundType[] = ['video', 'image'];
 const VALID_BG_IMAGE_MODES: BackgroundImageMode[] = ['clean', 'precomposed'];
+const VALID_BG_SOURCES: BackgroundSource[] = ['self', 'upload'];
 const VALID_FG_POSITIONS: ForegroundPosition[] = ['left', 'center', 'right'];
 const VALID_BUTTON_TYPES: ButtonType[] = ['text', 'image'];
 
@@ -88,11 +89,27 @@ export function validateRenderSpec(
       });
     }
 
-    // 7. bgType === 'video' requires backgroundVideo
-    if (s.bgType === 'video' && !uploads.hasBackgroundVideo) {
+    // 7. bgType === 'video' requires backgroundVideo, unless the clip is its
+    // own background, in which case there is nothing to upload.
+    if (s.bgType === 'video' && s.backgroundSource !== 'self' && !uploads.hasBackgroundVideo) {
       errors.push({
         error: 'ValidationError',
         message: 'backgroundVideo is required when bgType is video',
+      });
+    }
+  }
+
+  // 7b. backgroundSource validation
+  if (s.backgroundSource !== undefined) {
+    if (!isValidRatio(s.backgroundSource, VALID_BG_SOURCES)) {
+      errors.push({
+        error: 'ValidationError',
+        message: `backgroundSource must be one of: ${VALID_BG_SOURCES.join(', ')}`,
+      });
+    } else if (s.backgroundSource === 'self' && s.bgType !== 'video') {
+      errors.push({
+        error: 'ValidationError',
+        message: "backgroundSource 'self' is only valid when bgType is video",
       });
     }
   }

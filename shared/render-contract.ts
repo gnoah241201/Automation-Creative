@@ -6,6 +6,12 @@ export type ForegroundPosition = 'left' | 'center' | 'right';
 
 export type BackgroundType = 'video' | 'image';
 
+/**
+ * Where a video background comes from. 'self' blurs the clip itself, so no file
+ * is uploaded. Absent means 'upload', which is how every pre-existing job behaves.
+ */
+export type BackgroundSource = 'self' | 'upload';
+
 export type BackgroundImageMode = 'clean' | 'precomposed';
 
 export type ButtonType = 'text' | 'image';
@@ -35,6 +41,7 @@ export interface RenderSpec {
   trimFromJobId?: string;
   fgPosition: ForegroundPosition;
   bgType: BackgroundType;
+  backgroundSource?: BackgroundSource;
   backgroundImageMode: BackgroundImageMode;
   blurAmount: number;
   logoX: number;

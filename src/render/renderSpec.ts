@@ -8,6 +8,7 @@ type BuilderInput = {
   bitrate?: number;
   fgPosition: RenderSpec['fgPosition'];
   bgType: RenderSpec['bgType'];
+  backgroundSource?: RenderSpec['backgroundSource'];
   backgroundImageMode: RenderSpec['backgroundImageMode'];
   blurAmount: number;
   logoX: number;
@@ -37,6 +38,7 @@ export const buildRenderSpec = (input: BuilderInput): RenderSpec => {
     bitrate: input.bitrate,
     fgPosition: input.fgPosition,
     bgType: input.bgType,
+    backgroundSource: input.backgroundSource,
     backgroundImageMode: input.backgroundImageMode,
     blurAmount: input.blurAmount,
     logoX: input.logoX,
