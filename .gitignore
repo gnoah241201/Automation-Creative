@@ -15,3 +15,6 @@ nul
 
 # Seeded design-canvas payload: ~2MB of generated editor code, rebuilt from design/*.dc.html
 design/*.html
+
+# Local dev-server launch config (Claude Code)
+.claude/

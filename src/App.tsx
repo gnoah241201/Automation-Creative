@@ -1,12 +1,43 @@
 import React, { CSSProperties, useState, useRef, useEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { Upload, Play, Pause, Volume2, VolumeX, Image as ImageIcon, Film, Type, Move, Download, X, RefreshCw, RotateCcw } from 'lucide-react';
-import { NamingMeta, parseVideoNamingMeta, buildOutputFilename } from './naming';
+import { NamingMeta, buildOutputFilename } from './naming';
+import {
+  applyNamingConfigToBatch,
+  clearNamingConfig,
+  emptyNamingConfig,
+  loadNamingConfig,
+  lockNamingConfig,
+  resolveNamingMeta,
+  saveNamingConfig,
+  type NamingConfig,
+} from './naming/namingConfig';
 import { JobStateResponse, RenderSpec } from '../shared/render-contract';
 import { buildRenderSpec } from './render/renderSpec';
 import { createOverlayPng } from './render/overlay';
-import { cancelRenderJob, createRenderJob, createTrimJob, createUploadSession, downloadRenderJob, getAuthSession, getRenderJob } from './render/api';
-import { deriveOutputs, OutputConfig } from './render/outputDerivation';
+import {
+  cancelRenderJob,
+  createRenderJob,
+  createTrimJob,
+  createUploadSession,
+  downloadRenderJob,
+  getAuthSession,
+  getRenderJob,
+  prepareRenderDownloadBundles,
+  startRenderBundleDownload,
+} from './render/api';
+import { deriveOutputs, OutputConfig, planSelectedOutputs } from './render/outputDerivation';
+import { deriveBatchOutputCatalog, deriveSourceOutputs, selectSourceOutputs } from './render/batchOutputs';
+import { buildBatchSources, nextConfigVersion, type ProbedUpload } from './render/batchUpload';
+import { validateBatchNaming } from './render/batchNaming';
+import { findAlreadyUsed, loadNamingHistory, rememberNaming } from './naming/namingHistory';
+import { sequenceVersions } from './naming/versionSequence';
+import {
+  browserProbeDeps,
+  durationFromState,
+  probeVideoDuration,
+  type FgDurationState,
+} from './render/fgDuration';
 import { getJobDisplayName } from './render/jobDisplay';
 import {
   DEFAULT_LOGO_SIZE,
@@ -515,6 +546,7 @@ export default function App() {
   const resizeBatchSources = resizeBatchState.sources;
   const [isBatchSubmitting, setIsBatchSubmitting] = useState(false);
   const [bgType, setBgType] = useState<'video' | 'image'>('video');
+  const [backgroundSource, setBackgroundSource] = useState<'self' | 'upload'>('upload');
   const [bgVideo, setBgVideo] = useState<string | null>(null);
   const [bgVideoFile, setBgVideoFile] = useState<File | null>(null);
   const [bgImage, setBgImage] = useState<string | null>(null);
@@ -539,12 +571,22 @@ export default function App() {
   const [buttonY, setButtonY] = useState(DEFAULT_BUTTON_Y);
   const [inputRatio, setInputRatio] = useState<'16:9' | '9:16'>('16:9');
   const [fgPosition, setFgPosition] = useState<'left' | 'center' | 'right'>('right');
-  // Naming metadata
-  const [gameName, setGameName] = useState('');
-  const [version, setVersion] = useState('');
-  const [suffix, setSuffix] = useState('');
-  const [fgDuration, setFgDuration] = useState<number | undefined>(undefined);
-  const [autoDetectedFields, setAutoDetectedFields] = useState<Set<string>>(new Set());
+  // Naming metadata. Persisted; once the user sets it, later uploads follow the
+  // config instead of being re-detected from their filenames.
+  const [namingConfig, setNamingConfig] = useState<NamingConfig>(
+    () => (typeof window === 'undefined'
+      ? emptyNamingConfig()
+      : loadNamingConfig(window.localStorage)),
+  );
+  const { gameName, version, suffix } = namingConfig;
+  const editNaming = (patch: Partial<NamingMeta>) =>
+    setNamingConfig((current) => lockNamingConfig(current, patch));
+  const resetNaming = () => {
+    if (typeof window !== 'undefined') clearNamingConfig(window.localStorage);
+    setNamingConfig(emptyNamingConfig());
+  };
+  const [fgDurationState, setFgDurationState] = useState<FgDurationState>({ status: 'idle' });
+  const fgDuration = durationFromState(fgDurationState);
 
   // Drag-and-drop state
   const [activeDropZone, setActiveDropZone] = useState<DropZone>(null);
@@ -560,6 +602,11 @@ export default function App() {
   // Job Queue State
   const [jobs, setJobs] = useState<RenderJob[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  const [batchUploadProgress, setBatchUploadProgress] = useState<{ done: number; total: number } | null>(null);
+  const [batchUploadError, setBatchUploadError] = useState<string | null>(null);
+  const [isBundling, setIsBundling] = useState(false);
+  const [bundleError, setBundleError] = useState<string | null>(null);
 
   // Modal for Download Selection
   const [isDownloadModalOpen, setIsDownloadModalOpen] = useState(false);
@@ -590,13 +637,55 @@ export default function App() {
     };
   }, [sessionRetry]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    saveNamingConfig(window.localStorage, namingConfig);
+  }, [namingConfig]);
+
   const activeResizeInput = deriveResizeInput(resizeBatchState, { inputRatio, duration: fgDuration });
   const activeInputRatio = activeResizeInput.inputRatio;
   const activeFgDuration = activeResizeInput.duration;
   const activeFgVideo = resizeBatchSources.length > 0
     ? libraryDownloadUrl(resizeBatchSources[0].libraryId ?? resizeBatchSources[0].localId)
     : fgVideo;
-  const outputs = deriveOutputs(activeInputRatio, activeFgDuration);
+  const isBatchMode = resizeBatchSources.length > 0;
+  // Empty when the configured version has no trailing number to count up.
+  const batchVersions = sequenceVersions(namingConfig.version, resizeBatchSources.length) ?? [];
+
+  // In batch mode each source has its own length, so the modal lists the union
+  // of what the batch can produce; submitResizeBatch narrows it per source.
+  const outputs = resizeBatchSources.length > 0
+    ? deriveBatchOutputCatalog(resizeBatchSources)
+    : deriveOutputs(activeInputRatio, activeFgDuration);
+
+  // Whether an output is a trim or its own encode depends on what else is
+  // selected, so the modal hint has to read the plan, not the raw catalog.
+  const plannedById = new Map(
+    planSelectedOutputs(outputs, new Set(selectedDownloads)).map((output) => [output.id, output]),
+  );
+
+  /**
+   * Soft stop: re-rendering a naming that has already been produced overwrites
+   * the earlier download, but doing it on purpose is legitimate — so warn and
+   * let the user decide.
+   */
+  const confirmNamingReuse = (metas: NamingMeta[]): boolean => {
+    if (typeof window === 'undefined') return true;
+    const reused = findAlreadyUsed(loadNamingHistory(window.localStorage), metas);
+    if (reused.length === 0) return true;
+    const listed = reused
+      .map((meta) => `· ${[meta.gameName, meta.version, meta.suffix].filter(Boolean).join(' / ')}`)
+      .join('\n');
+    return window.confirm(
+      `Tên / version này đã render rồi:\n${listed}\n\n`
+      + 'Render tiếp sẽ tạo ra file trùng tên với lần trước. Vẫn tiếp tục?',
+    );
+  };
+
+  const rememberRenderedNaming = (metas: NamingMeta[]) => {
+    if (typeof window === 'undefined') return;
+    rememberNaming(window.localStorage, metas);
+  };
 
   const handleOpenDownloadModal = () => {
     setSelectedDownloads(outputs.map(o => o.id));
@@ -608,7 +697,7 @@ export default function App() {
       return;
     }
 
-    const selectedOutputs = outputs.filter((output) => selectedDownloads.includes(output.id));
+    const selectedOutputs = planSelectedOutputs(outputs, new Set(selectedDownloads));
 
     // Parse custom bitrate (kbps). Empty or invalid → undefined (use default)
     const parsedBitrate = customBitrate.trim() ? parseInt(customBitrate.trim(), 10) : undefined;
@@ -616,12 +705,27 @@ export default function App() {
 
     if (resizeBatchSources.length > 0) {
       const batchSnapshot = snapshotResizeBatch(resizeBatchState);
-      const missingPrimary = selectedOutputs.find((output) => output.trimFrom
-        && !selectedOutputs.some((candidate) => candidate.id === output.trimFrom));
-      if (missingPrimary) {
-        window.alert(`Select ${missingPrimary.trimFrom} before its trim variant`);
+      // Checked per source: sources differ in length, so the same selection can
+      // be self-consistent for one and missing its parent for another.
+      const selectedIds = new Set(selectedDownloads);
+      const unmet = batchSnapshot.sources.flatMap((item) => {
+        const planned = selectSourceOutputs(item, selectedIds);
+        const plannedIds = new Set(planned.map((output) => output.id));
+        return planned
+          .filter((output) => output.trimFrom && !plannedIds.has(output.trimFrom))
+          .map((output) => `${item.filename}: chọn ${output.trimFrom} trước ${output.id}`);
+      });
+      if (unmet.length > 0) {
+        window.alert(`Thiếu output nguồn cho bản cắt:\n${unmet.join('\n')}`);
         return;
       }
+      // Hard stop: two sources under one naming would render to the same file.
+      const namingErrors = validateBatchNaming(batchSnapshot.sources);
+      if (namingErrors.length > 0) {
+        window.alert(namingErrors.join('\n\n'));
+        return;
+      }
+      if (!confirmNamingReuse(batchSnapshot.sources)) return;
       setIsBatchSubmitting(true);
       setIsDownloadModalOpen(false);
       setIsSidebarOpen(true);
@@ -640,11 +744,14 @@ export default function App() {
       };
       try {
         const batchResult = await submitResizeBatch({
+          // Naming was decided when these sources entered the batch. Re-applying
+          // the config here would renumber a retry differently from the run it
+          // is retrying.
           sources: batchSnapshot.sources,
           outputs: selectedOutputs,
-          outputCatalog: outputs,
+          catalogForSource: deriveSourceOutputs,
           config: {
-            inputRatio: '9:16', bitrate, fgPosition, bgType, backgroundImageMode, blurAmount,
+            inputRatio: '9:16', bitrate, fgPosition, bgType, backgroundSource, backgroundImageMode, blurAmount,
             logoX, logoY, logoSize, buttonType, buttonText, buttonX, buttonY, buttonSize,
           },
           createJob: async ({ source, output, spec }) => {
@@ -656,7 +763,7 @@ export default function App() {
               const result = await createRenderJob({
                 spec,
                 uploadId: source.uploadId,
-                backgroundVideoFile: bgType === 'video' ? bgVideoFile : null,
+                backgroundVideoFile: bgType === 'video' && backgroundSource !== 'self' ? bgVideoFile : null,
                 backgroundImageFile: bgType === 'image' ? bgImageFile : null,
                 overlayPng,
               });
@@ -666,7 +773,7 @@ export default function App() {
                     serverJobId: result.jobId,
                     status: result.status,
                     progress: 0,
-                    retryInputs: outputs.some((candidate) => (
+                    retryInputs: selectSourceOutputs(source, new Set(selectedDownloads)).some((candidate) => (
                       candidate.trimFrom === output.id
                       && (!source.pendingOutputIds || source.pendingOutputIds.includes(candidate.id))
                     ))
@@ -675,7 +782,7 @@ export default function App() {
                           kind: 'library',
                           libraryId: source.libraryId ?? source.localId,
                           backgroundType: bgType,
-                          backgroundVideoFile: bgVideoFile,
+                          backgroundVideoFile: backgroundSource === 'self' ? null : bgVideoFile,
                           backgroundImageFile: bgImageFile,
                           logoFile,
                           logoUrl: logo,
@@ -726,6 +833,13 @@ export default function App() {
           },
         });
         setResizeBatchState((current) => applyResizeBatchWorkResult(current, batchSnapshot, batchResult.workItems));
+        rememberRenderedNaming(batchSnapshot.sources);
+        // Move the config past the numbers this run consumed, visibly, so the
+        // next upload does not start back on one already rendered.
+        const resumeVersion = nextConfigVersion(namingConfig, batchSnapshot.sources.length);
+        if (resumeVersion) {
+          setNamingConfig((current) => ({ ...current, version: resumeVersion }));
+        }
         const failures = batchResult.outcomes.flatMap((outcome) => outcome.errors);
         if (failures.length > 0) {
           window.alert(`${failures.length} Resize output${failures.length === 1 ? '' : 's'} could not be submitted. Safe sources remain selected for retry.`);
@@ -737,6 +851,15 @@ export default function App() {
       }
       return;
     }
+
+    // buildRenderSpec substitutes these defaults, so warn about what will
+    // actually be written, not about the blank fields.
+    const singleNaming: NamingMeta = {
+      gameName: gameName || 'untitled',
+      version: version || 'v1',
+      suffix,
+    };
+    if (!confirmNamingReuse([singleNaming])) return;
 
     // Separate primary renders from trim variants
     const primaryOutputs = selectedOutputs.filter(o => !o.trimFrom);
@@ -750,6 +873,7 @@ export default function App() {
         bitrate,
         fgPosition,
         bgType,
+        backgroundSource,
         backgroundImageMode,
         blurAmount,
         logoX,
@@ -778,7 +902,7 @@ export default function App() {
           kind: 'browser',
           foregroundFile: fgFile,
           backgroundType: bgType,
-          backgroundVideoFile: bgType === 'video' ? bgVideoFile : null,
+          backgroundVideoFile: bgType === 'video' && backgroundSource !== 'self' ? bgVideoFile : null,
           backgroundImageFile: bgType === 'image' ? bgImageFile : null,
           logoFile,
           logoUrl: logo,
@@ -789,6 +913,8 @@ export default function App() {
 
       return { output, spec, localId, pendingJob };
     });
+
+    rememberRenderedNaming([singleNaming]);
 
     flushSync(() => {
       setIsDownloadModalOpen(false);
@@ -809,7 +935,7 @@ export default function App() {
       try {
         const uploadSession = await createUploadSession({
           foregroundFile: fgFile,
-          backgroundVideoFile: bgType === 'video' ? bgVideoFile : null,
+          backgroundVideoFile: bgType === 'video' && backgroundSource !== 'self' ? bgVideoFile : null,
           backgroundImageFile: bgType === 'image' ? bgImageFile : null,
         });
         uploadId = uploadSession.uploadId;
@@ -890,6 +1016,7 @@ export default function App() {
             bitrate,
             fgPosition,
             bgType,
+            backgroundSource,
             backgroundImageMode,
             blurAmount,
             logoX,
@@ -978,6 +1105,7 @@ export default function App() {
                 bitrate,
                 fgPosition,
                 bgType,
+                backgroundSource,
                 backgroundImageMode,
                 blurAmount,
                 logoX,
@@ -1210,62 +1338,104 @@ export default function App() {
     }
   };
 
+  /**
+   * Packs finished outputs into one ZIP per game/version/suffix, each holding
+   * that config's outputs plus the original they came from.
+   */
   const downloadAllResults = async () => {
-    // Only download jobs that are actually downloadable (have downloadUrl)
-    const downloadable = jobs.filter((job) => job.status === 'completed' && job.downloadUrl);
-    const failed: string[] = [];
-    
-    for (const job of downloadable) {
-      try {
-        await downloadResult(job);
-      } catch (err) {
-        failed.push(getJobDisplayName(job));
+    const downloadable = jobs.filter(
+      (job) => job.status === 'completed' && job.downloadUrl && job.serverJobId,
+    );
+    if (downloadable.length === 0) return;
+
+    setIsBundling(true);
+    setBundleError(null);
+    try {
+      const bundles = await prepareRenderDownloadBundles(
+        downloadable.map((job) => job.serverJobId!),
+      );
+      // Browsers drop downloads fired in the same tick, so space them out.
+      for (const [index, bundle] of bundles.entries()) {
+        if (index > 0) await new Promise((resolve) => setTimeout(resolve, 600));
+        startRenderBundleDownload(bundle.downloadUrl);
       }
-    }
-    
-    // If any downloads failed, show feedback
-    if (failed.length > 0) {
-      alert(`Failed to download: ${failed.join(', ')}`);
+    } catch (error) {
+      setBundleError(error instanceof Error ? error.message : 'Could not prepare ZIP download');
+    } finally {
+      setIsBundling(false);
     }
   };
 
 
   const handleFgUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      applyForegroundFile(file);
+    const files = Array.from(e.target.files ?? []);
+    void applyForegroundFiles(files);
+    // Let the same selection be picked again after a clear.
+    e.target.value = '';
+  };
+
+  /**
+   * One file keeps the single-video editor. Several switch to batch mode, where
+   * each video is staged server-side and resized on its own terms.
+   */
+  const applyForegroundFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    if (files.length === 1) {
+      // Picking a single file leaves batch mode rather than being ignored.
+      setResizeBatchState((current) => clearResizeBatch(current));
+      applyForegroundFile(files[0], { force: true });
+      return;
+    }
+
+    setBatchUploadError(null);
+    setBatchUploadProgress({ done: 0, total: files.length });
+    try {
+      const uploads: ProbedUpload[] = [];
+      for (const [index, file] of files.entries()) {
+        const probe = await probeVideoDuration(URL.createObjectURL(file), browserProbeDeps());
+        if (probe.status !== 'ready') {
+          throw new Error(`${file.name}: ${probe.status === 'failed' ? probe.reason : 'không đọc được'}`);
+        }
+        const session = await createUploadSession({ foregroundFile: file });
+        uploads.push({
+          localId: `${session.uploadId}`,
+          uploadId: session.uploadId,
+          filename: file.name,
+          duration: probe.duration,
+          width: probe.width,
+          height: probe.height,
+        });
+        setBatchUploadProgress({ done: index + 1, total: files.length });
+      }
+
+      // Batch mode has no single foreground; drop whatever the editor held.
+      setFgVideo(null);
+      setFgFile(null);
+      setFgDurationState({ status: 'idle' });
+      setResizeBatchState((current) =>
+        replaceResizeBatch(current, buildBatchSources(uploads, namingConfig)));
+      // Only two background choices survive a batch; default to the one that
+      // needs no upload.
+      setBackgroundSource('self');
+      setBgType('video');
+    } catch (error) {
+      setBatchUploadError(error instanceof Error ? error.message : 'Upload thất bại');
+    } finally {
+      setBatchUploadProgress(null);
     }
   };
 
-  const applyForegroundFile = (file: File) => {
-    if (!canMutateBrowserForeground(resizeBatchState)) return;
+  const applyForegroundFile = (file: File, options: { force?: boolean } = {}) => {
+    if (!options.force && !canMutateBrowserForeground(resizeBatchState)) return;
     setFgVideo(URL.createObjectURL(file));
     setFgFile(file);
-    const tempUrl = URL.createObjectURL(file);
-    const tempVid = document.createElement('video');
-    tempVid.preload = 'metadata';
-    tempVid.src = tempUrl;
-    tempVid.onloadedmetadata = () => {
-      setFgDuration(tempVid.duration);
-      URL.revokeObjectURL(tempUrl);
-    };
+    setFgDurationState({ status: 'probing' });
+    void probeVideoDuration(URL.createObjectURL(file), browserProbeDeps())
+      .then(setFgDurationState);
 
-    const detected = parseVideoNamingMeta(file.name);
-    const newAutoFields = new Set<string>();
-
-    if (detected.gameName && !gameName) {
-      setGameName(detected.gameName);
-      newAutoFields.add('gameName');
-    }
-    if (detected.version && !version) {
-      setVersion(detected.version);
-      newAutoFields.add('version');
-    }
-    if (detected.suffix && !suffix) {
-      setSuffix(detected.suffix);
-      newAutoFields.add('suffix');
-    }
-    setAutoDetectedFields(newAutoFields);
+    // A locked config wins outright; otherwise detection fills the blanks and
+    // leaves the config unlocked so the user can still take it over.
+    setNamingConfig((current) => ({ ...current, ...resolveNamingMeta(current, file.name) }));
   };
 
   const applyBackgroundVideoFile = (file: File) => {
@@ -1346,15 +1516,18 @@ export default function App() {
     dragDepthRef.current[zone] = 0;
     setActiveDropZone((current) => (current === zone ? null : current));
 
-    const file = e.dataTransfer.files?.[0];
+    const dropped = Array.from(e.dataTransfer.files ?? []);
+    const file = dropped[0];
     if (!file) return;
 
     switch (zone) {
-      case 'foreground':
-        if (file.type.startsWith('video/')) {
-          applyForegroundFile(file);
+      case 'foreground': {
+        const videos = dropped.filter((item) => item.type.startsWith('video/'));
+        if (videos.length > 0) {
+          void applyForegroundFiles(videos);
         }
         break;
+      }
       case 'bgVideo':
         if (file.type.startsWith('video/')) {
           applyBackgroundVideoFile(file);
@@ -1448,7 +1621,8 @@ export default function App() {
         <HookComposerPage />
       ) : activeTab === 'library' ? (
         <LocalLibraryPage onSendToResize={(sources) => {
-          setResizeBatchState((current) => replaceResizeBatch(current, sources));
+          setResizeBatchState((current) =>
+            replaceResizeBatch(current, applyNamingConfigToBatch(namingConfig, sources)));
           setActiveTab('resize');
         }} />
       ) : (
@@ -1498,21 +1672,48 @@ export default function App() {
               </div>
             </div>
 
+            {/* Trạng thái config đặt tên */}
+            <div className={`rounded-lg border px-3 py-2 text-[11px] leading-relaxed ${namingConfig.locked
+              ? 'border-blue-800/60 bg-blue-950/30 text-blue-200'
+              : 'border-neutral-700 bg-neutral-800/50 text-neutral-400'}`}>
+              <div className="flex items-start justify-between gap-3">
+                <span>
+                  {namingConfig.locked ? (
+                    <>
+                      <strong className="font-semibold">Đang dùng config đã đặt.</strong>{' '}
+                      Video upload sau sẽ lấy tên theo config này, không tự detect từ tên file nữa.
+                    </>
+                  ) : (
+                    <>
+                      <strong className="font-semibold">Chưa đặt config.</strong>{' '}
+                      Tool đang tự detect từ tên file. Sửa bất kỳ ô nào bên dưới để chốt config.
+                    </>
+                  )}
+                </span>
+                {namingConfig.locked && (
+                  <button
+                    type="button"
+                    onClick={resetNaming}
+                    className="shrink-0 rounded-md bg-neutral-800 px-2 py-1 text-[11px] font-medium text-neutral-200 hover:bg-neutral-700 transition-colors"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+
             {/* Tên game */}
             <div>
               <label className="block text-xs text-neutral-400 mb-1">
                 Tên game
-                {autoDetectedFields.has('gameName') && (
+                {!namingConfig.locked && gameName && (
                   <span className="ml-2 text-[10px] text-emerald-400 font-medium">● Auto-detected</span>
                 )}
               </label>
               <input
                 type="text"
                 value={gameName}
-                onChange={(e) => {
-                  setGameName(e.target.value);
-                  setAutoDetectedFields(prev => { const s = new Set(prev); s.delete('gameName'); return s; });
-                }}
+                onChange={(e) => editNaming({ gameName: e.target.value })}
                 placeholder="e.g. HeroWars"
                 className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
               />
@@ -1522,37 +1723,45 @@ export default function App() {
             <div>
               <label className="block text-xs text-neutral-400 mb-1">
                 Version
-                {autoDetectedFields.has('version') && (
+                {!namingConfig.locked && version && (
                   <span className="ml-2 text-[10px] text-emerald-400 font-medium">● Auto-detected</span>
                 )}
               </label>
               <input
                 type="text"
                 value={version}
-                onChange={(e) => {
-                  setVersion(e.target.value);
-                  setAutoDetectedFields(prev => { const s = new Set(prev); s.delete('version'); return s; });
-                }}
-                placeholder="e.g. v1, v02, KR_A"
+                onChange={(e) => editNaming({ version: e.target.value })}
+                placeholder="e.g. v60, ver61, v02"
                 className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
               />
+              {isBatchMode && namingConfig.locked && (
+                batchVersions.length > 0 ? (
+                  <p className="mt-1 text-[11px] text-neutral-400">
+                    {batchVersions.length === 1
+                      ? `Video này dùng ${batchVersions[0]}.`
+                      : `${batchVersions.length} video sẽ dùng ${batchVersions[0]} → ${batchVersions[batchVersions.length - 1]}, mỗi video một version.`}
+                  </p>
+                ) : (
+                  <p className="mt-1 text-[11px] text-amber-300">
+                    Version "{version}" không kết thúc bằng số nên không tự tăng cho từng video được.
+                    Đặt dạng có số ở cuối (v60, ver61) — nếu không, render sẽ bị chặn vì các video trùng tên xuất ra.
+                  </p>
+                )
+              )}
             </div>
 
             {/* Hậu tố */}
             <div>
               <label className="block text-xs text-neutral-400 mb-1">
                 Hậu tố
-                {autoDetectedFields.has('suffix') && (
+                {!namingConfig.locked && suffix && (
                   <span className="ml-2 text-[10px] text-emerald-400 font-medium">● Auto-detected</span>
                 )}
               </label>
               <input
                 type="text"
                 value={suffix}
-                onChange={(e) => {
-                  setSuffix(e.target.value);
-                  setAutoDetectedFields(prev => { const s = new Set(prev); s.delete('suffix'); return s; });
-                }}
+                onChange={(e) => editNaming({ suffix: e.target.value })}
                 placeholder="e.g. A1, Android, EN, UGC"
                 className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500 transition-colors"
               />
@@ -1605,21 +1814,35 @@ export default function App() {
               <span className="text-xs font-medium px-2.5 py-1 bg-neutral-800 text-neutral-300 rounded-full">{activeInputRatio}</span>
             </div>
             <label
-              className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl transition-all group ${resizeBatchSources.length > 0 ? 'cursor-not-allowed border-neutral-800 opacity-50' : activeDropZone === 'foreground' ? 'cursor-pointer border-blue-500 bg-blue-500/10' : 'cursor-pointer border-neutral-700 hover:bg-neutral-800/80 hover:border-blue-500/50'}`}
+              className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl transition-all group ${batchUploadProgress ? 'cursor-wait border-neutral-800 opacity-60' : activeDropZone === 'foreground' ? 'cursor-pointer border-blue-500 bg-blue-500/10' : 'cursor-pointer border-neutral-700 hover:bg-neutral-800/80 hover:border-blue-500/50'}`}
               onDragOver={handleDragOver}
-              onDragEnter={resizeBatchSources.length > 0 ? undefined : handleDragEnter('foreground')}
-              onDragLeave={resizeBatchSources.length > 0 ? undefined : handleDragLeave('foreground')}
-              onDrop={resizeBatchSources.length > 0 ? undefined : handleDrop('foreground')}
+              onDragEnter={batchUploadProgress ? undefined : handleDragEnter('foreground')}
+              onDragLeave={batchUploadProgress ? undefined : handleDragLeave('foreground')}
+              onDrop={batchUploadProgress ? undefined : handleDrop('foreground')}
             >
               <div className="flex flex-col items-center justify-center pt-5 pb-6">
                 <Upload className={`w-8 h-8 mb-3 transition-colors ${activeDropZone === 'foreground' ? 'text-blue-400' : 'text-neutral-500 group-hover:text-blue-400'}`} />
-                <p className="mb-2 text-sm text-neutral-400"><span className="font-semibold text-neutral-200">Click to upload</span> or drag and drop</p>
-                <p className="text-xs text-neutral-500">MP4, WebM, or OGG</p>
+                {batchUploadProgress ? (
+                  <p className="mb-2 text-sm text-neutral-300">
+                    Đang tải lên {batchUploadProgress.done}/{batchUploadProgress.total} video…
+                  </p>
+                ) : (
+                  <p className="mb-2 text-sm text-neutral-400"><span className="font-semibold text-neutral-200">Click to upload</span> or drag and drop</p>
+                )}
+                <p className="text-xs text-neutral-500">Chọn nhiều video để resize hàng loạt · MP4, WebM, OGG</p>
               </div>
-              <input type="file" disabled={resizeBatchSources.length > 0} className="hidden" accept="video/*" onChange={handleFgUpload} />
+              <input
+                type="file"
+                multiple
+                disabled={!!batchUploadProgress}
+                className="hidden"
+                accept="video/*"
+                onChange={handleFgUpload}
+              />
             </label>
+            {batchUploadError && <p className="mt-3 text-sm text-red-400">{batchUploadError}</p>}
             {resizeBatchSources.length > 0
-              ? <p className="mt-3 text-sm text-blue-400">Using {resizeBatchSources.length} Local Library output{resizeBatchSources.length === 1 ? '' : 's'}</p>
+              ? <p className="mt-3 text-sm text-blue-400">Đang resize hàng loạt {resizeBatchSources.length} video</p>
               : fgVideo && <p className="mt-3 text-sm text-green-400 flex items-center gap-2">✓ Foreground video loaded</p>}
           </div>
 
@@ -1635,16 +1858,38 @@ export default function App() {
               <span className="text-xs font-medium px-2.5 py-1 bg-neutral-800 text-neutral-300 rounded-full">{activeInputRatio}</span>
             </div>
 
-            <div className="flex bg-neutral-800 p-1 rounded-lg mb-4">
-              <button
-                className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${bgType === 'video' ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`}
-                onClick={() => setBgType('video')}
-              >Video (Blurred)</button>
-              <button
-                className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${bgType === 'image' ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`}
-                onClick={() => setBgType('image')}
-              >Banner Image</button>
-            </div>
+            {isBatchMode ? (
+              /* Nhiều video một lúc: một video nền dùng chung là vô nghĩa, nên
+                 chỉ còn hai lựa chọn áp được cho cả loạt. */
+              <div className="mb-4">
+                <div className="flex bg-neutral-800 p-1 rounded-lg">
+                  <button
+                    className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${backgroundSource === 'self' ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`}
+                    onClick={() => { setBackgroundSource('self'); setBgType('video'); }}
+                  >Mỗi video tự làm nền</button>
+                  <button
+                    className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${backgroundSource === 'upload' ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`}
+                    onClick={() => { setBackgroundSource('upload'); setBgType('image'); }}
+                  >1 ảnh nền cho tất cả</button>
+                </div>
+                <p className="mt-2 text-xs text-neutral-500">
+                  {backgroundSource === 'self'
+                    ? 'Nền của mỗi output là chính video đó, làm mờ. Không cần upload gì thêm.'
+                    : 'Ảnh bạn upload bên dưới dùng làm nền cho toàn bộ video trong loạt.'}
+                </p>
+              </div>
+            ) : (
+              <div className="flex bg-neutral-800 p-1 rounded-lg mb-4">
+                <button
+                  className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${bgType === 'video' ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`}
+                  onClick={() => { setBgType('video'); setBackgroundSource('upload'); }}
+                >Video (Blurred)</button>
+                <button
+                  className={`flex-1 text-xs py-1.5 rounded-md transition-colors ${bgType === 'image' ? 'bg-neutral-700 text-white shadow-sm' : 'text-neutral-400 hover:text-white'}`}
+                  onClick={() => { setBgType('image'); setBackgroundSource('upload'); }}
+                >Banner Image</button>
+              </div>
+            )}
 
             {bgType === 'image' && (
               <div className="mb-4">
@@ -1664,7 +1909,11 @@ export default function App() {
               </div>
             )}
 
-            {bgType === 'video' ? (
+            {backgroundSource === 'self' ? (
+              <div className="rounded-xl border border-dashed border-neutral-700 bg-neutral-800/40 px-4 py-6 text-center text-xs text-neutral-400">
+                Không cần upload nền — mỗi video sẽ dùng chính nó làm nền mờ.
+              </div>
+            ) : bgType === 'video' ? (
               <>
                 <label
                   className={`flex flex-col items-center justify-center w-full h-32 border-2 border-dashed rounded-xl cursor-pointer transition-all group ${activeDropZone === 'bgVideo' ? 'border-purple-500 bg-purple-500/10' : 'border-neutral-700 hover:bg-neutral-800/80 hover:border-purple-500/50'}`}
@@ -1899,6 +2148,20 @@ export default function App() {
             </div>
           </div>
 
+          {fgDurationState.status === 'probing' && (
+            <div className="w-full mb-4 px-4 py-3 rounded-xl border border-neutral-700 bg-neutral-900 text-sm text-neutral-300">
+              Đang đọc độ dài video… Các bản cắt (6s → 120s) sẽ hiện ra khi đọc xong.
+            </div>
+          )}
+          {fgDurationState.status === 'failed' && (
+            <div className="w-full mb-4 px-4 py-3 rounded-xl border border-amber-700/60 bg-amber-950/40 text-sm text-amber-200">
+              <strong className="font-semibold">Không đọc được độ dài video.</strong>{' '}
+              {fgDurationState.reason}. Vì chưa biết độ dài nên tool chỉ xuất được bản full-length,
+              không có bản cắt 6s/10s/12s/15s/30s/60s/90s/120s. Thử export lại video sang H.264/MP4
+              rồi upload lại.
+            </div>
+          )}
+
           {outputs.filter(o => o.showPreview !== false).map((output) => (
             <PreviewBox
               key={output.id}
@@ -1909,7 +2172,7 @@ export default function App() {
               fgVideo={activeFgVideo}
               fgPosition={fgPosition}
               bgType={bgType}
-              bgVideo={bgVideo}
+              bgVideo={backgroundSource === 'self' ? activeFgVideo : bgVideo}
               bgImage={bgImage}
               backgroundImageMode={backgroundImageMode}
               blurAmount={blurAmount}
@@ -1970,8 +2233,10 @@ export default function App() {
                   />
                   <div className="flex flex-col">
                     <span className="text-sm font-medium text-neutral-200 group-hover:text-white">{output.label}</span>
-                    {output.trimFrom && (
-                      <span className="text-[10px] text-amber-400/70 font-medium">⚡ Trim from full-length (fast)</span>
+                    {plannedById.get(output.id)?.trimFrom && (
+                      <span className="text-[10px] text-amber-400/70 font-medium">
+                        ⚡ Trim from {plannedById.get(output.id)!.trimFrom} (fast)
+                      </span>
                     )}
                   </div>
                 </label>
@@ -2076,12 +2341,23 @@ export default function App() {
               ))
             )}
             {jobs.some(job => job.status === 'completed' && job.downloadUrl) && (
-              <button
-                onClick={downloadAllResults}
-                className="w-full py-2.5 bg-green-600 hover:bg-green-500 text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-2 shadow-lg hover:shadow-green-900/40 mt-2"
-              >
-                <Download className="w-3.5 h-3.5" /> Download All
-              </button>
+              <>
+                <button
+                  onClick={downloadAllResults}
+                  disabled={isBundling}
+                  className="w-full py-2.5 bg-green-600 hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold uppercase tracking-wider rounded-lg transition-all flex items-center justify-center gap-2 shadow-lg hover:shadow-green-900/40 mt-2"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  {isBundling ? 'Đang gói ZIP…' : 'Download All (.zip)'}
+                </button>
+                <p className="mt-1 text-[10px] leading-relaxed text-neutral-500">
+                  Mỗi bộ tên game / version / hậu tố ra một file zip, kèm cả video gốc
+                  (đổi tên theo config, thời lượng và tỉ lệ lấy từ chính file).
+                </p>
+                {bundleError && (
+                  <p className="mt-1 text-[10px] text-red-400">{bundleError}</p>
+                )}
+              </>
             )}
             {/* Bulk actions */}
             {jobs.some(job => job.status === 'failed') && (
