@@ -64,6 +64,22 @@ interface BundleRecord extends ClaimedRenderBundle {
 const isResizeRecord = (job: NativeJobRecord): job is RenderJobRecord =>
   job.kind === 'resize' || job.kind === 'trim';
 
+/**
+ * How many sources the per-source caches keep. Far above any one download, and
+ * bounded so a server running for weeks does not hold every source it ever
+ * bundled.
+ */
+const SOURCE_CACHE_LIMIT = 500;
+
+/** Insertion-ordered write that drops the oldest entry once the cap is hit. */
+const remember = <V>(cache: Map<string, V>, key: string, value: V): void => {
+  if (!cache.has(key) && cache.size >= SOURCE_CACHE_LIMIT) {
+    const oldest = cache.keys().next();
+    if (!oldest.done) cache.delete(oldest.value);
+  }
+  cache.set(key, value);
+};
+
 export class RenderDownloadBundleService {
   private readonly lookup: BundleJobLookup;
   private readonly probe: (filePath: string) => Promise<BundleSourceMedia>;
@@ -72,8 +88,17 @@ export class RenderDownloadBundleService {
   private readonly exists: (filePath: string) => Promise<boolean>;
   private readonly now: () => number;
   private readonly records = new Map<string, BundleRecord>();
+  /**
+   * What to ship as the original, per source. Every output of a source is
+   * staged into its own job workDir, so N selected outputs are N different
+   * paths to one video: keyed on the path, a bundle of eight outputs probed
+   * and re-encoded the same original eight times and discarded seven.
+   */
+  private readonly deliverables = new Map<string, string>();
+  /** Probed dimensions per source, for the same reason. */
+  private readonly probedMedia = new Map<string, BundleSourceMedia>();
   /** Conversions in progress, so two bundles of one source encode it once. */
-  private readonly conversions = new Map<string, Promise<void>>();
+  private readonly conversions = new Map<string, Promise<string>>();
 
   constructor(lookup: BundleJobLookup, options: RenderDownloadBundleOptions = {}) {
     this.lookup = lookup;
@@ -152,14 +177,22 @@ export class RenderDownloadBundleService {
     // A trim job's foreground is another job's output, not an original.
     // A missing original is dropped — the outputs are still worth shipping.
     const hasOriginal = job.kind === 'resize' && await this.exists(job.files.foregroundPath);
+    // Identifies the source itself. Jobs predating upload sessions carry no id,
+    // so their own path stands in — each is then treated as its own source,
+    // which is what it was before batches existed.
+    const sourceKey = job.sourceUploadId ?? job.files.foregroundPath;
     return {
       jobId: job.id,
       naming: job.spec.naming,
       outputFilename: job.outputFilename || job.spec.outputFilename,
       outputPath: job.files.outputPath,
-      sourceId: hasOriginal ? (job.sourceUploadId ?? job.files.foregroundPath) : undefined,
-      sourcePath: hasOriginal ? await this.deliverableSource(job.files.foregroundPath) : undefined,
-      sourceMedia: hasOriginal ? await this.probeQuietly(job.files.foregroundPath) : undefined,
+      sourceId: hasOriginal ? sourceKey : undefined,
+      sourcePath: hasOriginal
+        ? await this.deliverableSource(job.files.foregroundPath, sourceKey)
+        : undefined,
+      sourceMedia: hasOriginal
+        ? await this.probeQuietly(job.files.foregroundPath, sourceKey)
+        : undefined,
     };
   }
 
@@ -167,9 +200,40 @@ export class RenderDownloadBundleService {
    * The path to bundle as the original. Renders are always h264, but the source
    * carries whatever codec it arrived in, so a source in anything else is
    * converted first — otherwise one file in the ZIP refuses to open while the
-   * rest play. The conversion is cached beside the source and reused.
+   * rest play.
+   *
+   * Decided once per source and remembered — including the decision not to
+   * convert, and the fallback taken when a conversion failed: a source whose
+   * conversion is broken must not burn a full re-encode again for every output
+   * of every later download. The remembered path is revalidated against the
+   * disk, so retention removing it leads back here rather than into a ZIP
+   * pointing at a file that is gone.
    */
-  private async deliverableSource(sourcePath: string): Promise<string> {
+  private async deliverableSource(sourcePath: string, sourceKey: string): Promise<string> {
+    const known = this.deliverables.get(sourceKey);
+    if (known !== undefined) {
+      if (await this.exists(known)) return known;
+      this.deliverables.delete(sourceKey);
+    }
+
+    // Two requests can bundle one source at the same time; the second waits on
+    // the first encode instead of starting its own.
+    const inFlight = this.conversions.get(sourceKey);
+    if (inFlight) return inFlight;
+
+    const run = this.resolveDeliverable(sourcePath);
+    this.conversions.set(sourceKey, run);
+    try {
+      const resolved = await run;
+      remember(this.deliverables, sourceKey, resolved);
+      return resolved;
+    } finally {
+      this.conversions.delete(sourceKey);
+    }
+  }
+
+  /** The codec decision and, when it is needed, the conversion itself. */
+  private async resolveDeliverable(sourcePath: string): Promise<string> {
     let codec: string;
     try {
       codec = await this.probeCodec(sourcePath);
@@ -183,35 +247,30 @@ export class RenderDownloadBundleService {
     if (converted === sourcePath) return sourcePath;
     if (await this.exists(converted)) return converted;
 
-    const inFlight = this.conversions.get(converted);
-    if (inFlight) {
-      try {
-        await inFlight;
-        return converted;
-      } catch {
-        return sourcePath;
-      }
-    }
-
-    const run = this.normalize(sourcePath, converted);
-    this.conversions.set(converted, run);
     try {
-      await run;
+      await this.normalize(sourcePath, converted);
       return converted;
     } catch (error) {
       console.error(`[jobs] Could not convert ${sourcePath} to h264:`, error);
       return sourcePath;
-    } finally {
-      this.conversions.delete(converted);
     }
   }
 
   /** A source that cannot be probed is bundled under its own name, not dropped. */
-  private async probeQuietly(filePath: string): Promise<BundleSourceMedia | undefined> {
+  private async probeQuietly(
+    filePath: string,
+    sourceKey: string,
+  ): Promise<BundleSourceMedia | undefined> {
+    const known = this.probedMedia.get(sourceKey);
+    if (known) return known;
     try {
       const probed = await this.probe(filePath);
-      return { width: probed.width, height: probed.height, duration: probed.duration };
+      const media = { width: probed.width, height: probed.height, duration: probed.duration };
+      remember(this.probedMedia, sourceKey, media);
+      return media;
     } catch {
+      // Not remembered: a probe that failed on a half-written file is worth
+      // retrying, unlike a conversion, which costs a full re-encode to retry.
       return undefined;
     }
   }

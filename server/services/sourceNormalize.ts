@@ -38,9 +38,16 @@ export const normalizedPathFor = (sourcePath: string): string => {
 export const buildNormalizeCommand = (params: {
   inputPath: string;
   outputPath: string;
+  /**
+   * Cap on CPU threads. This conversion runs outside the render queue, so
+   * without a cap FFmpeg auto-detects and takes every core on the host, on top
+   * of whatever renders are already running.
+   */
+  threads?: number;
 }): string[] => [
   '-y',
   '-i', params.inputPath,
+  ...(params.threads && params.threads > 0 ? ['-threads', String(params.threads)] : []),
   '-c:v', 'libx264',
   '-preset', 'veryfast',
   // Visually transparent for a stand-in original; the file grows, which is the

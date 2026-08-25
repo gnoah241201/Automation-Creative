@@ -220,8 +220,16 @@ Two things worth knowing:
 - Renders are always h264, but the bundled original carried whatever codec it
   arrived in. An HEVC source used to land in the ZIP as the one file that would
   not open next to eleven that did. Non-h264 sources are now converted first
-  (`server/services/sourceNormalize.ts`), cached beside the source. **The
-  bundled original is therefore a re-encode, not byte-identical to the source.**
+  (`server/services/sourceNormalize.ts`). **The bundled original is therefore a
+  re-encode, not byte-identical to the source.**
+- That conversion is keyed on `sourceUploadId`, not on the source path — the
+  same reason the bundle itself is. Keyed on the path, eight outputs of one HEVC
+  source meant eight full re-encodes of the same original with seven discarded,
+  all of them off the render queue and, until `buildNormalizeCommand` took a
+  thread cap, on every core the host had. The remembered decision covers "no
+  conversion needed" and a failed conversion too, so neither is paid for again
+  per output; it is revalidated against the disk, so retention removing the
+  converted copy leads to a fresh conversion rather than a broken ZIP.
 
 File presence is checked when the bundle is prepared, not while it streams:
 archiver turns a missing file into a mid-stream error, which would abort an

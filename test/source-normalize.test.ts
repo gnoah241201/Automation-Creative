@@ -95,3 +95,24 @@ test('audio is re-encoded to aac so the mp4 container stays valid', () => {
 test('the command overwrites, so a half-written leftover cannot wedge it', () => {
   assert.ok(argsFor().includes('-y'));
 });
+
+// --- Sharing the CPU ---
+//
+// The conversion runs outside the render queue, so without a cap FFmpeg
+// auto-detects and takes every core on the host, on top of whatever renders are
+// already running.
+
+test('the encode is capped to the threads it is handed', () => {
+  const args = argsFor({ threads: 3 });
+  assert.equal(args[args.indexOf('-threads') + 1], '3');
+});
+
+test('no cap is emitted when none was configured', () => {
+  assert.equal(argsFor().includes('-threads'), false);
+  assert.equal(argsFor({ threads: 0 }).includes('-threads'), false);
+});
+
+test('the cap is set before the output path, where FFmpeg reads it', () => {
+  const args = argsFor({ threads: 4 });
+  assert.ok(args.indexOf('-threads') < args.length - 1, '-threads must precede the output');
+});

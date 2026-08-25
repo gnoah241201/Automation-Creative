@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import { getFfmpegPath } from './encoderConfig.ts';
+import { getFfmpegThreadLimit } from './renderRunner.ts';
 import { buildNormalizeCommand } from './sourceNormalize.ts';
 
 /**
@@ -26,7 +27,9 @@ export const probeVideoCodec = async (filePath: string): Promise<string> => {
 export const normalizeToH264 = async (inputPath: string, outputPath: string): Promise<void> => {
   await run(
     getFfmpegPath(),
-    buildNormalizeCommand({ inputPath, outputPath }),
+    // Held to one render job's share of the cores. This runs off the queue, so
+    // an uncapped encode here would take the whole host from the renders.
+    buildNormalizeCommand({ inputPath, outputPath, threads: getFfmpegThreadLimit() }),
     // Re-encoding a long source takes a while; the default 10s timeout would
     // kill it mid-file and leave a truncated copy behind.
     { maxBuffer: 8 * 1024 * 1024, timeout: 30 * 60 * 1000 },

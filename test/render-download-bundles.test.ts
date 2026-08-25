@@ -328,3 +328,120 @@ test('outputs are never converted, they are already h264', async () => {
   await bundles.prepare(['j1'], 'owner-a');
   assert.deepEqual(probedForCodec, ['/work/j1/input/original.mp4']);
 });
+
+// --- One source, one conversion ---
+//
+// Every output of a source is staged into its own job workDir, so N selected
+// outputs are N different paths to the same video. Keying the conversion on the
+// path re-encoded the original once per output and threw all but one away.
+
+/** N outputs of one source, staged the way the submit route stages them. */
+const outputsOfOneSource = (count: number, uploadId = 'upload-1'): RenderJobRecord[] =>
+  Array.from({ length: count }, (_, i) => record({
+    id: `${uploadId}-j${i}`,
+    sourceUploadId: uploadId,
+    outputFilename: `HeroWars_v3_9x16_${i}s_UGC.mp4`,
+    files: {
+      foregroundPath: `/work/${uploadId}-j${i}/input/original.mp4`,
+      outputPath: `/work/${uploadId}-j${i}/output/out.mp4`,
+      workDir: `/work/${uploadId}-j${i}`,
+    },
+  }));
+
+const countingService = (jobs: RenderJobRecord[], over: {
+  codec?: string;
+  exists?: (p: string) => Promise<boolean>;
+} = {}) => {
+  const calls = { normalize: [] as string[], probeCodec: [] as string[], probe: [] as string[] };
+  // Models the disk rather than a fixed answer: a converted copy exists once
+  // normalize has written it, which is what the reuse check reads.
+  const written = new Set<string>();
+  const service = new RenderDownloadBundleService(lookup(jobs), {
+    probe: async (p) => { calls.probe.push(p); return { width: 1080, height: 1920, duration: 121 }; },
+    probeCodec: async (p) => { calls.probeCodec.push(p); return over.codec ?? 'hevc'; },
+    normalize: async (input, output) => { calls.normalize.push(input); written.add(output); },
+    exists: over.exists ?? (async (p) => !p.includes('.h264.') || written.has(p)),
+    now: () => 1_000,
+  });
+  return { service, calls };
+};
+
+test('eight outputs of one source convert the original once, not eight times', async () => {
+  const jobs = outputsOfOneSource(8);
+  const { service, calls } = countingService(jobs);
+  await service.prepare(jobs.map((job) => job.id), 'owner-a');
+  assert.equal(calls.normalize.length, 1, `converted ${calls.normalize.length}x for one source`);
+});
+
+test('one source is probed once, not once per output', async () => {
+  const jobs = outputsOfOneSource(8);
+  const { service, calls } = countingService(jobs);
+  await service.prepare(jobs.map((job) => job.id), 'owner-a');
+  assert.equal(calls.probeCodec.length, 1, `probed codec ${calls.probeCodec.length}x for one source`);
+  assert.equal(calls.probe.length, 1, `probed media ${calls.probe.length}x for one source`);
+});
+
+test('each source of a batch is converted on its own', async () => {
+  const jobs = [...outputsOfOneSource(3, 'upload-1'), ...outputsOfOneSource(3, 'upload-2')];
+  const { service, calls } = countingService(jobs);
+  await service.prepare(jobs.map((job) => job.id), 'owner-a');
+  assert.equal(calls.normalize.length, 2, 'two sources, two conversions');
+});
+
+test('an h264 source is decided once too, without re-probing per output', async () => {
+  const jobs = outputsOfOneSource(6);
+  const { service, calls } = countingService(jobs, { codec: 'h264' });
+  await service.prepare(jobs.map((job) => job.id), 'owner-a');
+  assert.deepEqual(calls.normalize, [], 'nothing to convert');
+  assert.equal(calls.probeCodec.length, 1);
+});
+
+test('jobs predating upload ids fall back to keying on their own path', async () => {
+  const jobs = [
+    record({ id: 'j1', sourceUploadId: undefined, files: { foregroundPath: '/work/a/in.mp4', outputPath: '/work/a/out.mp4', workDir: '/work/a' } }),
+    record({ id: 'j2', sourceUploadId: undefined, outputFilename: 'HeroWars_v3_16x9_121s_UGC.mp4', files: { foregroundPath: '/work/b/in.mp4', outputPath: '/work/b/out.mp4', workDir: '/work/b' } }),
+  ];
+  const { service, calls } = countingService(jobs);
+  await service.prepare(['j1', 'j2'], 'owner-a');
+  assert.equal(calls.normalize.length, 2, 'two unrelated paths are two sources');
+});
+
+test('a second download of the same source reuses the conversion', async () => {
+  const jobs = outputsOfOneSource(2);
+  const converted = new Set<string>();
+  const calls: string[] = [];
+  const service = new RenderDownloadBundleService(lookup(jobs), {
+    probe: async () => ({ width: 1080, height: 1920, duration: 121 }),
+    probeCodec: async () => 'hevc',
+    normalize: async (_input, output) => { calls.push(output); converted.add(output); },
+    // Models the real disk: the converted copy exists once normalize made it.
+    exists: async (p) => !p.includes('.h264.') || converted.has(p),
+    now: () => 1_000,
+  });
+  await service.prepare([jobs[0].id], 'owner-a');
+  await service.prepare([jobs[1].id], 'owner-a');
+  assert.equal(calls.length, 1, 'the conversion on disk is reused by the second download');
+});
+
+test('a conversion that has since been cleaned up is redone', async () => {
+  const jobs = outputsOfOneSource(2);
+  const calls: string[] = [];
+  const service = new RenderDownloadBundleService(lookup(jobs), {
+    probe: async () => ({ width: 1080, height: 1920, duration: 121 }),
+    probeCodec: async () => 'hevc',
+    normalize: async (_input, output) => { calls.push(output); },
+    // Retention removed it between the two downloads.
+    exists: async (p) => !p.includes('.h264.'),
+    now: () => 1_000,
+  });
+  await service.prepare([jobs[0].id], 'owner-a');
+  await service.prepare([jobs[1].id], 'owner-a');
+  assert.equal(calls.length, 2, 'a conversion that is gone is not assumed to be there');
+});
+
+test('outputs of one source still share a single original in the ZIP', async () => {
+  const jobs = outputsOfOneSource(4);
+  const { service } = countingService(jobs);
+  const [prepared] = await service.prepare(jobs.map((job) => job.id), 'owner-a');
+  assert.equal(prepared.entryCount, 5, 'four outputs plus one shared original');
+});
