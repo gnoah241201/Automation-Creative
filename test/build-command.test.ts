@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildFfmpegCommand } from '../server/ffmpeg/buildCommand.ts';
 import { getPrecomposedAnchorCropExpressions, getPrecomposedHiddenFgAnchorPoint, PRECOMPOSED_BG_SCALE } from '../shared/precomposedAnchor.ts';
+import { RenderSpec } from '../shared/render-contract.ts';
 
 test('clean mode 4:5 uses standard crop filter', () => {
   const args = buildFfmpegCommand({
@@ -239,4 +240,161 @@ test('precomposed mode 16:9 keeps existing behavior', () => {
   const filterComplex = args.find(arg => arg.startsWith('['));
   assert.ok(!filterComplex.includes('scale=3240'), 'precomposed mode 16:9 should not apply 3x scale');
   assert.ok(!filterComplex.includes('crop=1920:1080:1920'), 'precomposed mode 16:9 should not apply lower-center crop');
+});
+
+// --- Where the render ends ---
+//
+// Every background can outlast the foreground: a looped image and the lavfi
+// colour fallback are infinite, and an uploaded background video is whatever
+// length it happens to be. The foreground is the content, so it decides the
+// length — and an infinite background left to decide never ends at all.
+
+const videoBgSpec = (over = {}) => ({
+  inputRatio: '9:16' as const,
+  outputRatio: '9:16' as const,
+  fgPosition: 'center' as const,
+  bgType: 'video' as const,
+  backgroundImageMode: 'clean' as const,
+  blurAmount: 24,
+  logoX: 0, logoY: 0, logoSize: 100,
+  buttonType: 'text' as const, buttonX: 0, buttonY: 0, buttonSize: 100,
+  naming: { gameName: 'Game', version: 'v1', suffix: 'A' },
+  outputFilename: 'output.mp4',
+  ...over,
+});
+
+const overlayStep = (args: string[]): string => {
+  const filterComplex = args[args.indexOf('-filter_complex') + 1];
+  const step = filterComplex.split(';').map((s) => s.trim()).find((s) => s.includes('overlay='));
+  assert.ok(step, 'the graph must overlay the foreground onto the background');
+  return step;
+};
+
+test('an uploaded background video does not extend the render past the foreground', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec(),
+    foregroundPath: '/input/fg.mp4',
+    backgroundVideoPath: '/input/bg.mp4',
+    outputPath: '/output/result.mp4',
+  });
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+test('a clip that is its own background ends with itself', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec({ backgroundSource: 'self' }),
+    foregroundPath: '/input/fg.mp4',
+    backgroundVideoPath: '/input/fg.mp4',
+    outputPath: '/output/result.mp4',
+  });
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+test('the black fallback background cannot outrun the foreground', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec(),
+    foregroundPath: '/input/fg.mp4',
+    // No background file resolved: the builder falls back to a lavfi colour
+    // source, which produces frames forever.
+    outputPath: '/output/result.mp4',
+  });
+  assert.ok(args.join(' ').includes('color=c=black'), 'this is the infinite-source path');
+  assert.match(
+    overlayStep(args),
+    /shortest=1/,
+    'an endless background must not be what decides the length',
+  );
+});
+
+test('a full-length render carries no -t, so only the graph can end it', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec(),
+    foregroundPath: '/input/fg.mp4',
+    outputPath: '/output/result.mp4',
+  });
+  assert.equal(args.includes('-t'), false, 'nothing outside the graph bounds this render');
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+test('an image background still ends with the foreground', () => {
+  const args = buildFfmpegCommand({
+    spec: videoBgSpec({ bgType: 'image' }),
+    foregroundPath: '/input/fg.mp4',
+    backgroundImagePath: '/input/bg.jpg',
+    outputPath: '/output/result.mp4',
+  });
+  assert.ok(args.join(' ').includes('-loop'), 'a still image is looped, so it never ends on its own');
+  assert.match(overlayStep(args), /shortest=1/);
+});
+
+// --- Background blur cost ---
+
+const blurSpec = (over: Partial<RenderSpec> = {}): RenderSpec => ({
+  inputRatio: '9:16',
+  outputRatio: '16:9',
+  fgPosition: 'center',
+  bgType: 'video',
+  backgroundImageMode: 'clean',
+  blurAmount: 24,
+  logoX: 0, logoY: 0, logoSize: 100,
+  buttonType: 'text', buttonText: 'Play', buttonX: 0, buttonY: 0, buttonSize: 100,
+  naming: { gameName: 'Game', version: 'v1', suffix: '' },
+  outputFilename: 'Game_v1_16x9.mp4',
+  ...over,
+});
+
+const bgChain = (spec: RenderSpec): string => {
+  const args = buildFfmpegCommand({
+    spec,
+    foregroundPath: '/in/clip.mp4',
+    backgroundVideoPath: '/in/bg.mp4',
+    outputPath: '/out/out.mp4',
+  });
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  return graph.split(';').find((part) => part.includes('[bg_ready]')) ?? '';
+};
+
+test('a video background is blurred at reduced size, not at the output frame size', () => {
+  const chain = bgChain(blurSpec());
+  assert.ok(chain.includes('boxblur'), 'the background is still blurred');
+  assert.equal(
+    chain.includes('boxblur=24:'),
+    false,
+    'blurring at full radius means blurring at full resolution',
+  );
+  // Downscale, blur, upscale back to the frame.
+  assert.ok(/scale=\d+:\d+/.test(chain), 'a reduced working size');
+  assert.ok(chain.lastIndexOf('scale=1920:1080') > chain.indexOf('boxblur'),
+    'the blurred background is scaled back up to the frame');
+});
+
+test('the blur radius shrinks with the working size so the look is unchanged', () => {
+  const chain = bgChain(blurSpec({ blurAmount: 24 }));
+  const radius = Number(/boxblur=(\d+):/.exec(chain)?.[1]);
+  assert.equal(radius, 6, '24 at full size is 6 at quarter size');
+});
+
+test('a small blur radius never rounds away to nothing', () => {
+  const radius = Number(/boxblur=(\d+):/.exec(bgChain(blurSpec({ blurAmount: 2 })))?.[1]);
+  assert.ok(radius >= 1, 'a requested blur must still blur');
+});
+
+test('the reduced working size stays even, for yuv420p', () => {
+  for (const outputRatio of ['9:16', '16:9', '4:5', '2:3', '1:1'] as const) {
+    const chain = bgChain(blurSpec({ outputRatio }));
+    const [, w, h] = /scale=(\d+):(\d+)/.exec(chain) ?? [];
+    assert.equal(Number(w) % 2, 0, `${outputRatio} working width ${w} must be even`);
+    assert.equal(Number(h) % 2, 0, `${outputRatio} working height ${h} must be even`);
+  }
+});
+
+test('an image background is left sharp, it is a banner not a backdrop', () => {
+  const args = buildFfmpegCommand({
+    spec: blurSpec({ bgType: 'image' }),
+    foregroundPath: '/in/clip.mp4',
+    backgroundImagePath: '/in/banner.png',
+    outputPath: '/out/out.mp4',
+  });
+  const graph = args[args.indexOf('-filter_complex') + 1];
+  assert.equal(graph.includes('boxblur'), false);
 });

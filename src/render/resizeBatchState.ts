@@ -1,5 +1,6 @@
 import { InputRatio } from '../../shared/render-contract.ts';
 import { ResizeBatchSource } from './librarySources.ts';
+import { sourceInputRatio } from './batchOutputs.ts';
 
 export interface ResizeBatchState {
   revision: number;
@@ -86,12 +87,19 @@ export const applyResizeBatchWorkResult = (
   };
 };
 
+/**
+ * Representative input for the preview pane only.
+ *
+ * A batch has one preview but many sources, so this reports the first source's
+ * ratio and the longest duration. Output derivation must NOT use this — see
+ * `deriveBatchOutputCatalog` / `selectSourceOutputs`, which work per source.
+ */
 export const deriveResizeInput = (
   state: ResizeBatchState,
   browserInput: { inputRatio: InputRatio; duration?: number },
 ): { inputRatio: InputRatio; duration?: number } => state.sources.length === 0
   ? browserInput
   : {
-      inputRatio: '9:16',
+      inputRatio: sourceInputRatio(state.sources[0]),
       duration: Math.max(...state.sources.map((source) => source.duration)),
     };

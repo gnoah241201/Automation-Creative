@@ -54,8 +54,15 @@ export class JobStore {
     // Capture the data to save at the time of this call
     const dataToSave = [...jobs];
     
-    // Chain onto existing promise to serialize writes
-    this.writePromise = this.writePromise.then(async () => {
+    // Chain onto the existing promise to serialize writes.
+    //
+    // The chain must never carry a rejection forward: a rejected `writePromise`
+    // makes every later `.then` callback skip its body and inherit the old
+    // error, so one transient failure — an antivirus or another process holding
+    // the file long enough for `rename` to be refused on Windows — silently
+    // stops the queue from ever persisting again. The caller that caused the
+    // failure still sees it; the chain itself is handed on clean.
+    const write = this.writePromise.then(async () => {
       try {
         const tempPath = this.statePath + '.tmp';
         const content = JSON.stringify(dataToSave, null, 2);
@@ -70,9 +77,10 @@ export class JobStore {
         throw error;
       }
     });
+    this.writePromise = write.catch(() => {});
     
     // Wait for this specific write to complete
-    await this.writePromise;
+    await write;
   }
 
   /**

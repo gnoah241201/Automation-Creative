@@ -27,7 +27,7 @@ COPY --from=deps /app/node_modules ./node_modules
 RUN mkdir -p /app/temp_superpowers/native-renders
 ENV NODE_ENV=production \
   PORT=3001 \
-  MAX_CONCURRENT_JOBS=5 \
+  MAX_CONCURRENT_JOBS=2 \
   FFMPEG_BINARY_PATH=/usr/bin/ffmpeg \
   FFMPEG_ENCODER=libx264
 EXPOSE 3001

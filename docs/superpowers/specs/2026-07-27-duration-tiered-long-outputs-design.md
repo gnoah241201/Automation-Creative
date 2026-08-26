@@ -1,5 +1,20 @@
 # Duration-Tiered Long-Form Outputs — Design
 
+> **Superseded.** This records the design as shipped on 2026-07-27. The output
+> rules have since changed and the numbers below no longer describe the code:
+>
+> - Thresholds no longer carry headroom. A tier is offered when the source is
+>   strictly longer than the cut itself, not `cut + 10` — the old `>100` gate is
+>   why a two-minute video never produced a 120s cut.
+> - The table is now 6/10/12/15/30/60/90/120s. 10s and 12s did not exist here.
+> - 30s is no longer a separate same-ratio encode; it joins the long-form family.
+> - Which output carries the same-ratio encode is decided from the *selection*,
+>   not from what the source could theoretically produce. See
+>   `planSelectedOutputs` in `src/render/outputDerivation.ts`.
+>
+> For current behaviour see **Output rules** in `HANDOFF.md`, and
+> `test/output-derivation.test.ts` for the executable version.
+
 Date: 2026-07-27
 
 ## Goal

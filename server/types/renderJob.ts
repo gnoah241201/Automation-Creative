@@ -16,6 +16,12 @@ export interface CommonNativeJobRecord {
   kind: 'resize' | 'trim' | 'compose' | 'compose-preview';
   /** Session-derived ownership key used to fair-share queue slots across users. Absent for legacy/unauthenticated jobs. */
   ownerKey?: string;
+  /**
+   * Upload this job rendered from. Every job of one upload copies the file into
+   * its own work dir, so this is the only way to tell that several outputs share
+   * one original. Absent for trim jobs and for direct multipart uploads.
+   */
+  sourceUploadId?: string;
   status: RenderJobStatus;
   progress: number;
   /** Progress mode: 'determinate' (percentage) or 'indeterminate' (unknown duration) */

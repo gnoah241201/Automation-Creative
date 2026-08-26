@@ -1,6 +1,7 @@
 import { CreateJobResponse, RenderSpec } from '../../shared/render-contract.ts';
-import { OutputConfig } from './outputDerivation.ts';
+import { OutputConfig, planSelectedOutputs } from './outputDerivation.ts';
 import { ResizeBatchSource } from './librarySources.ts';
+import { sourceInputRatio } from './batchOutputs.ts';
 import { filterPendingOutputs, ResizeBatchWorkResult } from './resizeBatchState.ts';
 import { buildRenderSpec } from './renderSpec.ts';
 
@@ -17,6 +18,14 @@ export interface SubmitResizeBatchInput {
   sources: ResizeBatchSource[];
   outputs: OutputConfig[];
   outputCatalog?: OutputConfig[];
+  /**
+   * Full output list for one source. When supplied, `outputs` is read as a set
+   * of selected ids and each source contributes only the ones it can actually
+   * produce, wired with its own `trimFrom`. Sources in a batch differ in length,
+   * so both the available cuts and the long-form master differ per source.
+   * Omit it to apply one shared list to every source.
+   */
+  catalogForSource?: (source: ResizeBatchSource) => OutputConfig[];
   config: SharedConfig;
   createJob: (input: {
     source: ResizeBatchSource;
@@ -56,6 +65,9 @@ const buildSpec = (
   output: OutputConfig,
 ): RenderSpec => buildRenderSpec({
   ...config,
+  // Sources in a batch can differ in orientation, so the shared config cannot
+  // decide this one.
+  inputRatio: sourceInputRatio(source),
   outputRatio: output.ratio,
   duration: output.duration ?? source.duration,
   gameName: source.gameName,
@@ -71,11 +83,19 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
   const sourcePrimaries: Array<{
     source: ResizeBatchSource;
     outputs: OutputConfig[];
+    catalog: OutputConfig[];
     primaryByOutput: Map<string, SubmittedResizeJob>;
     outcome: ResizeBatchSourceOutcome;
   }> = [];
+  const selectedOutputIds = new Set(input.outputs.map((output) => output.id));
   for (const source of input.sources) {
-    const outputs = filterPendingOutputs(source, input.outputs);
+    const catalog = input.catalogForSource
+      ? input.catalogForSource(source)
+      : (input.outputCatalog ?? input.outputs);
+    const selectedForSource = input.catalogForSource
+      ? planSelectedOutputs(catalog, selectedOutputIds)
+      : input.outputs;
+    const outputs = filterPendingOutputs(source, selectedForSource);
     const primaryByOutput = new Map<string, SubmittedResizeJob>();
     const outcome: ResizeBatchSourceOutcome = {
       sourceId: source.libraryId ?? source.localId,
@@ -104,14 +124,19 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
         outcome.errors.push({ outputId: output.id, phase: 'primary', message: failureMessage(error) });
       }
     }
-    sourcePrimaries.push({ source, outputs, primaryByOutput, outcome });
+    sourcePrimaries.push({ source, outputs, catalog, primaryByOutput, outcome });
   }
 
   const readyPrimaryIds = new Map<string, { sourceJobId?: string; error?: string }>();
-  for (const { source, outputs, primaryByOutput, outcome } of sourcePrimaries) {
+  for (const { source, outputs, catalog, primaryByOutput, outcome } of sourcePrimaries) {
     const selectedIds = new Set(outputs.map((output) => output.id));
     const pendingIds = new Set(source.pendingOutputIds ?? selectedIds);
-    const deferredDependencies = (input.outputCatalog ?? input.outputs).filter((output) => (
+    // Retry can leave a dependency pending without it being selected now; plan
+    // it against the same union so its trimFrom matches this source's master.
+    const deferredCatalog = input.catalogForSource
+      ? planSelectedOutputs(catalog, new Set([...selectedIds, ...pendingIds]))
+      : catalog;
+    const deferredDependencies = deferredCatalog.filter((output) => (
       output.trimFrom
       && pendingIds.has(output.id)
       && !selectedIds.has(output.id)

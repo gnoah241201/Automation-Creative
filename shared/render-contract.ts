@@ -1,10 +1,16 @@
-export type AspectRatio = '9:16' | '16:9' | '4:5' | '1:1';
+export type AspectRatio = '9:16' | '16:9' | '4:5' | '2:3' | '1:1';
 
 export type InputRatio = '16:9' | '9:16';
 
 export type ForegroundPosition = 'left' | 'center' | 'right';
 
 export type BackgroundType = 'video' | 'image';
+
+/**
+ * Where a video background comes from. 'self' blurs the clip itself, so no file
+ * is uploaded. Absent means 'upload', which is how every pre-existing job behaves.
+ */
+export type BackgroundSource = 'self' | 'upload';
 
 export type BackgroundImageMode = 'clean' | 'precomposed';
 
@@ -35,6 +41,7 @@ export interface RenderSpec {
   trimFromJobId?: string;
   fgPosition: ForegroundPosition;
   bgType: BackgroundType;
+  backgroundSource?: BackgroundSource;
   backgroundImageMode: BackgroundImageMode;
   blurAmount: number;
   logoX: number;

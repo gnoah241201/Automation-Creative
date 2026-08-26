@@ -30,6 +30,12 @@ export function isUsingBundledFfmpeg(): boolean {
  * Override with FFMPEG_THREADS_PER_JOB when you want to set the value
  * explicitly (e.g. after benchmarking on a specific VM).
  */
+/**
+ * How much of the host a render run may take by default: 1 / this. Set
+ * FFMPEG_THREADS_PER_JOB to use more, on a box dedicated to rendering.
+ */
+const DEFAULT_CPU_SHARE_DIVISOR = 2;
+
 export function computeFfmpegThreadLimit(maxConcurrentJobs: number, cpuCount = os.cpus().length): number {
   const override = Number(process.env.FFMPEG_THREADS_PER_JOB);
   if (Number.isFinite(override) && override > 0) {
@@ -39,7 +45,11 @@ export function computeFfmpegThreadLimit(maxConcurrentJobs: number, cpuCount = o
   const totalCpus = cpuCount > 0 ? cpuCount : 1;
   const usableCpus = Math.max(1, totalCpus - 1);
   const concurrency = Math.max(1, maxConcurrentJobs);
-  return Math.max(1, Math.floor(usableCpus / concurrency));
+  // Dividing the whole machine by the job count meant total load never moved:
+  // fewer jobs simply handed the freed cores to the remaining ones, so lowering
+  // MAX_CONCURRENT_JOBS to make the host usable achieved nothing. Budget about
+  // half the machine instead, and scale that budget with the host.
+  return Math.max(1, Math.floor(usableCpus / (concurrency * DEFAULT_CPU_SHARE_DIVISOR)));
 }
 
 /**

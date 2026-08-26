@@ -114,7 +114,8 @@ docker compose down -v
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `APP_PORT` | `8080` | Host port exposed by the Nginx frontend container |
-| `MAX_CONCURRENT_JOBS` | `5` | Backend render concurrency inside Docker (matches the app default) |
+| `MAX_CONCURRENT_JOBS` | `2` | Backend render concurrency inside Docker (matches the app default) |
+| `FFMPEG_THREADS_PER_JOB` | auto | Threads per render; unset, the server budgets about half the host |
 | `FFMPEG_ENCODER` | `libx264` | Encoder passed to the backend container |
 
 ### Notes
@@ -202,19 +203,19 @@ Video rendering here is limited primarily by CPU (FFmpeg encoding), not RAM. Mor
 At startup the backend computes how many threads each concurrent job may use, based on the host's core count:
 
 ```
-threadsPerJob = floor((vCPU count - 1) / MAX_CONCURRENT_JOBS)
+threadsPerJob = floor((vCPU count - 1) / (MAX_CONCURRENT_JOBS * 2))
 ```
 
-One vCPU is always reserved for Node/Express/nginx/the cleanup scheduler so the server stays responsive under full render load. This runs automatically (`server/services/encoderConfig.ts`); you rarely need to touch it, but `FFMPEG_THREADS_PER_JOB` overrides the computed value if you've benchmarked a better setting for your hardware. `/api/health` reports the effective value as `ffmpegThreadsPerJob`.
+One vCPU is always reserved for Node/Express/nginx/the cleanup scheduler. The extra factor of two budgets roughly half the host, leaving it usable while renders run — the tool is often run on someone's workstation, not only on a dedicated VM. This runs automatically (`server/services/encoderConfig.ts`); `FFMPEG_THREADS_PER_JOB` overrides it, which is what a machine dedicated to rendering should set. `/api/health` reports the effective value as `ffmpegThreadsPerJob`.
 
-Sizing table (values keep the 1-vCPU reservation intact; going above the top row per tier still works but starts trading away that headroom):
+**The two settings interact.** Lowering `MAX_CONCURRENT_JOBS` on its own does not free CPU: the cores it frees are handed to the jobs that remain. Total load is roughly `MAX_CONCURRENT_JOBS x threadsPerJob`, so to cap CPU you set both.
 
-| vCPU available to the server | MAX_CONCURRENT_JOBS | threads/job |
-|---|---|---|
-| 2 | 1 | 1 |
-| 6 | 5 | 1 |
-| 8 | 7 | 1 |
-| 12 | 11 | 1 |
+| vCPU | MAX_CONCURRENT_JOBS | threads/job | total | ~host used |
+|---|---|---|---|---|
+| 12 | 2 (default) | 2 | 4 | 33% |
+| 12 | 3 | 1 | 3 | 25% |
+| 12 | 2, `FFMPEG_THREADS_PER_JOB=5` | 5 | 10 | 83% |
+| 64 | 2 (default) | 15 | 30 | 47% |
 
 Regular resize/trim jobs (not just Hook Composer) also preflight-check free disk space before starting, sized from the target bitrate and duration (or the source file size for trims), so a burst of concurrent jobs fails fast with a clear error instead of running out of disk mid-render.
 
