@@ -238,6 +238,22 @@ export class JobQueueService {
   }
 
   /**
+   * Persist without letting a disk problem take the queue with it.
+   *
+   * A throw from `persistAll` inside a job's lifecycle used to skip the
+   * `schedule()` that follows it, so a single refused write left every queued
+   * job waiting forever behind free slots. Losing a state snapshot is
+   * recoverable; a stalled queue is not.
+   */
+  private async persistQuietly(context: string): Promise<void> {
+    try {
+      await this.persistAll();
+    } catch (error) {
+      console.error(`[jobQueue] Could not persist state (${context}):`, error);
+    }
+  }
+
+  /**
    * Sync queue metrics based on current state
    */
   private syncQueueMetrics() {
@@ -675,8 +691,10 @@ export class JobQueueService {
     job.status = 'processing';
     job.startedAt = Date.now();
     
-    // Persist immediately when starting processing
-    await this.persistAll();
+    // Persist immediately when starting processing. Outside the try below, so
+    // it must not throw: a throw here would leave activeCount raised and the
+    // slot gone for the lifetime of the process.
+    await this.persistQuietly(`job ${job.id} started`);
     
     // Check if this is a trim-only job
     const isTrimJob = job.kind === 'trim';
@@ -816,9 +834,14 @@ export class JobQueueService {
         jobsDuration.observe((job.finishedAt - job.startedAt) / 1000);
       }
       
-      // Persist after terminal state
-      await this.persistAll();
-      await this.reconcileLibraryHolds(true);
+      // Persist after terminal state. Everything from here to schedule() is
+      // best-effort: whatever fails, the next job must still start.
+      await this.persistQuietly(`job ${job.id} finished`);
+      try {
+        await this.reconcileLibraryHolds(true);
+      } catch (error) {
+        console.error('[jobQueue] Could not reconcile library holds:', error);
+      }
       
       // Update metrics after state change
       this.syncQueueMetrics();
