@@ -26,7 +26,7 @@ const PORT_ENV = process.env.PORT;
 const MAX_JOBS_ENV = process.env.MAX_CONCURRENT_JOBS;
 
 const port = PORT_ENV ? Number(PORT_ENV) : 3001;
-const maxConcurrentJobs = MAX_JOBS_ENV ? Number(MAX_JOBS_ENV) : 5;
+const maxConcurrentJobs = MAX_JOBS_ENV ? Number(MAX_JOBS_ENV) : 2;
 const authUsername = process.env.APP_AUTH_USERNAME || 'admin';
 const authPassword = process.env.APP_AUTH_PASSWORD || 'resize-video-local';
 const authSecret = process.env.APP_AUTH_SECRET || 'resize-video-local-secret';

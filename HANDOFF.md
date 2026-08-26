@@ -71,7 +71,14 @@ docker compose down -v
 ### Backend/runtime
 
 - `PORT` - backend port, default `3001`
-- `MAX_CONCURRENT_JOBS` - render concurrency, default `5`
+- `MAX_CONCURRENT_JOBS` - render concurrency, default `2`
+- `FFMPEG_THREADS_PER_JOB` - threads per render. Unset, the server budgets about
+  half the host and divides that by the concurrency. Set it to use more; a box
+  dedicated to rendering wants that, a workstation does not.
+
+  Note the two interact. Lowering `MAX_CONCURRENT_JOBS` alone does **not** free
+  CPU — the freed cores are handed to the remaining jobs. Total load is roughly
+  `MAX_CONCURRENT_JOBS x threads per job`.
 - `FFMPEG_BINARY_PATH` - FFmpeg binary path
 - `FFMPEG_ENCODER` - encoder, default `libx264`
 
