@@ -51,7 +51,7 @@ export const shouldUsePrecomposedHiddenFgAnchor = (
   && spec.backgroundImageMode === 'precomposed'
   && spec.inputRatio === '9:16'
   && isSupportedForegroundPosition(spec.fgPosition)
-  && (spec.outputRatio === '4:5' || spec.outputRatio === '1:1')
+  && (spec.outputRatio === '4:5' || spec.outputRatio === '2:3' || spec.outputRatio === '1:1')
 );
 
 export const getCanonical16x9ForegroundRect = (
@@ -99,6 +99,8 @@ export const getOutputFrameDimensions = (
       return { width: 1920, height: 1080 };
     case '4:5':
       return { width: 1080, height: 1350 };
+    case '2:3':
+      return { width: 1080, height: 1620 };
     case '1:1':
       return { width: 1080, height: 1080 };
   }

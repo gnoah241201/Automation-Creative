@@ -13,7 +13,7 @@ export interface InputUploadPaths {
 }
 
 const VALID_INPUT_RATIOS: InputRatio[] = ['16:9', '9:16'];
-const VALID_OUTPUT_RATIOS: AspectRatio[] = ['9:16', '16:9', '4:5', '1:1'];
+const VALID_OUTPUT_RATIOS: AspectRatio[] = ['9:16', '16:9', '4:5', '2:3', '1:1'];
 const VALID_BG_TYPES: BackgroundType[] = ['video', 'image'];
 const VALID_BG_IMAGE_MODES: BackgroundImageMode[] = ['clean', 'precomposed'];
 const VALID_BG_SOURCES: BackgroundSource[] = ['self', 'upload'];

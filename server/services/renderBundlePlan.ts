@@ -52,6 +52,7 @@ const CANONICAL_RATIOS: ReadonlyArray<{ label: string; value: number }> = [
   { label: '9:16', value: 9 / 16 },
   { label: '16:9', value: 16 / 9 },
   { label: '4:5', value: 4 / 5 },
+  { label: '2:3', value: 2 / 3 },
   { label: '1:1', value: 1 },
 ];
 

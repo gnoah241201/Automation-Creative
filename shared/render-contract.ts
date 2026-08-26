@@ -1,4 +1,4 @@
-export type AspectRatio = '9:16' | '16:9' | '4:5' | '1:1';
+export type AspectRatio = '9:16' | '16:9' | '4:5' | '2:3' | '1:1';
 
 export type InputRatio = '16:9' | '9:16';
 

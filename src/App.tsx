@@ -190,7 +190,7 @@ function PreviewBox({
     setBgImageNaturalSize(null);
   }, [bgImage]);
 
-  const showOverlays = (inputRatio === '16:9' && ['9:16', '4:5', '1:1'].includes(outputRatio)) ||
+  const showOverlays = (inputRatio === '16:9' && ['9:16', '4:5', '2:3', '1:1'].includes(outputRatio)) ||
     (inputRatio === '9:16' && outputRatio === '16:9');
 
   const usesHiddenFgAnchorPreview = shouldUsePrecomposedHiddenFgAnchor({
@@ -225,7 +225,7 @@ function PreviewBox({
 
   const backgroundImageClassName = targetedPreviewLayout
     ? 'absolute pointer-events-none max-w-none select-none'
-    : `absolute inset-0 w-full h-full pointer-events-none ${['4:5', '1:1'].includes(outputRatio) ? 'object-cover' : 'object-fill'}`;
+    : `absolute inset-0 w-full h-full pointer-events-none ${['4:5', '2:3', '1:1'].includes(outputRatio) ? 'object-cover' : 'object-fill'}`;
 
   const backgroundImageStyle: CSSProperties | undefined = targetedPreviewLayout
     ? {
@@ -234,7 +234,7 @@ function PreviewBox({
         left: `${targetedPreviewLayout.leftPercent}%`,
         top: `${targetedPreviewLayout.topPercent}%`,
       }
-    : bgType === 'image' && backgroundImageMode === 'precomposed' && ['4:5', '1:1'].includes(outputRatio)
+    : bgType === 'image' && backgroundImageMode === 'precomposed' && ['4:5', '2:3', '1:1'].includes(outputRatio)
       ? {
           transform: `scale(${PRECOMPOSED_BG_SCALE})`,
           transformOrigin: 'center bottom',
@@ -258,6 +258,7 @@ function PreviewBox({
         className={`relative w-full bg-black rounded-3xl overflow-hidden shadow-2xl ring-1 ring-white/10 group transition-all duration-500 ease-in-out ${outputRatio === '9:16' ? 'aspect-[9/16] max-w-[360px]' :
           outputRatio === '16:9' ? 'aspect-video max-w-[640px]' :
             outputRatio === '4:5' ? 'aspect-[4/5] max-w-[400px]' :
+              outputRatio === '2:3' ? 'aspect-[2/3] max-w-[400px]' :
               'aspect-square max-w-[450px]'
           }`}
       >

@@ -8,13 +8,15 @@ const getOutputDimensions = (ratio: RenderSpec['outputRatio']) => {
       return { w: 1920, h: 1080 };
     case '4:5':
       return { w: 1080, h: 1350 };
+    case '2:3':
+      return { w: 1080, h: 1620 };
     case '1:1':
       return { w: 1080, h: 1080 };
   }
 };
 
 const shouldShowOverlays = (inputRatio: RenderSpec['inputRatio'], outputRatio: RenderSpec['outputRatio']) => {
-  return (inputRatio === '16:9' && ['9:16', '4:5', '1:1'].includes(outputRatio)) ||
+  return (inputRatio === '16:9' && ['9:16', '4:5', '2:3', '1:1'].includes(outputRatio)) ||
     (inputRatio === '9:16' && outputRatio === '16:9');
 };
 
@@ -59,6 +61,8 @@ export const createOverlayPng = async (
         return { w: 640, h: 360 };
       case '4:5':
         return { w: 400, h: 500 };
+      case '2:3':
+        return { w: 400, h: 600 };
       case '1:1':
         return { w: 450, h: 450 };
     }
