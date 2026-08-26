@@ -280,15 +280,17 @@ test('one render per source carries every cut of that source', async () => {
     },
   });
 
-  // One encode per source — its longest selected cut — and the rest hang off it.
-  // 105s tops out at 90s while 200s reaches 120s, so the parent differs.
-  assert.deepEqual(rendered.sort(), ['long:9:16-120s', 'medium:9:16-90s']);
+  // One encode per source — the whole video, since both run well past their
+  // longest cut — and every cut trims from it.
+  assert.deepEqual(rendered.sort(), ['long:9:16', 'medium:9:16']);
   assert.deepEqual(
     trims.map((trim) => `${trim.id}:${trim.outputId}<-${trim.sourceJobId}`).sort(),
     [
-      'long:9:16-30s<-long-9:16-120s',
-      'long:9:16-90s<-long-9:16-120s',
-      'medium:9:16-30s<-medium-9:16-90s',
+      'long:9:16-120s<-long-9:16',
+      'long:9:16-30s<-long-9:16',
+      'long:9:16-90s<-long-9:16',
+      'medium:9:16-30s<-medium-9:16',
+      'medium:9:16-90s<-medium-9:16',
     ],
   );
 });

@@ -50,6 +50,28 @@ const activeCuts = (fgDuration: number | undefined): number[] => (
 );
 
 /**
+ * How close the longest cut has to be to the source for the cut to stand in for
+ * the whole video. A 12.9s source is 12s plus nine tenths of a second; a
+ * separate full-length file there is a near-duplicate under a confusing name.
+ * At 14s the cut leaves two seconds on the floor, so the whole video is kept.
+ */
+const FULL_LENGTH_TOLERANCE_SECONDS = 1;
+
+/**
+ * Whether the whole video is worth keeping alongside the cuts.
+ *
+ * Its label is floored rather than rounded, which makes a clash with a cut name
+ * impossible: this returns true only when `d > longest + 1`, so `floor(d)` is
+ * strictly above the longest cut, and `d` is below the next one or that cut
+ * would have qualified.
+ */
+const needsFullLength = (fgDuration: number | undefined, cuts: number[]): boolean => {
+  if (fgDuration === undefined || !Number.isFinite(fgDuration)) return true;
+  if (cuts.length === 0) return true;
+  return fgDuration - cuts[cuts.length - 1] > FULL_LENGTH_TOLERANCE_SECONDS;
+};
+
+/**
  * Derives the list of output configurations from the input ratio and the
  * foreground duration.
  *
@@ -63,33 +85,32 @@ const activeCuts = (fgDuration: number | undefined): number[] => (
  */
 export function deriveOutputs(inputRatio: InputRatio, fgDuration?: number): OutputConfig[] {
   const cuts = activeCuts(fgDuration);
+  const withFullLength = needsFullLength(fgDuration, cuts);
   const outputs: OutputConfig[] = [];
 
   for (const ratio of RATIOS) {
-    if (cuts.length === 0) {
-      // Shorter than every cut: the whole video is the only thing to give back,
-      // otherwise this ratio would produce nothing at all.
-      outputs.push({ id: ratio, ratio, label: `Output: ${ratio}`, showPreview: true });
-      continue;
-    }
+    // Whatever is longest carries the encode: the whole video when it is worth
+    // keeping, otherwise the longest cut. Everything else trims from it, so a
+    // ratio costs one encode either way.
+    const rendered: OutputConfig = withFullLength
+      ? { id: ratio, ratio, label: `Output: ${ratio}`, showPreview: true }
+      : {
+          id: `${ratio}-${cuts[cuts.length - 1]}s`,
+          ratio,
+          duration: cuts[cuts.length - 1],
+          label: cutLabel(ratio, cuts[cuts.length - 1]),
+          showPreview: true,
+        };
+    outputs.push(rendered);
 
-    const longest = cuts[cuts.length - 1];
-    const renderedId = `${ratio}-${longest}s`;
-    outputs.push({
-      id: renderedId,
-      ratio,
-      duration: longest,
-      label: cutLabel(ratio, longest),
-      showPreview: true,
-    });
-
-    for (const seconds of cuts.slice(0, -1)) {
+    const trimmed = withFullLength ? cuts : cuts.slice(0, -1);
+    for (const seconds of trimmed) {
       outputs.push({
         id: `${ratio}-${seconds}s`,
         ratio,
         duration: seconds,
         label: cutLabel(ratio, seconds),
-        trimFrom: renderedId,
+        trimFrom: rendered.id,
         showPreview: false,
       });
     }

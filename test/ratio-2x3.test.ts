@@ -59,7 +59,7 @@ test('2:3 offers exactly the same shape as 4:5', () => {
 test('a 2:3 cut trims from the 2:3 render, never encodes on its own', () => {
   const cut = find(deriveOutputs('9:16', 200), '2:3-30s');
   assert.ok(cut);
-  assert.equal(cut.trimFrom, '2:3-120s', 'the longest 2:3 cut is what carries the encode');
+  assert.equal(cut.trimFrom, '2:3', 'a 200s source keeps its whole video as the 2:3 render');
   assert.equal(cut.duration, 30);
 });
 
