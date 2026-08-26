@@ -37,13 +37,14 @@ test('the 2:3 frame really is two thirds', () => {
 
 // --- Offered outputs: same shape as 4:5 ---
 
-test('2:3 is offered for every input ratio, like 4:5', () => {
+test('2:3 is offered for every input ratio, like every other ratio', () => {
   for (const input of ['16:9', '9:16'] as const) {
-    assert.ok(find(deriveOutputs(input, 200), '2:3'), `2:3 missing for ${input} input`);
+    const mine = deriveOutputs(input, 200).filter((output) => output.ratio === '2:3');
+    assert.ok(mine.length > 0, `2:3 missing for ${input} input`);
   }
 });
 
-test('2:3 gets the full length plus a 30s cut, exactly like 4:5', () => {
+test('2:3 offers exactly the same shape as 4:5', () => {
   const outputs = deriveOutputs('9:16', 200);
   // Same shape; the parent id necessarily differs, each trims from its own ratio.
   const secondary = (ratio: string) => outputs
@@ -55,27 +56,32 @@ test('2:3 gets the full length plus a 30s cut, exactly like 4:5', () => {
   assert.deepEqual(secondary('2:3'), secondary('4:5'));
 });
 
-test('the 2:3 cut is a trim from the 2:3 full length, never its own encode', () => {
+test('a 2:3 cut trims from the 2:3 render, never encodes on its own', () => {
   const cut = find(deriveOutputs('9:16', 200), '2:3-30s');
   assert.ok(cut);
-  assert.equal(cut.trimFrom, '2:3');
+  assert.equal(cut.trimFrom, '2:3-120s', 'the longest 2:3 cut is what carries the encode');
   assert.equal(cut.duration, 30);
 });
 
-test('2:3 never gets the eight-length table reserved for the primary ratios', () => {
+test('2:3 gets the same eight lengths as every other ratio', () => {
   const outputs = deriveOutputs('9:16', 200);
-  for (const seconds of [6, 10, 12, 15, 60, 90, 120]) {
-    assert.equal(find(outputs, `2:3-${seconds}s`), undefined, `2:3-${seconds}s must not exist`);
+  for (const seconds of [6, 10, 12, 15, 30, 60, 90, 120]) {
+    assert.ok(find(outputs, `2:3-${seconds}s`), `2:3-${seconds}s missing`);
   }
+  const rendered = outputs.filter((output) => output.ratio === '2:3' && !output.trimFrom);
+  assert.equal(rendered.length, 1, '2:3 costs exactly one encode');
 });
 
-test('the 2:3 cut follows the same duration gate', () => {
+test('2:3 cuts follow the same duration gate as everything else', () => {
   assert.equal(find(deriveOutputs('9:16', 30), '2:3-30s'), undefined);
   assert.ok(find(deriveOutputs('9:16', 31), '2:3-30s'));
 });
 
-test('2:3 has a preview box like the other full-length outputs', () => {
-  assert.notEqual(find(deriveOutputs('9:16', 200), '2:3')?.showPreview, false);
+test('2:3 has one preview box, on the output that is rendered', () => {
+  const previewed = deriveOutputs('9:16', 200)
+    .filter((output) => output.ratio === '2:3' && output.showPreview !== false);
+  assert.equal(previewed.length, 1);
+  assert.equal(previewed[0].trimFrom, undefined);
 });
 
 // --- Accepted by the server ---

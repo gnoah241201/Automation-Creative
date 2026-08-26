@@ -258,7 +258,7 @@ test('per-source catalog skips outputs a shorter source cannot fill', async () =
   assert.equal(result.outcomes.every((outcome) => outcome.errors.length === 0), true);
 });
 
-test('one full-length render per ratio carries every cut of that source', async () => {
+test('one render per source carries every cut of that source', async () => {
   const rendered: string[] = [];
   const trims: Array<{ id: string; outputId: string; sourceJobId: string }> = [];
   const medium = source('medium', 105);
@@ -280,16 +280,15 @@ test('one full-length render per ratio carries every cut of that source', async 
     },
   });
 
-  // Exactly one encode per source, and every cut hangs off it.
-  assert.deepEqual(rendered.sort(), ['long:9:16', 'medium:9:16']);
+  // One encode per source — its longest selected cut — and the rest hang off it.
+  // 105s tops out at 90s while 200s reaches 120s, so the parent differs.
+  assert.deepEqual(rendered.sort(), ['long:9:16-120s', 'medium:9:16-90s']);
   assert.deepEqual(
     trims.map((trim) => `${trim.id}:${trim.outputId}<-${trim.sourceJobId}`).sort(),
     [
-      'long:9:16-120s<-long-9:16',
-      'long:9:16-30s<-long-9:16',
-      'long:9:16-90s<-long-9:16',
-      'medium:9:16-30s<-medium-9:16',
-      'medium:9:16-90s<-medium-9:16',
+      'long:9:16-30s<-long-9:16-120s',
+      'long:9:16-90s<-long-9:16-120s',
+      'medium:9:16-30s<-medium-9:16-90s',
     ],
   );
 });

@@ -49,26 +49,26 @@ test('each source derives outputs from its own ratio', () => {
   const portrait = deriveSourceOutputs(source('p', 200, '9:16'));
   const landscape = deriveSourceOutputs(source('l', 200, '16:9'));
 
-  // Both orientations produce the same catalog now that every cut trims from
-  // the full-length output of its own ratio. The ratio decides how the frame is
-  // composed, not which outputs exist.
+  // Both orientations offer the same catalog: the ratio decides how the frame
+  // is composed, not which outputs exist. Each ratio's longest cut is its own
+  // render, so at 200s the 120s cut is what carries the encode.
   assert.deepEqual(
     portrait.map((output) => output.id),
     landscape.map((output) => output.id),
   );
   for (const outputs of [portrait, landscape]) {
-    assert.equal(outputs.find((output) => output.id === '9:16-120s')?.trimFrom, '9:16');
-    assert.equal(outputs.find((output) => output.id === '16:9-120s')?.trimFrom, '16:9');
+    assert.equal(outputs.find((output) => output.id === '9:16-120s')?.trimFrom, undefined);
+    assert.equal(outputs.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16-120s');
+    assert.equal(outputs.find((output) => output.id === '16:9-120s')?.trimFrom, undefined);
   }
 });
 
-test('sources of different length trim from the same full-length parent', () => {
+test('each source trims from its own longest cut, which differs by length', () => {
   const long = deriveSourceOutputs(source('long', 200));
   const medium = deriveSourceOutputs(source('medium', 105));
 
-  assert.equal(long.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16');
-  assert.equal(medium.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16');
-  // What still differs per source is which cuts exist at all.
+  assert.equal(long.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16-120s');
+  assert.equal(medium.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16-90s');
   assert.equal(medium.some((output) => output.id === '9:16-120s'), false);
   assert.equal(long.some((output) => output.id === '9:16-120s'), true);
 });
@@ -102,29 +102,29 @@ test('selecting an output the source cannot fill drops it for that source only',
   assert.deepEqual(forLong.sort(), ['9:16-120s', '9:16-30s']);
 });
 
-test('a selected cut always trims from its own full-length output', () => {
+test('a selected cut keeps the parent its own source assigned', () => {
   const [only] = selectSourceOutputs(source('medium', 105), new Set(['9:16-30s']));
   assert.equal(only?.id, '9:16-30s');
-  assert.equal(only?.trimFrom, '9:16', 'the parent is the full-length render of the same ratio');
+  assert.equal(only?.trimFrom, '9:16-90s', '105s tops out at the 90s cut');
 });
 
 test('selecting several cuts pulls in no extra encode, they share one parent', () => {
   const planned = selectSourceOutputs(source('long', 200), new Set(['9:16-30s', '9:16-60s']));
-  assert.equal(planned.every((output) => output.trimFrom === '9:16'), true);
-  assert.equal(planned.some((output) => output.duration === undefined), false,
+  assert.equal(planned.every((output) => output.trimFrom === '9:16-120s'), true);
+  assert.equal(planned.some((output) => !output.trimFrom), false,
     'the parent is offered by the catalog, not forced into the selection');
 });
 
-test('sources of different length share the parent but not the available cuts', () => {
-  const wanted = new Set(['9:16', '9:16-30s', '9:16-90s', '9:16-120s']);
+test('one selection resolves to a different parent per source', () => {
+  const wanted = new Set(['9:16-30s', '9:16-90s', '9:16-120s']);
   const medium = new Map(selectSourceOutputs(source('medium', 105), wanted).map((o) => [o.id, o]));
   const long = new Map(selectSourceOutputs(source('long', 200), wanted).map((o) => [o.id, o]));
 
-  // 105s reaches 90s, 200s reaches 120s; both trim from the same full-length id.
-  assert.equal(medium.has('9:16-120s'), false);
-  assert.equal(medium.get('9:16-90s')?.trimFrom, '9:16');
-  assert.equal(long.get('9:16-120s')?.trimFrom, '9:16');
-  assert.equal(medium.get('9:16')?.trimFrom, undefined, 'the parent itself is a render');
+  assert.equal(medium.has('9:16-120s'), false, '105s cannot fill a 120s cut');
+  assert.equal(medium.get('9:16-90s')?.trimFrom, undefined, 'it is the render for 105s');
+  assert.equal(medium.get('9:16-30s')?.trimFrom, '9:16-90s');
+  assert.equal(long.get('9:16-120s')?.trimFrom, undefined, 'it is the render for 200s');
+  assert.equal(long.get('9:16-90s')?.trimFrom, '9:16-120s');
 });
 
 test('a landscape source in a batch renders with its own input ratio', async () => {
@@ -134,7 +134,7 @@ test('a landscape source in a batch renders with its own input ratio', async () 
   const landscape = source('l', 200, '16:9');
   await submitResizeBatch({
     sources: [portrait, landscape],
-    outputs: deriveBatchOutputCatalog([portrait, landscape]).filter((o) => o.id === '4:5'),
+    outputs: deriveBatchOutputCatalog([portrait, landscape]).filter((o) => o.id === '4:5-120s'),
     catalogForSource: deriveSourceOutputs,
     config: {
       inputRatio: '9:16' as const,
