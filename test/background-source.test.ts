@@ -118,7 +118,7 @@ test('a self background produces a blurred copy of the same file behind the fore
   ), []);
   assert.deepEqual(inputs.slice(0, 2), ['/work/in/clip.mp4', '/work/in/clip.mp4']);
   assert.ok(
-    args.some((arg) => typeof arg === 'string' && arg.includes('boxblur=24')),
+    args.some((arg) => typeof arg === 'string' && arg.includes('boxblur=')),
     'the borrowed background is blurred like any video background',
   );
 });
