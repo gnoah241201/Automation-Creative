@@ -49,19 +49,28 @@ test('each source derives outputs from its own ratio', () => {
   const portrait = deriveSourceOutputs(source('p', 200, '9:16'));
   const landscape = deriveSourceOutputs(source('l', 200, '16:9'));
 
-  // The same-ratio side is the one that carries the real encode.
-  assert.equal(portrait.find((output) => output.id === '9:16-120s')?.trimFrom, undefined);
-  assert.equal(portrait.find((output) => output.id === '16:9-120s')?.trimFrom, '16:9');
-  assert.equal(landscape.find((output) => output.id === '16:9-120s')?.trimFrom, undefined);
-  assert.equal(landscape.find((output) => output.id === '9:16-120s')?.trimFrom, '9:16');
+  // Both orientations produce the same catalog now that every cut trims from
+  // the full-length output of its own ratio. The ratio decides how the frame is
+  // composed, not which outputs exist.
+  assert.deepEqual(
+    portrait.map((output) => output.id),
+    landscape.map((output) => output.id),
+  );
+  for (const outputs of [portrait, landscape]) {
+    assert.equal(outputs.find((output) => output.id === '9:16-120s')?.trimFrom, '9:16');
+    assert.equal(outputs.find((output) => output.id === '16:9-120s')?.trimFrom, '16:9');
+  }
 });
 
-test('two sources of different length disagree about which output is the master', () => {
+test('sources of different length trim from the same full-length parent', () => {
   const long = deriveSourceOutputs(source('long', 200));
   const medium = deriveSourceOutputs(source('medium', 105));
 
-  assert.equal(long.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16-120s');
-  assert.equal(medium.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16-90s');
+  assert.equal(long.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16');
+  assert.equal(medium.find((output) => output.id === '9:16-30s')?.trimFrom, '9:16');
+  // What still differs per source is which cuts exist at all.
+  assert.equal(medium.some((output) => output.id === '9:16-120s'), false);
+  assert.equal(long.some((output) => output.id === '9:16-120s'), true);
 });
 
 test('the batch catalog is the union of every source list with no duplicate ids', () => {
@@ -93,33 +102,29 @@ test('selecting an output the source cannot fill drops it for that source only',
   assert.deepEqual(forLong.sort(), ['9:16-120s', '9:16-30s']);
 });
 
-test('a lone long-form cut is rendered directly rather than trimmed from a longer master', () => {
+test('a selected cut always trims from its own full-length output', () => {
   const [only] = selectSourceOutputs(source('medium', 105), new Set(['9:16-30s']));
   assert.equal(only?.id, '9:16-30s');
-  assert.equal(only?.trimFrom, undefined, 'nothing longer needs rendering just to trim 30s off it');
-  assert.equal(only?.isLongFormExtension, true);
+  assert.equal(only?.trimFrom, '9:16', 'the parent is the full-length render of the same ratio');
 });
 
-test('the longest selected long-form cut becomes the master for that source', () => {
+test('selecting several cuts pulls in no extra encode, they share one parent', () => {
   const planned = selectSourceOutputs(source('long', 200), new Set(['9:16-30s', '9:16-60s']));
-  const byId = new Map(planned.map((output) => [output.id, output]));
-  assert.equal(byId.get('9:16-60s')?.trimFrom, undefined, '60s is the longest selected, so it renders');
-  assert.equal(byId.get('9:16-30s')?.trimFrom, '9:16-60s');
-  assert.equal(byId.has('9:16-120s'), false, 'an unselected tier is never pulled in');
+  assert.equal(planned.every((output) => output.trimFrom === '9:16'), true);
+  assert.equal(planned.some((output) => output.duration === undefined), false,
+    'the parent is offered by the catalog, not forced into the selection');
 });
 
-test('sources of different length resolve one selection to different masters', () => {
-  const wanted = new Set(['9:16-30s', '9:16-90s', '9:16-120s']);
+test('sources of different length share the parent but not the available cuts', () => {
+  const wanted = new Set(['9:16', '9:16-30s', '9:16-90s', '9:16-120s']);
   const medium = new Map(selectSourceOutputs(source('medium', 105), wanted).map((o) => [o.id, o]));
   const long = new Map(selectSourceOutputs(source('long', 200), wanted).map((o) => [o.id, o]));
 
-  assert.equal(medium.get('9:16-90s')?.trimFrom, undefined, '105s tops out at 90s');
-  assert.equal(medium.get('9:16-30s')?.trimFrom, '9:16-90s');
+  // 105s reaches 90s, 200s reaches 120s; both trim from the same full-length id.
   assert.equal(medium.has('9:16-120s'), false);
-
-  assert.equal(long.get('9:16-120s')?.trimFrom, undefined);
-  assert.equal(long.get('9:16-90s')?.trimFrom, '9:16-120s');
-  assert.equal(long.get('9:16-30s')?.trimFrom, '9:16-120s');
+  assert.equal(medium.get('9:16-90s')?.trimFrom, '9:16');
+  assert.equal(long.get('9:16-120s')?.trimFrom, '9:16');
+  assert.equal(medium.get('9:16')?.trimFrom, undefined, 'the parent itself is a render');
 });
 
 test('a landscape source in a batch renders with its own input ratio', async () => {

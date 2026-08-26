@@ -231,10 +231,10 @@ test('per-source catalog skips outputs a shorter source cannot fill', async () =
   const calls: Array<{ id: string; outputId: string }> = [];
   const short = source('short', 40);
   const long = source('long', 200);
+  const wanted = new Set(['9:16', '9:16-30s', '9:16-120s']);
   const result = await submitResizeBatch({
     sources: [short, long],
-    outputs: deriveBatchOutputCatalog([short, long])
-      .filter((output) => output.id === '9:16-30s' || output.id === '9:16-120s'),
+    outputs: deriveBatchOutputCatalog([short, long]).filter((output) => wanted.has(output.id)),
     catalogForSource: deriveSourceOutputs,
     config: config(),
     createJob: async ({ source: item, output }) => {
@@ -258,22 +258,21 @@ test('per-source catalog skips outputs a shorter source cannot fill', async () =
   assert.equal(result.outcomes.every((outcome) => outcome.errors.length === 0), true);
 });
 
-test('per-source catalog trims each source from its own long-form master', async () => {
+test('one full-length render per ratio carries every cut of that source', async () => {
+  const rendered: string[] = [];
   const trims: Array<{ id: string; outputId: string; sourceJobId: string }> = [];
   const medium = source('medium', 105);
   const long = source('long', 200);
-  // 105s tops out at the 90s tier while 200s reaches 120s, so one selection
-  // resolves to a different master per source.
-  const wanted = new Set(['9:16-30s', '9:16-90s', '9:16-120s']);
+  const wanted = new Set(['9:16', '9:16-30s', '9:16-90s', '9:16-120s']);
   await submitResizeBatch({
     sources: [medium, long],
     outputs: deriveBatchOutputCatalog([medium, long]).filter((output) => wanted.has(output.id)),
     catalogForSource: deriveSourceOutputs,
     config: config(),
-    createJob: async ({ source: item, output }) => ({
-      jobId: `${item.libraryId}-${output.id}`,
-      status: 'queued',
-    }),
+    createJob: async ({ source: item, output }) => {
+      rendered.push(`${item.libraryId}:${output.id}`);
+      return { jobId: `${item.libraryId}-${output.id}`, status: 'queued' };
+    },
     waitForPrimary: async (job) => job.jobId,
     createTrimJob: async ({ source: item, output, sourceJobId }) => {
       trims.push({ id: item.libraryId!, outputId: output.id, sourceJobId });
@@ -281,34 +280,42 @@ test('per-source catalog trims each source from its own long-form master', async
     },
   });
 
+  // Exactly one encode per source, and every cut hangs off it.
+  assert.deepEqual(rendered.sort(), ['long:9:16', 'medium:9:16']);
   assert.deepEqual(
     trims.map((trim) => `${trim.id}:${trim.outputId}<-${trim.sourceJobId}`).sort(),
     [
-      'long:9:16-30s<-long-9:16-120s',
-      'long:9:16-90s<-long-9:16-120s',
-      'medium:9:16-30s<-medium-9:16-90s',
+      'long:9:16-120s<-long-9:16',
+      'long:9:16-30s<-long-9:16',
+      'long:9:16-90s<-long-9:16',
+      'medium:9:16-30s<-medium-9:16',
+      'medium:9:16-90s<-medium-9:16',
     ],
   );
 });
 
-test('selecting only a short cut renders it directly instead of forcing a longer master', async () => {
-  const rendered: string[] = [];
+test('a cut selected without its full-length parent runs nothing and reports why', async () => {
+  const submitted: string[] = [];
   const long = source('long', 200);
-  await submitResizeBatch({
+  const result = await submitResizeBatch({
     sources: [long],
     outputs: deriveSourceOutputs(long).filter((output) => output.id === '9:16-30s'),
     catalogForSource: deriveSourceOutputs,
     config: config(),
     createJob: async ({ output }) => {
-      rendered.push(output.id);
+      submitted.push(output.id);
       return { jobId: output.id, status: 'queued' };
     },
     waitForPrimary: async (job) => job.jobId,
     createTrimJob: async ({ output }) => {
-      rendered.push(`trim:${output.id}`);
+      submitted.push(`trim:${output.id}`);
       return { jobId: output.id, status: 'queued' };
     },
   });
 
-  assert.deepEqual(rendered, ['9:16-30s'], 'no 120s master is rendered just to trim 30s off it');
+  // Every cut is a trim now, so a selection with no full-length output has
+  // nothing to trim from. The UI guards against this before submitting.
+  assert.deepEqual(submitted, []);
+  assert.equal(result.outcomes[0].accepted, false);
+  assert.ok(result.outcomes[0].errors.some((error) => error.phase === 'trim'));
 });
