@@ -580,8 +580,22 @@ export default function App() {
       : loadNamingConfig(window.localStorage)),
   );
   const { gameName, version, suffix } = namingConfig;
-  const editNaming = (patch: Partial<NamingMeta>) =>
-    setNamingConfig((current) => lockNamingConfig(current, patch));
+  /**
+   * Applies a user edit to the config and to any batch already loaded.
+   *
+   * Naming is otherwise fixed when a source enters the batch, so that a retry
+   * is not renumbered by the version the config advanced to afterwards. That
+   * left editing the config after adding files doing nothing to those files
+   * while the filename preview happily showed the new config. Only a *user*
+   * edit re-applies; the automatic post-submit version bump must not.
+   */
+  const editNaming = (patch: Partial<NamingMeta>) => {
+    const next = lockNamingConfig(namingConfig, patch);
+    setNamingConfig(next);
+    setResizeBatchState((current) => (current.sources.length === 0
+      ? current
+      : replaceResizeBatch(current, applyNamingConfigToBatch(next, current.sources))));
+  };
   const resetNaming = () => {
     if (typeof window !== 'undefined') clearNamingConfig(window.localStorage);
     setNamingConfig(emptyNamingConfig());
@@ -650,6 +664,34 @@ export default function App() {
     ? libraryDownloadUrl(resizeBatchSources[0].libraryId ?? resizeBatchSources[0].localId)
     : fgVideo;
   const isBatchMode = resizeBatchSources.length > 0;
+  /**
+   * What the next file will actually be called. In batch mode that comes from
+   * the sources themselves, not from the config: a source added before the
+   * config was set keeps the naming it entered with, and a preview built from
+   * the config would quietly disagree with every file produced.
+   */
+  const namingPreview = (() => {
+    const first = resizeBatchSources[0];
+    if (!first) {
+      return {
+        filename: buildOutputFilename(
+          { gameName: gameName || 'untitled', version: version || 'v1', suffix },
+          activeInputRatio === '16:9' ? '9:16' : '16:9',
+          activeFgDuration,
+        ),
+        others: 0,
+      };
+    }
+    const [leading] = deriveSourceOutputs(first);
+    return {
+      filename: buildOutputFilename(
+        { gameName: first.gameName || 'untitled', version: first.version || 'v1', suffix: first.suffix },
+        leading?.ratio ?? '9:16',
+        leading?.duration ?? first.duration,
+      ),
+      others: resizeBatchSources.length - 1,
+    };
+  })();
   // Empty when the configured version has no trailing number to count up.
   const batchVersions = sequenceVersions(namingConfig.version, resizeBatchSources.length) ?? [];
 
@@ -1769,16 +1811,19 @@ export default function App() {
             </div>
 
             {/* Preview tên output */}
-            {(gameName || version || suffix) && (
+            {(gameName || version || suffix || isBatchMode) && (
               <div className="bg-neutral-800 border border-neutral-700 rounded-lg px-3 py-2">
-                <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">Preview tên file</div>
-                <div className="text-xs text-neutral-300 font-mono break-all">
-                  {buildOutputFilename(
-                    { gameName: gameName || 'untitled', version: version || 'v1', suffix },
-                    activeInputRatio === '16:9' ? '9:16' : '16:9',
-                    activeFgDuration
-                  )}
+                <div className="text-[10px] text-neutral-500 uppercase tracking-wider mb-1">
+                  {isBatchMode ? 'Tên file thật sẽ xuất ra' : 'Preview tên file'}
                 </div>
+                <div className="text-xs text-neutral-300 font-mono break-all">
+                  {namingPreview.filename}
+                </div>
+                {namingPreview.others > 0 && (
+                  <div className="mt-1 text-[10px] text-neutral-500">
+                    và {namingPreview.others} video khác trong loạt
+                  </div>
+                )}
               </div>
             )}
           </div>
