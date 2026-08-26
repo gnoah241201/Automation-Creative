@@ -3,6 +3,8 @@ import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import { buildFfmpegCommand, buildTrimCommand } from '../ffmpeg/buildCommand';
 import { RenderJobRecord } from '../types/renderJob';
 import { EncoderMode, getFfmpegPath } from './encoderConfig';
+import { lowerRenderPriority } from './processPriority.ts';
+import { pinRenderToCores } from './processAffinity.ts';
 
 // Global encoder config - set at startup
 let currentEncoder: EncoderMode = 'libx264';
@@ -155,6 +157,8 @@ export const runRenderJob = (
   const child = spawn(getFfmpegPath(), args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  lowerRenderPriority(child.pid);
+  pinRenderToCores(child.pid);
 
   // Determine the effective duration for progress calculation
   let effectiveDuration: number | null = job.spec.duration ?? null;
@@ -186,6 +190,8 @@ export const runTrimJob = (
   const child = spawn(getFfmpegPath(), args, {
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  lowerRenderPriority(child.pid);
+  pinRenderToCores(child.pid);
 
   return observeFfmpegProcess(child, duration, onProgress, 'FFmpeg trim');
 };
