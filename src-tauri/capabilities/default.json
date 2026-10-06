@@ -1,0 +1,15 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the Resize Video window is allowed to do.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "name": "binaries/ffmpeg", "sidecar": true, "args": true }]
+    }
+  ]
+}

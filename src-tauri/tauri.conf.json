@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Resize Video",
         "width": 1100,
         "height": 820,
@@ -28,6 +29,7 @@
   "bundle": {
     "active": true,
     "targets": ["nsis"],
-    "icon": ["icons/icon.ico"]
+    "icon": ["icons/icon.ico"],
+    "externalBin": ["binaries/ffmpeg"]
   }
 }
