@@ -74,6 +74,16 @@ test('local ids are unique even when two folders hold the same filename', () => 
     locked(),
   );
   assert.notEqual(sources[0].localId, sources[1].localId);
+  // Pin the composition, not just the uniqueness: a bare index prefix would
+  // satisfy the inequality above while losing the path the id is keyed on.
+  assert.ok(sources[0].localId.includes('D:\\one\\clip.mp4'));
+  assert.ok(sources[1].localId.includes('D:\\two\\clip.mp4'));
+});
+
+test('the same path picked twice still yields distinct ids', () => {
+  // This is what the index prefix is for; nothing asserted it.
+  const sources = buildBatchSources([probed('D:\\a.mp4'), probed('D:\\a.mp4')], locked());
+  assert.notEqual(sources[0].localId, sources[1].localId);
 });
 
 // --- Ported from the upload-based module's tests, adapted to picked paths ---
@@ -83,8 +93,11 @@ const unlocked = (over: Partial<NamingConfig> = {}): NamingConfig => ({
   ...over,
 });
 
-test('an unreadable size falls back to portrait', () => {
+test('a size the probe could not read falls back to portrait', () => {
+  // Not a guard -- it falls out of the comparison. NaN > NaN and 0 > 0 are
+  // both false, so anything unreadable lands on portrait by itself.
   assert.equal(inputRatioFor(0, 0), '9:16');
+  assert.equal(inputRatioFor(Number.NaN, Number.NaN), '9:16');
 });
 
 test('an unlocked config detects naming per file so different games stay apart', () => {
