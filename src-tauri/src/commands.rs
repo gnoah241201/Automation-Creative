@@ -135,3 +135,108 @@ pub async fn probe_media(app: AppHandle, path: String) -> Result<MediaProbe, Str
     // not tell", and the caller converts rather than copies.
     Ok(crate::probe::media(&String::from_utf8_lossy(&output.stderr)))
 }
+
+/// Makes sure the output folder exists and can really be written to.
+///
+/// Neither `runBatch` nor ffmpeg creates a missing output folder, and a folder
+/// remembered from last week may be gone, so this creates it first. Then it
+/// writes and removes a probe file, the only honest answer on Windows, where a
+/// read-only attribute, a network share and a folder owned by another account
+/// all fail differently.
+#[tauri::command]
+pub fn check_writable(folder: String) -> Result<(), String> {
+    std::fs::create_dir_all(&folder).map_err(|e| format!("{folder}: {e}"))?;
+    let probe = std::path::Path::new(&folder).join(".resize-write-probe");
+    std::fs::write(&probe, b"1").map_err(|e| format!("{folder}: {e}"))?;
+    let _ = std::fs::remove_file(&probe);
+    Ok(())
+}
+
+/// Which of these paths are gone. A batch can sit on screen for an hour while
+/// someone tidies the folder it was picked from.
+#[tauri::command]
+pub fn missing_paths(paths: Vec<String>) -> Vec<String> {
+    paths.into_iter().filter(|p| !std::path::Path::new(p).is_file()).collect()
+}
+
+/// Writes the PNG bytes sent as the raw request body to a fixed name in the
+/// temp directory and returns the path.
+///
+/// The logo / CTA overlay is drawn on a canvas in the webview, so the bytes
+/// start there and ffmpeg needs them as a file. The name is the caller's
+/// (one per input/output ratio pair), so the folder stays bounded at ten small
+/// files that are overwritten each run, instead of growing without end.
+#[tauri::command]
+pub fn write_temp_png(request: tauri::ipc::Request<'_>) -> Result<String, String> {
+    let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
+        return Err("write_temp_png expects raw bytes".to_string());
+    };
+    let name = request
+        .headers()
+        .get("x-file-name")
+        .and_then(|value| value.to_str().ok())
+        .ok_or("missing x-file-name header")?;
+    // A name, not a path: nothing here may reach outside the temp folder.
+    if name.is_empty() || name.contains(['/', '\\', ':']) || name.contains("..") {
+        return Err(format!("{name}: not a plain file name"));
+    }
+    let dir = std::env::temp_dir().join("resize-video-overlays");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let path = dir.join(name);
+    std::fs::write(&path, bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("resize-video-test-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    #[test]
+    fn a_missing_output_folder_is_created_not_reported_unwritable() {
+        let dir = scratch("create").join("nested").join("out");
+        assert!(check_writable(dir.to_string_lossy().to_string()).is_ok());
+        assert!(dir.is_dir());
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
+    }
+
+    #[test]
+    fn the_probe_file_does_not_outlive_the_check() {
+        let dir = scratch("probe");
+        std::fs::create_dir_all(&dir).unwrap();
+        check_writable(dir.to_string_lossy().to_string()).unwrap();
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_that_cannot_exist_is_refused() {
+        // A file where the folder should be: neither created nor written into.
+        let file = scratch("blocked");
+        std::fs::write(&file, b"x").unwrap();
+        let err = check_writable(file.to_string_lossy().to_string()).unwrap_err();
+        assert!(err.contains(file.to_string_lossy().as_ref()), "the error names the folder: {err}");
+        let _ = std::fs::remove_file(&file);
+    }
+
+    #[test]
+    fn only_the_paths_that_are_gone_come_back() {
+        let dir = scratch("missing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let here = dir.join("here.mp4");
+        std::fs::write(&here, b"x").unwrap();
+        let gone = dir.join("gone.mp4");
+        let missing = missing_paths(vec![
+            here.to_string_lossy().to_string(),
+            gone.to_string_lossy().to_string(),
+            dir.to_string_lossy().to_string(), // a folder is not a source file
+        ]);
+        assert_eq!(missing, vec![gone.to_string_lossy().to_string(), dir.to_string_lossy().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

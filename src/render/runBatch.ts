@@ -3,8 +3,8 @@ import { JobState, runQueue } from '../core/renderQueue';
 import { ResizeBatchSource } from '../core/librarySources';
 import { LengthMode } from '../core/outputDerivation';
 import { buildFfmpegCommand, buildSpeedUpCommand } from '../core/buildCommand';
-import { RenderSpec } from '../core/contract';
-import { getBridge } from '../bridge/tauri';
+import { AspectRatio, InputRatio, RenderSpec } from '../core/contract';
+import { getBridge, RenderCancelled } from '../bridge/tauri';
 
 /**
  * Everything in a RenderSpec except what the plan decides per output, plus the
@@ -23,7 +23,7 @@ export type RenderSpecBase = Omit<
   backgroundImagePath?: string;
 };
 
-const join = (folder: string, filename: string) => `${folder}\\${filename}`;
+export const join = (folder: string, filename: string) => `${folder}\\${filename}`;
 
 /**
  * The ffmpeg argv for one planned job.
@@ -40,6 +40,7 @@ export const argvFor = (
   outputFolder: string,
   base: RenderSpecBase,
   threads: number,
+  overlayPath?: string,
 ): string[] => {
   const outputPath = join(outputFolder, job.filename);
 
@@ -57,6 +58,7 @@ export const argvFor = (
       foregroundPath: source.path,
       backgroundVideoPath: base.backgroundSource === 'self' ? source.path : base.backgroundVideoPath,
       backgroundImagePath: base.backgroundImagePath,
+      overlayPath,
       outputPath,
       threads,
     });
@@ -94,11 +96,31 @@ export interface RunBatchInput {
   outputFolder: string;
   spec: RenderSpecBase;
   concurrency: number;
+  /**
+   * A plan the caller already settled on -- filtered for collisions, or
+   * narrowed to a retry -- used exactly as given. Absent means derive it from
+   * the selection. An EMPTY array is a plan: it runs nothing.
+   */
+  plan?: PlannedJob[];
+  /** Ids of jobs a previous run finished, for a retry plan that omits their children's parents. */
+  alreadyDone?: ReadonlySet<string>;
+  /**
+   * Polled as each job is about to start. Once it answers true, jobs that have
+   * not started end as cancelled instead of running; jobs already running are
+   * the caller's to cancel through the bridge.
+   */
+  shouldStop?: () => boolean;
+  /**
+   * The logo / CTA overlay image for a composite, by the source's input ratio
+   * and the output's. Undefined means that composite has none. Only composites
+   * read it: a child is cut or retimed from a frame that already carries it.
+   */
+  overlayFor?: (inputRatio: InputRatio, outputRatio: AspectRatio) => string | undefined;
   onChange?: (id: string, state: JobState, error?: string) => void;
 }
 
 export const runBatch = async (input: RunBatchInput): Promise<Map<string, JobState>> => {
-  const jobs = planBatch(input.sources, input.selectedIds, input.mode);
+  const jobs = input.plan ?? planBatch(input.sources, input.selectedIds, input.mode);
   const byId = new Map(input.sources.map((source) => [source.localId, source]));
   const bridge = getBridge();
 
@@ -113,11 +135,16 @@ export const runBatch = async (input: RunBatchInput): Promise<Map<string, JobSta
 
   return runQueue(jobs, {
     concurrency: slots,
+    alreadyDone: input.alreadyDone,
     onChange: input.onChange,
     run: async (job) => {
+      if (input.shouldStop?.()) throw new RenderCancelled();
       const source = byId.get(job.sourceId);
       if (!source) throw new Error(`No source for ${job.id}`);
-      await bridge.runFfmpeg(job.id, argvFor(job, source, input.outputFolder, input.spec, threads));
+      const overlay = job.kind === 'composite'
+        ? input.overlayFor?.(source.inputRatio ?? '9:16', job.ratio)
+        : undefined;
+      await bridge.runFfmpeg(job.id, argvFor(job, source, input.outputFolder, input.spec, threads, overlay));
     },
   });
 };

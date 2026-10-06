@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { argvFor, runBatch } from '../src/render/runBatch.ts';
 import { setBridge } from '../src/bridge/tauri.ts';
-import { planBatch } from '../src/core/renderPlan.ts';
+import { planBatch, planRetry } from '../src/core/renderPlan.ts';
+import { JobState } from '../src/core/renderQueue.ts';
 import { ResizeBatchSource } from '../src/core/librarySources.ts';
 
 const source = (): ResizeBatchSource => ({
@@ -98,3 +99,106 @@ for (const [label, concurrency] of [['zero', 0], ['NaN from a cleared field', Na
     assert.match(seen[0][at + 1], /^[1-9]\d*$/, 'the cap must be a positive integer');
   });
 }
+
+test('a supplied plan is used as-is rather than re-derived', async () => {
+  const ran: string[] = [];
+  setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); } });
+  const src = source();
+  const full = planBatch([src], new Set(['9:16', '9:16-15s']), 'speed');
+  await runBatch({
+    sources: [src], selectedIds: new Set(['9:16', '9:16-15s']), mode: 'speed',
+    outputFolder: 'D:\out', spec, concurrency: 1,
+    plan: full.filter((job) => job.kind === 'composite'),
+  });
+  assert.deepEqual(ran, [full[0].id], 'only the job that was handed over ran');
+});
+
+test('an empty supplied plan runs nothing rather than falling back to the selection', async () => {
+  // `plan ?? planBatch(...)` and `plan?.length ? plan : planBatch(...)` look
+  // alike and differ exactly here: a collision prompt that skipped everything
+  // hands over [], and re-deriving would render all of it anyway.
+  const ran: string[] = [];
+  setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); } });
+  await runBatch({
+    sources: [source()], selectedIds: new Set(['9:16']), mode: 'speed',
+    outputFolder: 'D:\out', spec, concurrency: 1, plan: [],
+  });
+  assert.deepEqual(ran, []);
+});
+
+test('a retry runs the failed child against the parent file the first run left behind', async () => {
+  const src = source();
+  const ticks = new Set(['9:16', '9:16-15s']);
+  const plan = planBatch([src], ticks, 'speed');
+  const [parent, child] = plan;
+
+  // First run: the composite succeeds, the retime fails.
+  setBridge({ runFfmpeg: async (jobId) => { if (jobId === child.id) throw 'ffmpeg exited with code 1'; } });
+  const first = await runBatch({
+    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\out', spec, concurrency: 1,
+  });
+  assert.equal(first.get(parent.id), 'done');
+  assert.equal(first.get(child.id), 'failed');
+
+  // Retry: the plan holds ONLY the child, so the queue cannot see the parent.
+  const retry = planRetry(plan, first);
+  assert.deepEqual(retry.map((job) => job.id), [child.id]);
+  const ran: string[] = [];
+  setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); } });
+  const second = await runBatch({
+    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\out', spec, concurrency: 1,
+    plan: retry,
+    alreadyDone: new Set([...first].filter(([, state]) => state === 'done').map(([id]) => id)),
+  });
+  assert.deepEqual(ran, [child.id], 'the child ran, and the finished parent did not');
+  assert.equal(second.get(child.id), 'done');
+});
+
+test('a stop request cancels what has not started and leaves what already ran alone', async () => {
+  const src = source();
+  const ticks = new Set(['9:16', '16:9', '1:1']);
+  const plan = planBatch([src], ticks, 'speed');
+  let stopped = false;
+  const ran: string[] = [];
+  setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); stopped = true; } });
+  const changes: Array<[string, JobState, string | undefined]> = [];
+  const result = await runBatch({
+    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\out', spec, concurrency: 1,
+    shouldStop: () => stopped,
+    onChange: (id, state, error) => changes.push([id, state, error]),
+  });
+  assert.deepEqual(ran, [plan[0].id], 'only the first job started before the stop');
+  assert.equal(result.get(plan[0].id), 'done');
+  for (const job of plan.slice(1)) {
+    assert.equal(result.get(job.id), 'failed');
+    assert.ok(changes.some(([id, state, error]) => id === job.id && state === 'failed' && error === 'cancelled'),
+      'reported as cancelled, the message a user-pressed Cancel produces');
+  }
+});
+
+test('a composite reads the overlay image it is given, as a third input', () => {
+  const src = source();
+  const [job] = planBatch([src], new Set(['16:9']), 'speed');
+  const args = argvFor(job, src, 'D:/out', spec, 2, 'C:/tmp/overlay.png');
+  const inputs = args.filter((arg, i) => args[i - 1] === '-i');
+  assert.deepEqual(inputs, [src.path, src.path, 'C:/tmp/overlay.png']);
+});
+
+test('runBatch hands each composite the overlay for its own ratio pair, and children none', async () => {
+  const src = source();
+  const seen: Record<string, string[]> = {};
+  setBridge({ runFfmpeg: async (jobId, args) => { seen[jobId] = args; } });
+  const asked: string[] = [];
+  const ticks = new Set(['16:9', '9:16-15s']);
+  const plan = planBatch([src], ticks, 'speed');
+  await runBatch({
+    sources: [src], selectedIds: ticks, mode: 'speed',
+    outputFolder: 'D:/out', spec, concurrency: 1,
+    overlayFor: (inRatio, outRatio) => { asked.push(`${inRatio}>${outRatio}`); return `C:/tmp/${outRatio.replace(':', 'x')}.png`; },
+  });
+  assert.deepEqual(asked.sort(), ['9:16>16:9', '9:16>9:16']);
+  const wide = plan.find((job) => job.ratio === '16:9')!;
+  assert.ok(seen[wide.id].includes('C:/tmp/16x9.png'), 'the composite got its overlay');
+  const child = plan.find((job) => job.kind === 'speed')!;
+  assert.equal(seen[child.id].some((arg) => arg.endsWith('.png')), false, 'a child is retimed from a frame that already has it');
+});

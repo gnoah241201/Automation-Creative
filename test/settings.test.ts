@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, readSettings, writeSettings, defaultConcurrency } from '../src/core/settings.ts';
+import { DEFAULT_SETTINGS, readSettings, writeSettings, defaultConcurrency, loadSettings } from '../src/core/settings.ts';
 
 const fakeStorage = (seed: Record<string, string> = {}): Storage => {
   const map = new Map(Object.entries(seed));
@@ -167,4 +167,34 @@ test('one good field among junk still yields a fully valid Settings', () => {
 test('defaultConcurrency survives a core count it cannot read', () => {
   assert.equal(defaultConcurrency(Number.NaN), 1);
   assert.equal(defaultConcurrency(2.5), 1);
+});
+
+test('first run seeds concurrency from the machine, not from the static placeholder', () => {
+  const store = fakeStorage();
+  const loaded = loadSettings(16, store);
+  assert.equal(loaded.concurrency, defaultConcurrency(16));
+  assert.notEqual(loaded.concurrency, DEFAULT_SETTINGS.concurrency, 'a 16-core machine must not get the 8-core default');
+  // ...and keeps it, so the value is stable across launches rather than
+  // re-derived from whatever the core count reports next time.
+  assert.equal(readSettings(store).concurrency, defaultConcurrency(16));
+});
+
+test('a stored concurrency is respected, even one equal to the placeholder', () => {
+  const store = fakeStorage({ 'resize.settings': JSON.stringify({ ...DEFAULT_SETTINGS, concurrency: 3 }) });
+  assert.equal(loadSettings(32, store).concurrency, 3, 'the user chose 3');
+});
+
+test('settings stored without a usable concurrency are seeded, the rest is kept', () => {
+  for (const concurrency of [undefined, null, 'many', Number.NaN]) {
+    const stored = JSON.stringify({ lengthMode: 'cut', outputFolder: 'D:\\Out', advancedOpen: true, concurrency });
+    const loaded = loadSettings(8, fakeStorage({ 'resize.settings': stored }));
+    assert.equal(loaded.concurrency, defaultConcurrency(8), String(concurrency));
+    assert.equal(loaded.lengthMode, 'cut');
+    assert.equal(loaded.outputFolder, 'D:\\Out');
+    assert.equal(loaded.advancedOpen, true);
+  }
+});
+
+test('an unreadable core count still seeds a sane value', () => {
+  assert.equal(loadSettings(Number.NaN, fakeStorage()).concurrency, 1);
 });

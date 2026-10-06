@@ -2,6 +2,7 @@ import { AspectRatio } from './contract';
 import { ResizeBatchSource } from './librarySources';
 import { LengthMode, OutputConfig, deriveOutputs } from './outputDerivation';
 import { buildOutputFilename } from './naming';
+import type { JobState } from './renderQueue';
 
 export interface PlannedJob {
   id: string;
@@ -99,4 +100,66 @@ export const planBatch = (
   }
 
   return jobs;
+};
+
+/**
+ * The jobs a retry should run: the ones that failed, plus everything that was
+ * skipped waiting on them.
+ *
+ * A skipped job never ran -- its parent died first -- so it is not a second
+ * class of failure, it is simply unfinished work. Re-running a `done` job
+ * would overwrite a correct file with an identical one and cost the time this
+ * exists to save.
+ *
+ * Takes the ORIGINAL plan, not a re-derived one: a settings change between
+ * the two runs must not make the retry do something other than what failed.
+ */
+export const planRetry = (
+  jobs: PlannedJob[],
+  states: ReadonlyMap<string, JobState>,
+): PlannedJob[] => {
+  const byId = new Map(jobs.map((job) => [job.id, job]));
+  const wanted = new Set<string>();
+  for (const job of jobs) {
+    const state = states.get(job.id);
+    if (state === 'failed' || state === 'skipped') wanted.add(job.id);
+  }
+  // A wanted child needs its parent only if the parent's file is not already
+  // there. `done` means it is, so the chain stops at the first finished parent.
+  // Walked upward rather than one level, so a grandchild is covered too.
+  for (const job of jobs) {
+    if (!wanted.has(job.id)) continue;
+    for (let at = job.dependsOn; at && states.get(at) !== 'done'; at = byId.get(at)?.dependsOn) {
+      wanted.add(at);
+    }
+  }
+  return jobs.filter((job) => wanted.has(job.id));
+};
+
+/**
+ * Marks a finished parent as unfinished when its file is no longer in the
+ * output folder and a retry would have to read it.
+ *
+ * `planRetry` trusts `done` to mean the file is there. Between two runs a
+ * person may tidy the folder, and a child retimed from a missing parent would
+ * fail with an ffmpeg error that names no cause. Only parents a retried child
+ * needs are checked: a deleted output nobody is retrying is not this
+ * function's business. Returns a copy; the caller's map is left as it was.
+ *
+ * `existingNames` holds lower-cased filenames, like `findCollisions` compares.
+ */
+export const reopenMissingParents = (
+  jobs: PlannedJob[],
+  states: ReadonlyMap<string, JobState>,
+  existingNames: ReadonlySet<string>,
+): Map<string, JobState> => {
+  const next = new Map(states);
+  const byId = new Map(jobs.map((job) => [job.id, job]));
+  for (const job of planRetry(jobs, next)) {
+    const parent = job.dependsOn ? byId.get(job.dependsOn) : undefined;
+    if (parent && next.get(parent.id) === 'done' && !existingNames.has(parent.filename.toLowerCase())) {
+      next.set(parent.id, 'failed');
+    }
+  }
+  return next;
 };

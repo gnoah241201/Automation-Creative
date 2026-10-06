@@ -4,6 +4,16 @@ export type JobState = 'waiting' | 'running' | 'done' | 'failed' | 'skipped';
 
 export interface QueueOptions {
   concurrency: number;
+  /**
+   * Job ids that finished in an EARLIER run and are not in this list.
+   *
+   * A retry plans only the failed child, because its parent's file is already
+   * on disk. The queue cannot see that parent, so without this it would treat
+   * the missing parent as one that never finished and skip the child forever.
+   * Consulted only for a parent the list does not mention: for anything in the
+   * list, this run's own outcome is the truth.
+   */
+  alreadyDone?: ReadonlySet<string>;
   run: (job: PlannedJob) => Promise<void>;
   onChange?: (id: string, state: JobState, error?: string) => void;
 }
@@ -22,7 +32,7 @@ export interface QueueOptions {
  */
 export const runQueue = async (
   jobs: PlannedJob[],
-  { concurrency, run, onChange }: QueueOptions,
+  { concurrency, run, onChange, alreadyDone }: QueueOptions,
 ): Promise<Map<string, JobState>> => {
   const states = new Map<string, JobState>(jobs.map((job) => [job.id, 'waiting' as JobState]));
   const byId = new Map(jobs.map((job) => [job.id, job]));
@@ -45,7 +55,8 @@ export const runQueue = async (
   const ready = (job: PlannedJob): boolean => {
     if (states.get(job.id) !== 'waiting') return false;
     if (!job.dependsOn) return true;
-    return states.get(job.dependsOn) === 'done';
+    const parent = states.get(job.dependsOn);
+    return parent === undefined ? alreadyDone?.has(job.dependsOn) === true : parent === 'done';
   };
 
   const doomed = (job: PlannedJob): boolean => {

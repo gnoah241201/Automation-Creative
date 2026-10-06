@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planBatch } from '../src/core/renderPlan.ts';
+import { planBatch, planRetry, reopenMissingParents } from '../src/core/renderPlan.ts';
+import type { JobState } from '../src/core/renderQueue.ts';
 import { ResizeBatchSource } from '../src/core/librarySources.ts';
 
 const source = (id: string, duration: number, version = 'v60'): ResizeBatchSource => ({
@@ -138,4 +139,101 @@ test('a child knows the filename it reads, not just the job id', () => {
   const jobs = planBatch([source('a', 200)], new Set(['9:16-15s']), 'speed');
   const child = jobs.find((job) => job.kind === 'speed');
   assert.equal(child?.parentFilename, 'BubbleTea_v60_9x16_TTO.mp4');
+});
+
+// planRetry: which jobs a second run should do, given how the first one ended.
+
+const outcome = (jobs: ReturnType<typeof planBatch>, states: Record<string, JobState>) =>
+  new Map<string, JobState>(jobs.map((job) => [job.id, states[job.id] ?? 'done']));
+
+const twoSources = () => planBatch(
+  [source('a', 200), source('b', 200, 'v61')],
+  new Set(['9:16', '9:16-15s', '16:9']),
+  'speed',
+);
+
+test('a retry runs the failed jobs and nothing that already succeeded', () => {
+  const jobs = twoSources();
+  const failed = jobs.find((job) => job.sourceId === 'b' && job.kind === 'composite' && job.ratio === '16:9')!;
+  const retry = planRetry(jobs, outcome(jobs, { [failed.id]: 'failed' }));
+  assert.deepEqual(retry.map((job) => job.id), [failed.id]);
+});
+
+test('a retry includes the children that were skipped waiting on a failure', () => {
+  const jobs = twoSources();
+  const parent = jobs.find((job) => job.sourceId === 'a' && job.kind === 'composite' && job.ratio === '9:16')!;
+  const child = jobs.find((job) => job.dependsOn === parent.id)!;
+  const retry = planRetry(jobs, outcome(jobs, { [parent.id]: 'failed', [child.id]: 'skipped' }));
+  assert.deepEqual(retry.map((job) => job.id), [parent.id, child.id]);
+});
+
+test('a retry does NOT re-run a parent that finished, even when its child failed', () => {
+  const jobs = twoSources();
+  const parent = jobs.find((job) => job.sourceId === 'a' && job.kind === 'composite' && job.ratio === '9:16')!;
+  const child = jobs.find((job) => job.dependsOn === parent.id)!;
+  const retry = planRetry(jobs, outcome(jobs, { [parent.id]: 'done', [child.id]: 'failed' }));
+  assert.deepEqual(retry.map((job) => job.id), [child.id], 'the parent file is already on disk');
+});
+
+test('a retry re-runs a parent that did not finish, not only its failed child', () => {
+  // The child carries the failure but its parent is not done (here: never ran
+  // because the whole job was cancelled). Running the child alone would read a
+  // file that is not there.
+  const jobs = twoSources();
+  const parent = jobs.find((job) => job.sourceId === 'a' && job.kind === 'composite' && job.ratio === '9:16')!;
+  const child = jobs.find((job) => job.dependsOn === parent.id)!;
+  const retry = planRetry(jobs, outcome(jobs, { [parent.id]: 'waiting', [child.id]: 'failed' }));
+  assert.deepEqual(retry.map((job) => job.id), [parent.id, child.id]);
+});
+
+test('retrying a clean run plans nothing', () => {
+  const jobs = twoSources();
+  assert.deepEqual(planRetry(jobs, outcome(jobs, {})), []);
+});
+
+test('retrying a run with no recorded states plans nothing rather than everything', () => {
+  assert.deepEqual(planRetry(twoSources(), new Map()), []);
+});
+
+test('the retry list is still in parent-before-child order', () => {
+  const jobs = twoSources();
+  const states: Record<string, JobState> = {};
+  for (const job of jobs) states[job.id] = job.dependsOn ? 'skipped' : 'failed';
+  const retry = planRetry(jobs, outcome(jobs, states));
+  assert.equal(retry.length, jobs.length);
+  const seen = new Set<string>();
+  for (const job of retry) {
+    if (job.dependsOn) assert.ok(seen.has(job.dependsOn), `${job.id} runs before its parent`);
+    seen.add(job.id);
+  }
+  assert.deepEqual(retry.map((job) => job.id), jobs.map((job) => job.id), 'same relative order as the plan');
+});
+
+test('a finished parent whose file has since been deleted is reopened for the retry', () => {
+  const jobs = twoSources();
+  const parent = jobs.find((job) => job.sourceId === 'a' && job.kind === 'composite' && job.ratio === '9:16')!;
+  const child = jobs.find((job) => job.dependsOn === parent.id)!;
+  const states = outcome(jobs, { [child.id]: 'failed' });
+  // Everything else is on disk; the parent is not.
+  const onDisk = new Set(jobs.filter((job) => job.id !== parent.id).map((job) => job.filename.toLowerCase()));
+  const reopened = reopenMissingParents(jobs, states, onDisk);
+  assert.equal(reopened.get(parent.id), 'failed', 'its file is gone, so it is not finished');
+  assert.deepEqual(planRetry(jobs, reopened).map((job) => job.id), [parent.id, child.id]);
+  assert.equal(states.get(parent.id), 'done', 'the caller\'s map is not mutated');
+});
+
+test('a finished parent that is still on disk stays finished, whatever the case of its name', () => {
+  const jobs = twoSources();
+  const parent = jobs.find((job) => job.sourceId === 'a' && job.kind === 'composite' && job.ratio === '9:16')!;
+  const child = jobs.find((job) => job.dependsOn === parent.id)!;
+  const states = outcome(jobs, { [child.id]: 'failed' });
+  const reopened = reopenMissingParents(jobs, states, new Set([parent.filename.toUpperCase().toLowerCase()]));
+  assert.equal(reopened.get(parent.id), 'done');
+  assert.deepEqual(planRetry(jobs, reopened).map((job) => job.id), [child.id]);
+});
+
+test('a deleted output nobody needs is left alone: only parents of retried children are checked', () => {
+  const jobs = twoSources();
+  const reopened = reopenMissingParents(jobs, outcome(jobs, {}), new Set());
+  assert.equal([...reopened.values()].every((state) => state === 'done'), true);
 });

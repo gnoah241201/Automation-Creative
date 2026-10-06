@@ -90,3 +90,33 @@ export const writeSettings = (next: Settings, storage?: Storage): void => {
     // worth failing a render over.
   }
 };
+
+const hasStoredConcurrency = (storage?: Storage): boolean => {
+  const target = store(storage);
+  if (!target) return false;
+  try {
+    const raw: unknown = JSON.parse(target.getItem(KEY) ?? 'null');
+    return typeof raw === 'object' && raw !== null
+      && typeof (raw as { concurrency?: unknown }).concurrency === 'number'
+      && Number.isFinite((raw as { concurrency: number }).concurrency);
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * What the app starts with: `readSettings`, except that a machine which has
+ * never chosen a job count gets one worked out from its own cores.
+ *
+ * `DEFAULT_SETTINGS.concurrency` is a fixed 3, which is right for a 7-8 core
+ * laptop and too few for a 16-core desktop. The seed is written back so the
+ * number is stable across launches instead of being re-derived each time. A
+ * stored number is never second-guessed, including a stored 3.
+ */
+export const loadSettings = (cpuCount: number, storage?: Storage): Settings => {
+  const read = readSettings(storage);
+  if (hasStoredConcurrency(storage)) return read;
+  const seeded = { ...read, concurrency: defaultConcurrency(cpuCount) };
+  writeSettings(seeded, storage);
+  return seeded;
+};

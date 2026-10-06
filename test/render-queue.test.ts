@@ -208,3 +208,39 @@ test('a thrown value that cannot be stringified still fails only that job', { ti
   assert.equal(states.get('bad'), 'failed');
   assert.equal(states.get('good'), 'done');
 });
+
+test('a child whose parent is not in the list is skipped, never run from nothing', { timeout: 2000 }, async () => {
+  const ran: string[] = [];
+  const states = await runQueue([job('c', 'p')], {
+    concurrency: 2,
+    run: async (j) => { ran.push(j.id); },
+  });
+  assert.deepEqual(ran, []);
+  assert.equal(states.get('c'), 'skipped');
+});
+
+test('a parent declared already done lets its child run without being in the list', { timeout: 2000 }, async () => {
+  // This is the retry case: the parent's file was written last run, so the plan
+  // holds only the child. Without the declaration the child is skipped forever.
+  const ran: string[] = [];
+  const states = await runQueue([job('c', 'p')], {
+    concurrency: 2,
+    alreadyDone: new Set(['p']),
+    run: async (j) => { ran.push(j.id); },
+  });
+  assert.deepEqual(ran, ['c']);
+  assert.equal(states.get('c'), 'done');
+});
+
+test('a declaration never rescues a child whose parent IS in the list and failed', { timeout: 2000 }, async () => {
+  // The list is the truth for anything in it; `alreadyDone` is only consulted
+  // for a parent the list does not mention.
+  const ran: string[] = [];
+  const states = await runQueue([job('p'), job('c', 'p')], {
+    concurrency: 2,
+    alreadyDone: new Set(['p']),
+    run: async (j) => { ran.push(j.id); if (j.id === 'p') throw new Error('boom'); },
+  });
+  assert.deepEqual(ran, ['p']);
+  assert.equal(states.get('c'), 'skipped');
+});

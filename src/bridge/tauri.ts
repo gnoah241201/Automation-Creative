@@ -27,12 +27,36 @@ export interface Bridge {
   onProgress(fn: (jobId: string, line: string) => void): Promise<() => void>;
   fileUrl(path: string): string;
   revealFolder(path: string): Promise<void>;
+  /**
+   * Creates the folder if it is missing, then proves it can be written to.
+   * Rejects with the OS's reason when it cannot.
+   */
+  checkWritable(folder: string): Promise<void>;
+  /** The subset of these paths that are no longer files on disk. */
+  missingPaths(paths: string[]): Promise<string[]>;
+  /**
+   * Files dragged onto the window. `over` and `leave` drive a highlight; `drop`
+   * carries the real paths, which an HTML drop event never does inside Tauri.
+   */
+  onFileDrop(fn: (event: FileDropEvent) => void): Promise<() => void>;
+  /** Writes PNG bytes under a plain name in the temp folder and returns the path. */
+  writeTempPng(name: string, bytes: Uint8Array): Promise<string>;
+}
+
+export interface FileDropEvent {
+  kind: 'over' | 'leave' | 'drop';
+  paths: string[];
 }
 
 /** Thrown when a run ended because `cancelJob` was called, not because it failed. */
 export class RenderCancelled extends Error {
   constructor() { super('cancelled'); this.name = 'RenderCancelled'; }
 }
+
+/** What a cancelled job's error message reads, once the queue has turned the rejection into text. */
+export const CANCELLED_MESSAGE = new RenderCancelled().message;
+
+export const isCancelledMessage = (message: string | undefined): boolean => message === CANCELLED_MESSAGE;
 
 /**
  * Rust rejects a killed-on-purpose job with exactly the string "cancelled".
@@ -42,7 +66,7 @@ export class RenderCancelled extends Error {
 export const asRunError = (reason: unknown): unknown =>
   reason === 'cancelled' ? new RenderCancelled() : reason;
 
-const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'];
+export const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'];
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
 
 const outsideTauri = (name: string) =>
@@ -103,6 +127,26 @@ const real: Bridge = {
     const { revealItemInDir } = await import('@tauri-apps/plugin-opener');
     return revealItemInDir(path);
   },
+  async checkWritable(folder) {
+    return invoke<void>('check_writable', { folder });
+  },
+  async missingPaths(paths) {
+    return invoke<string[]>('missing_paths', { paths });
+  },
+  async onFileDrop(fn) {
+    const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+    return getCurrentWebview().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload.type === 'drop') fn({ kind: 'drop', paths: payload.paths });
+      else if (payload.type === 'leave') fn({ kind: 'leave', paths: [] });
+      else fn({ kind: 'over', paths: [] });
+    });
+  },
+  async writeTempPng(name, bytes) {
+    // Raw body rather than a JSON array of numbers: a 1080x1920 overlay would
+    // otherwise cross the boundary as several megabytes of text.
+    return invoke<string>('write_temp_png', bytes, { headers: { 'x-file-name': name } });
+  },
 };
 
 const fallback: Bridge = {
@@ -119,6 +163,10 @@ const fallback: Bridge = {
   // the path would hand a test a plausible src that silently points nowhere.
   fileUrl: () => { throw outsideTauri('fileUrl'); },
   revealFolder: notInTauri('revealFolder'),
+  checkWritable: notInTauri('checkWritable'),
+  missingPaths: notInTauri('missingPaths'),
+  onFileDrop: notInTauri('onFileDrop'),
+  writeTempPng: notInTauri('writeTempPng'),
 };
 
 const inTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;

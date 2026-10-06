@@ -17,7 +17,10 @@ fn main() {
             commands::cancel_job,
             commands::list_files,
             commands::copy_file,
-            commands::probe_media
+            commands::probe_media,
+            commands::check_writable,
+            commands::missing_paths,
+            commands::write_temp_png
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {
