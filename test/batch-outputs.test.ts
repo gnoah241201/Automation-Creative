@@ -15,8 +15,6 @@ const source = (
 ): ResizeBatchSource => ({
   localId: id,
   path: `D:/${id}.mp4`,
-  libraryId: id,
-  uploadId: `upload-${id}`,
   filename: `${id}.mp4`,
   duration,
   inputRatio,
@@ -126,36 +124,4 @@ test('one selection resolves per source, dropping tiers a source cannot reach', 
   assert.equal(medium.get('9:16-15s')?.speedFrom, '9:16');
   assert.equal(long.get('9:16-30s')?.speedFrom, '9:16');
   assert.equal(long.get('9:16-15s')?.speedFrom, '9:16');
-});
-
-test('a landscape source in a batch renders with its own input ratio', async () => {
-  const { submitResizeBatch } = await import('../src/render/submitResizeBatch.ts');
-  const specs: Array<{ id: string; inputRatio: string }> = [];
-  const portrait = source('p', 200, '9:16');
-  const landscape = source('l', 200, '16:9');
-  await submitResizeBatch({
-    sources: [portrait, landscape],
-    outputs: deriveBatchOutputCatalog([portrait, landscape], 'speed').filter((o) => o.id === '4:5'),
-    catalogForSource: (source) => deriveSourceOutputs(source, 'speed'),
-    config: {
-      inputRatio: '9:16' as const,
-      bitrate: 6000,
-      fgPosition: 'center' as const,
-      bgType: 'video' as const,
-      backgroundImageMode: 'clean' as const,
-      blurAmount: 24,
-      logoX: 0, logoY: 0, logoSize: 100,
-      buttonType: 'text' as const, buttonText: 'Play',
-      buttonX: 0, buttonY: 0, buttonSize: 100,
-    },
-    createJob: async ({ source: item, spec }) => {
-      specs.push({ id: item.libraryId!, inputRatio: spec.inputRatio });
-      return { jobId: item.libraryId!, status: 'queued' };
-    },
-  });
-
-  assert.deepEqual(specs, [
-    { id: 'p', inputRatio: '9:16' },
-    { id: 'l', inputRatio: '16:9' },
-  ]);
 });

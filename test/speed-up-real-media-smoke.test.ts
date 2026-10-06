@@ -1,14 +1,15 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import ffprobeInstaller from '@ffprobe-installer/ffprobe';
+import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { buildSpeedUpCommand } from '../src/core/buildCommand.ts';
-import { getFfmpegPath } from '../server/services/encoderConfig.ts';
-import { probeMedia } from '../server/services/mediaProbe.ts';
 
-const ffmpeg = getFfmpegPath();
+// The same binary the desktop app ships as its sidecar (scripts/copy-ffmpeg.mjs
+// copies it out of this package). There is no ffprobe any more: the app reads
+// media facts from ffmpeg's own banner, and so does this test.
+const ffmpeg = ffmpegInstaller.path;
 
 /**
  * The one thing a command-string test cannot show: that the end of the video
@@ -41,12 +42,9 @@ test('real FFmpeg keeps the whole video when speeding it up, end included', {
     assert.equal(media.frameRate, 30);
     assert.equal(media.hasAudio, true, 'audio is retimed, not dropped');
 
-    const streams = probeStreams(output);
-    const video = streams.find((stream) => stream.codec_type === 'video')!;
-    const audio = streams.find((stream) => stream.codec_type === 'audio')!;
-    assert.equal(video.codec_name, 'h264');
-    assert.equal(video.pix_fmt, 'yuv420p');
-    assert.equal(audio.codec_name, 'aac');
+    assert.equal(media.video?.codec, 'h264');
+    assert.equal(media.video?.pixFmt, 'yuv420p');
+    assert.equal(media.audio?.codec, 'aac');
 
     // Every third of the source lands in its third of the output.
     assertColor(sampleRgb(output, 0.15), 'red');
@@ -206,9 +204,36 @@ function toneMagnitude(input: string, at: number, frequency: number): number {
   return 2 * Math.hypot(sine, cosine) / count;
 }
 
-function probeStreams(input: string): Array<Record<string, unknown>> {
-  const raw = execFileSync(ffprobeInstaller.path, [
-    '-v', 'error', '-show_streams', '-of', 'json', input,
-  ], { encoding: 'utf8', timeout: 15_000 });
-  return (JSON.parse(raw) as { streams: Array<Record<string, unknown>> }).streams;
+interface ProbedMedia {
+  duration: number;
+  frameRate: number | null;
+  hasAudio: boolean;
+  video: { codec: string; pixFmt: string } | null;
+  audio: { codec: string } | null;
+}
+
+/**
+ * Reads a file's facts from the banner `ffmpeg -i` prints before it complains
+ * that no output was given. That complaint is a non-zero exit by design, so
+ * the exit status is ignored and only the text is read.
+ */
+function probeMedia(input: string): ProbedMedia {
+  const run = spawnSync(ffmpeg, ['-hide_banner', '-i', input], { encoding: 'utf8', timeout: 15_000 });
+  const banner = `${run.stderr ?? ''}`;
+  const time = /Duration: ([0-9]+):([0-9]+):([0-9.]+)/.exec(banner);
+  assert.ok(time, `no Duration line in the banner for ${input}:
+${banner}`);
+  const duration = Number(time[1]) * 3600 + Number(time[2]) * 60 + Number(time[3]);
+  const videoLine = /Stream #[0-9:]+[^:]*: Video: .*/.exec(banner)?.[0];
+  const audioLine = /Stream #[0-9:]+[^:]*: Audio: .*/.exec(banner)?.[0];
+  const video = videoLine ? /Video: ([a-z0-9_]+)[^,]*, ([a-z0-9]+)/.exec(videoLine) : null;
+  const fps = videoLine ? /([0-9.]+) fps/.exec(videoLine) : null;
+  const audio = audioLine ? /Audio: ([a-z0-9_]+)/.exec(audioLine) : null;
+  return {
+    duration,
+    frameRate: fps ? Number(fps[1]) : null,
+    hasAudio: audio !== null,
+    video: video ? { codec: video[1], pixFmt: video[2] } : null,
+    audio: audio ? { codec: audio[1] } : null,
+  };
 }

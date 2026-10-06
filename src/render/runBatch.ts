@@ -17,7 +17,7 @@ import { getBridge, RenderCancelled } from '../bridge/tauri';
  */
 export type RenderSpecBase = Omit<
   RenderSpec,
-  'inputRatio' | 'outputRatio' | 'duration' | 'naming' | 'outputFilename' | 'speedFromJobId'
+  'inputRatio' | 'outputRatio' | 'duration' | 'naming' | 'outputFilename'
 > & {
   backgroundVideoPath?: string;
   backgroundImagePath?: string;

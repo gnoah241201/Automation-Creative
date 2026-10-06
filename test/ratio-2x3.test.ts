@@ -2,8 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { deriveOutputs } from '../src/core/outputDerivation.ts';
 import { getOutputFrameDimensions } from '../src/core/precomposedAnchor.ts';
-import { ratioLabelFor } from '../server/services/renderBundlePlan.ts';
-import { validateRenderSpec } from '../src/core/validation.ts';
 import { buildFfmpegCommand } from '../src/core/buildCommand.ts';
 import { RenderSpec } from '../src/core/contract.ts';
 
@@ -84,14 +82,7 @@ test('2:3 has one preview box, on the output that is rendered', () => {
   assert.equal(previewed[0].speedFrom, undefined);
 });
 
-// --- Accepted by the server ---
-
-test('a 2:3 spec passes validation', () => {
-  const errors = validateRenderSpec(spec(), {
-    hasForeground: true, hasBackgroundVideo: false, hasBackgroundImage: true, hasOverlay: false,
-  });
-  assert.deepEqual(errors, []);
-});
+// --- The command ---
 
 test('the render command targets the 2:3 frame', () => {
   const args = buildFfmpegCommand({
@@ -120,16 +111,4 @@ test('a precomposed banner zooms the background for 2:3, as it does for 4:5', ()
   // Same treatment, only the frame size differs.
   assert.equal(two.includes('crop='), four.includes('crop='));
   assert.equal(two.includes('flags=spline'), four.includes('flags=spline'));
-});
-
-// --- Naming a bundled original ---
-
-test('a 2:3 source is labelled 2:3 rather than by pixel size', () => {
-  assert.equal(ratioLabelFor(1080, 1620), '2:3');
-});
-
-test('2:3 does not steal the label from a neighbouring ratio', () => {
-  assert.equal(ratioLabelFor(1080, 1350), '4:5');
-  assert.equal(ratioLabelFor(1080, 1920), '9:16');
-  assert.equal(ratioLabelFor(1080, 1080), '1:1');
 });

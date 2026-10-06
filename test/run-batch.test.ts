@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argvFor, runBatch } from '../src/render/runBatch.ts';
+import { argvFor, join, runBatch } from '../src/render/runBatch.ts';
 import { setBridge } from '../src/bridge/tauri.ts';
 import { planBatch, planRetry } from '../src/core/renderPlan.ts';
 import { JobState } from '../src/core/renderQueue.ts';
 import { ResizeBatchSource } from '../src/core/librarySources.ts';
+import { buildFfmpegCommand } from '../src/core/buildCommand.ts';
 
 const source = (): ResizeBatchSource => ({
   localId: '0:D:\\in\\a.mp4', path: 'D:\\in\\a.mp4', filename: 'a.mp4',
@@ -83,6 +84,38 @@ test('self-blur feeds the source in as its own background', () => {
   const [{ args }] = argvs('speed', ['9:16']);
   const inputs = args.filter((arg, i) => args[i - 1] === '-i');
   assert.deepEqual(inputs, ['D:\\in\\a.mp4', 'D:\\in\\a.mp4']);
+});
+
+test('a landscape source composes with its own input ratio, not the portrait default', () => {
+  // Ported from the web build's batch test of the same idea: in a mixed batch
+  // each source carries its own ratio into its own composite. The 4:5 output
+  // is chosen because 16:9 -> 4:5 and 9:16 -> 4:5 take different filter paths.
+  const portrait = { ...source(), localId: 'p', path: 'D:/in/p.mp4', inputRatio: '9:16' as const };
+  const landscape = { ...source(), localId: 'l', path: 'D:/in/l.mp4', inputRatio: '16:9' as const };
+  const filterFor = (src: ResizeBatchSource) => {
+    const [job] = planBatch([src], new Set(['4:5']), 'speed');
+    const args = argvFor(job, src, 'D:/out', spec, 2);
+    return args[args.indexOf('-filter_complex') + 1];
+  };
+
+  assert.notEqual(filterFor(landscape), filterFor(portrait), 'the ratio changes the filter graph');
+
+  const [job] = planBatch([landscape], new Set(['4:5']), 'speed');
+  const expected = buildFfmpegCommand({
+    spec: {
+      ...spec,
+      inputRatio: '16:9',
+      outputRatio: '4:5',
+      duration: job.duration,
+      naming: { gameName: landscape.gameName, version: landscape.version, suffix: landscape.suffix },
+      outputFilename: job.filename,
+    },
+    foregroundPath: landscape.path,
+    backgroundVideoPath: landscape.path,
+    outputPath: join('D:/out', job.filename),
+    threads: 2,
+  });
+  assert.deepEqual(argvFor(job, landscape, 'D:/out', spec, 2), expected);
 });
 
 for (const [label, concurrency] of [['zero', 0], ['NaN from a cleared field', NaN], ['negative', -3]] as const) {

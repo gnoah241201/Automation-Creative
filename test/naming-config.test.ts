@@ -131,7 +131,6 @@ test('a locked config survives an unparseable filename', () => {
 const source = (over: Partial<ResizeBatchSource> = {}): ResizeBatchSource => ({
   localId: 'a',
   path: 'D:/Detected_v1_Old.mp4',
-  libraryId: 'a',
   filename: 'Detected_v1_Old.mp4',
   duration: 60,
   gameName: 'Detected',
@@ -150,11 +149,11 @@ test('a locked config overrides the naming a batch source arrived with', () => {
 
 test('applying a config leaves everything except the naming fields alone', () => {
   const locked = config({ gameName: 'HeroWars', version: 'v9', suffix: 'UGC', locked: true });
-  const original = source({ duration: 120, inputRatio: '16:9', uploadId: 'u1' });
+  const original = source({ duration: 120, inputRatio: '16:9', path: 'D:/Other.mp4' });
   const applied = applyNamingConfigToSource(locked, original);
   assert.equal(applied.duration, 120);
   assert.equal(applied.inputRatio, '16:9');
-  assert.equal(applied.uploadId, 'u1');
+  assert.equal(applied.path, 'D:/Other.mp4');
   assert.equal(applied.localId, original.localId);
 });
 
@@ -202,7 +201,7 @@ test('an unlocked config leaves a batch on its own naming', () => {
 
 test('applying to a batch keeps everything that is not naming', () => {
   const locked = config({ gameName: 'X', version: 'v1', suffix: '', locked: true });
-  const [applied] = applyNamingConfigToBatch(locked, [source({ duration: 90, uploadId: 'u9' })]);
+  const [applied] = applyNamingConfigToBatch(locked, [source({ duration: 90, path: 'D:/Other9.mp4' })]);
   assert.equal(applied.duration, 90);
-  assert.equal(applied.uploadId, 'u9');
+  assert.equal(applied.path, 'D:/Other9.mp4');
 });
