@@ -16,9 +16,11 @@ Nên phần "native" thật sự chỉ cần làm bốn việc: chọn file, ch�
 
 | | Vỏ app | ffmpeg | Tổng |
 |---|---|---|---|
-| **Tauri 2** | ~6 MB | 62 MB | **~68 MB** |
-| Node SEA | ~98 MB | 62 MB | ~160 MB |
-| Electron | ~160 MB | 62 MB | ~220 MB |
+| **Tauri 2** (đã đo) | ~12 MB | ~64,5 MB | **~77 MB** |
+| Node SEA (ước lượng, chưa đo) | ~98 MB | 62 MB | ~160 MB |
+| Electron (ước lượng, chưa đo) | ~160 MB | 62 MB | ~220 MB |
+
+**Bộ cài là 18,1 MiB** (`Resize Video_2.0.0_x64-setup.exe`) — đây là con số được gửi đi, tải về và đính kèm, vì NSIS nén bằng LZMA. Dung lượng sau khi cài là ~77 MB (app ~12 MB + ffmpeg ~64,5 MB). Con số ~68 MB ghi lúc lập kế hoạch là ước lượng thấp hơn thực tế; hàng Tauri nay là số đo, hai hàng còn lại vẫn là ước lượng.
 
 `ffprobe.exe` (78 MB) **bị bỏ**. Nó chỉ còn dùng để dò codec, mà `ffmpeg -i` in ra đúng thông tin đó.
 
