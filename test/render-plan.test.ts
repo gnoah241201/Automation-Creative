@@ -5,6 +5,7 @@ import { ResizeBatchSource } from '../src/core/librarySources.ts';
 
 const source = (id: string, duration: number, version = 'v60'): ResizeBatchSource => ({
   localId: id,
+  path: `D:/${id}.mp4`,
   filename: `${id}.mp4`,
   duration,
   inputRatio: '9:16',

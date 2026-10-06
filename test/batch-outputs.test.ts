@@ -14,6 +14,7 @@ const source = (
   inputRatio?: ResizeBatchSource['inputRatio'],
 ): ResizeBatchSource => ({
   localId: id,
+  path: `D:/${id}.mp4`,
   libraryId: id,
   uploadId: `upload-${id}`,
   filename: `${id}.mp4`,

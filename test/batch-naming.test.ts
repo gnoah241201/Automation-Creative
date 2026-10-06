@@ -9,7 +9,7 @@ const meta = (over: Partial<NamingMeta> = {}): NamingMeta => ({
 });
 
 const source = (over: Partial<ResizeBatchSource> = {}): ResizeBatchSource => ({
-  localId: 'a', uploadId: 'u-a', filename: 'a.mp4', duration: 60,
+  localId: 'a', path: 'D:/a.mp4', uploadId: 'u-a', filename: 'a.mp4', duration: 60,
   gameName: 'HeroWars', version: 'v60', suffix: 'UGC', ...over,
 });
 

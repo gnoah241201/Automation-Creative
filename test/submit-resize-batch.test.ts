@@ -8,6 +8,7 @@ import { applyResizeBatchWorkResult, createResizeBatchState, replaceResizeBatch,
 
 const source = (id: string, duration = 12): ResizeBatchSource => ({
   localId: id,
+  path: `D:/${id}.mp4`,
   libraryId: id,
   uploadId: `upload-${id}`,
   filename: `${id}.mp4`,

@@ -14,7 +14,7 @@ import {
 } from '../src/render/resizeBatchState.ts';
 
 const source = (id: string, duration: number): ResizeBatchSource => ({
-  localId: id, libraryId: id, uploadId: `upload-${id}`, filename: `${id}.mp4`, duration,
+  localId: id, path: `D:/${id}.mp4`, libraryId: id, uploadId: `upload-${id}`, filename: `${id}.mp4`, duration,
   gameName: id, version: 'v1', suffix: '',
 });
 

@@ -28,7 +28,7 @@ import {
 } from './render/api';
 import { deriveOutputs, OutputConfig, planSelectedOutputs } from './core/outputDerivation';
 import { deriveBatchOutputCatalog, deriveSourceOutputs, selectSourceOutputs } from './core/batchOutputs';
-import { buildBatchSources, nextConfigVersion, type ProbedUpload } from './render/batchUpload';
+import { buildBatchSources, nextConfigVersion, type ProbedSource } from './core/batchSources';
 import { validateBatchNaming } from './core/batchNaming';
 import { sequenceVersions } from './core/naming/versionSequence';
 import {
@@ -1396,7 +1396,7 @@ export default function App() {
     setBatchUploadError(null);
     setBatchUploadProgress({ done: 0, total: files.length });
     try {
-      const uploads: ProbedUpload[] = [];
+      const uploads: Array<ProbedSource & { uploadId: string }> = [];
       for (const [index, file] of files.entries()) {
         const probe = await probeVideoDuration(URL.createObjectURL(file), browserProbeDeps());
         if (probe.status !== 'ready') {
@@ -1404,9 +1404,10 @@ export default function App() {
         }
         const session = await createUploadSession({ foregroundFile: file });
         uploads.push({
-          localId: `${session.uploadId}`,
+          // A browser File has no disk path; the name stands in until the picker
+          // returns real ones. The render still reads the staged upload.
+          path: file.name,
           uploadId: session.uploadId,
-          filename: file.name,
           duration: probe.duration,
           width: probe.width,
           height: probe.height,
@@ -1419,7 +1420,8 @@ export default function App() {
       setFgFile(null);
       setFgDurationState({ status: 'idle' });
       setResizeBatchState((current) =>
-        replaceResizeBatch(current, buildBatchSources(uploads, namingConfig)));
+        replaceResizeBatch(current, buildBatchSources(uploads, namingConfig)
+          .map((source, index) => ({ ...source, uploadId: uploads[index].uploadId }))));
       // Only two background choices survive a batch; default to the one that
       // needs no upload.
       setBackgroundSource('self');

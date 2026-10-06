@@ -50,7 +50,7 @@ test('local library and resize batch panels expose the required user actions', (
 
   const panel = renderToStaticMarkup(<ResizeBatchPanel
     sources={[{
-      localId: 'entry-1', libraryId: 'entry-1', uploadId: 'upload-1', filename: 'result.mp4',
+      localId: 'entry-1', path: '', libraryId: 'entry-1', uploadId: 'upload-1', filename: 'result.mp4',
       duration: 4, gameName: 'result', version: 'v1', suffix: '',
     }]}
     onRemove={() => {}}

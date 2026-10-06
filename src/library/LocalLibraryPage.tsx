@@ -297,6 +297,9 @@ export function LocalLibraryPage({ onSendToResize }: LocalLibraryPageProps) {
         const stem = entry.filename.replace(/\.[^.]+$/, '');
         return {
           localId: session.libraryId,
+          // Library outputs live server-side; there is no local file until the
+          // library is replaced by picked paths.
+          path: '',
           libraryId: session.libraryId,
           uploadId: session.uploadId,
           filename: session.filename,

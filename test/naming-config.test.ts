@@ -130,6 +130,7 @@ test('a locked config survives an unparseable filename', () => {
 
 const source = (over: Partial<ResizeBatchSource> = {}): ResizeBatchSource => ({
   localId: 'a',
+  path: 'D:/Detected_v1_Old.mp4',
   libraryId: 'a',
   filename: 'Detected_v1_Old.mp4',
   duration: 60,
