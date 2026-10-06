@@ -3349,6 +3349,32 @@ Keep `@ffmpeg-installer/ffmpeg` — Step 1 of Task 2 copies its binary into `src
 
 Remove the `"server"` script from `package.json`.
 
+- [ ] **Step 3b: Make a fresh clone buildable**
+
+Right now it is not. `src-tauri/.gitignore` ignores `/binaries`, and `tauri.conf.json`
+declares `externalBin: ["binaries/ffmpeg"]`, so `tauri-build` fails on a clean
+checkout — with a message that does not say which file is missing. The binary
+got there because a task copied it by hand, and nothing in the repo records how.
+
+That is exactly what the next person to clone this hits, so fix it here rather
+than leaving it for them. Add a script that copies the binary out of
+`node_modules` to the name Tauri expects, and run it before any build:
+
+```json
+"prepare:ffmpeg": "node scripts/copy-ffmpeg.mjs",
+"app:dev": "npm run prepare:ffmpeg && tauri dev",
+"app:build": "npm run prepare:ffmpeg && tauri build"
+```
+
+`scripts/copy-ffmpeg.mjs` resolves `@ffmpeg-installer/ffmpeg`'s path, copies it
+to `src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe`, and **skips the copy
+when the destination already exists with the same size** — this runs before every
+dev start and a 64 MB copy each time is a cost nobody asked for.
+
+If the package is missing, fail with a message naming both the package and the
+destination. A build that dies saying "run npm install" is worth more than one
+that dies inside `tauri-build`.
+
 - [ ] **Step 4: Rewrite the docs**
 
 `README.md` becomes: what the app is, how to run it in dev (`npm run app:dev`), how to build it (`npm run app:build`), where the output lands, and the two length modes.
