@@ -57,8 +57,12 @@ pub async fn run_ffmpeg(
             }
             CommandEvent::Terminated(payload) => {
                 registry.take(&job_id);
+                // Consumed on every exit so a normal finish cannot leave a
+                // stale mark behind for a later run under the same id.
+                let was_cancelled = registry.take_cancelled(&job_id);
                 return match payload.code {
                     Some(0) => Ok(()),
+                    _ if was_cancelled => Err("cancelled".to_string()),
                     Some(code) => Err(format!("ffmpeg exited with code {code}\n{}", tail.join("\n"))),
                     None => Err(format!("ffmpeg was terminated\n{}", tail.join("\n"))),
                 };
@@ -68,13 +72,41 @@ pub async fn run_ffmpeg(
     }
 
     registry.take(&job_id);
+    registry.take_cancelled(&job_id);
     Err(format!("ffmpeg ended without reporting an exit code\n{}", tail.join("\n")))
 }
 
 #[tauri::command]
 pub fn cancel_job(registry: State<'_, Registry>, job_id: String) -> Result<(), String> {
-    if let Some(child) = registry.take(&job_id) {
-        child.kill().map_err(|e| e.to_string())?;
+    // Marked before the take and the kill: run_ffmpeg sees the exit the
+    // instant the process dies, and must already know why. If nothing is
+    // running under this id the mark is withdrawn, or it would outlive any
+    // job and poison the next one that reuses the id.
+    registry.mark_cancelled(&job_id);
+    match registry.take(&job_id) {
+        Some(child) => {
+            if let Err(e) = child.kill() {
+                registry.take_cancelled(&job_id);
+                return Err(e.to_string());
+            }
+        }
+        None => {
+            registry.take_cancelled(&job_id);
+        }
     }
     Ok(())
+}
+
+/// Bare filenames in a folder. The webview compares them against the names it
+/// is about to write, so it needs names, not paths.
+#[tauri::command]
+pub fn list_files(folder: String) -> Result<Vec<String>, String> {
+    let entries = std::fs::read_dir(&folder).map_err(|e| format!("{folder}: {e}"))?;
+    let mut names = Vec::new();
+    for entry in entries.flatten() {
+        if entry.file_type().map(|t| t.is_file()).unwrap_or(false) {
+            names.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    Ok(names)
 }

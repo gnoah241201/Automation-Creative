@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use tauri_plugin_shell::process::CommandChild;
 
@@ -8,11 +8,16 @@ use tauri_plugin_shell::process::CommandChild;
 /// to guarantee that nothing outlives the window: an orphaned ffmpeg holds
 /// its output file open and keeps burning cores with nobody watching.
 #[derive(Default)]
-pub struct Registry(pub Mutex<HashMap<String, CommandChild>>);
+pub struct Registry {
+    children: Mutex<HashMap<String, CommandChild>>,
+    /// Ids killed on purpose, so their non-zero exit reads as a cancel and not
+    /// as a crash. ffmpeg cannot tell us the difference; only we know.
+    cancelled: Mutex<HashSet<String>>,
+}
 
 impl Registry {
     pub fn insert(&self, job_id: String, child: CommandChild) -> Result<(), String> {
-        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = self.children.lock().unwrap_or_else(|e| e.into_inner());
         if map.contains_key(&job_id) {
             // Replacing would drop the old CommandChild, and dropping one does
             // not kill the process -- it would become untracked, which is the
@@ -27,7 +32,25 @@ impl Registry {
     }
 
     pub fn take(&self, job_id: &str) -> Option<CommandChild> {
-        self.0
+        self.children
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(job_id)
+    }
+
+    /// Records that this id is about to be killed on purpose.
+    pub fn mark_cancelled(&self, job_id: &str) {
+        self.cancelled
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(job_id.to_string());
+    }
+
+    /// Forgets the mark and says whether it was there. Called on every exit,
+    /// not only non-zero ones, so a job that finished normally cannot leave a
+    /// stale id behind to be mistaken for a cancel on a later run.
+    pub fn take_cancelled(&self, job_id: &str) -> bool {
+        self.cancelled
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(job_id)
@@ -35,7 +58,7 @@ impl Registry {
 
     pub fn kill_all(&self) {
         let map = {
-            let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let mut guard = self.children.lock().unwrap_or_else(|e| e.into_inner());
             std::mem::take(&mut *guard)
         };
         // The lock is released before TerminateProcess, so an event loop

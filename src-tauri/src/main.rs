@@ -13,7 +13,8 @@ fn main() {
         .manage(process::Registry::default())
         .invoke_handler(tauri::generate_handler![
             commands::run_ffmpeg,
-            commands::cancel_job
+            commands::cancel_job,
+            commands::list_files
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {
