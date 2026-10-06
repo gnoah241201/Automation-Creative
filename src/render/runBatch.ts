@@ -105,10 +105,14 @@ export const runBatch = async (input: RunBatchInput): Promise<Map<string, JobSta
   // Each job's ffmpeg gets its share of the host, so N of them together do
   // not oversubscribe it. One core is left for the rest of the machine.
   const cores = typeof navigator !== 'undefined' ? (navigator.hardwareConcurrency || 4) : 4;
-  const threads = Math.max(1, Math.floor((cores - 1) / input.concurrency));
+  // Clamped once and used for both the division and the queue: 0 would divide
+  // to Infinity, and a cleared numeric field (NaN) would drop the cap entirely.
+  const slots = Number.isFinite(input.concurrency) && input.concurrency >= 1
+    ? Math.floor(input.concurrency) : 1;
+  const threads = Math.max(1, Math.floor((cores - 1) / slots));
 
   return runQueue(jobs, {
-    concurrency: input.concurrency,
+    concurrency: slots,
     onChange: input.onChange,
     run: async (job) => {
       const source = byId.get(job.sourceId);

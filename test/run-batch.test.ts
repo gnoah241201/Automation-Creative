@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { argvFor } from '../src/render/runBatch.ts';
+import { argvFor, runBatch } from '../src/render/runBatch.ts';
+import { setBridge } from '../src/bridge/tauri.ts';
 import { planBatch } from '../src/core/renderPlan.ts';
 import { ResizeBatchSource } from '../src/core/librarySources.ts';
 
@@ -47,7 +48,22 @@ test('a cut child stream-copies rather than re-encoding', () => {
     [true, true, true],
   );
   assert.equal(found.args.includes('libx264'), false);
+  assert.ok(found.args.includes('D:\\out\\BubbleTea_v60_9x16_TTO.mp4'), 'input is the parent file');
+  assert.equal(found.args.includes('D:\\in\\a.mp4'), false, 'it must not trim the source');
+  assert.equal(found.args[found.args.indexOf('-t') + 1], '30', 'it keeps the first 30 seconds');
+  assert.equal(found.args[found.args.length - 1], 'D:\\out\\BubbleTea_v60_9x16_30s_TTO.mp4', 'output is the last argument');
 });
+
+// Without the guard a child would read `D:\out\undefined`, not the source, but
+// that is a silently wrong file where the guard gives a loud error.
+for (const [mode, tick, kind] of [['cut', '9:16-30s', 'trim'], ['speed', '9:16-15s', 'speed']] as const) {
+  test(`a ${kind} job with no parent filename throws instead of guessing an input`, () => {
+    const src = source();
+    const job = planBatch([src], new Set([tick]), mode).find((j) => j.kind === kind)!;
+    const { parentFilename: _dropped, ...orphan } = job;
+    assert.throws(() => argvFor(orphan, src, 'D:\\out', spec, 2), /no parent file/);
+  });
+}
 
 test('every encoding job carries the thread cap', () => {
   for (const { args } of argvs('speed', ['9:16', '9:16-15s'])) {
@@ -67,3 +83,18 @@ test('self-blur feeds the source in as its own background', () => {
   const inputs = args.filter((arg, i) => args[i - 1] === '-i');
   assert.deepEqual(inputs, ['D:\\in\\a.mp4', 'D:\\in\\a.mp4']);
 });
+
+for (const [label, concurrency] of [['zero', 0], ['NaN from a cleared field', NaN], ['negative', -3]] as const) {
+  test(`a concurrency of ${label} still gives each encode a sane thread cap`, async () => {
+    const seen: string[][] = [];
+    setBridge({ runFfmpeg: async (_id, args) => { seen.push(args); } });
+    await runBatch({
+      sources: [source()], selectedIds: new Set(['9:16']), mode: 'speed',
+      outputFolder: 'D:\\out', spec, concurrency,
+    });
+    assert.equal(seen.length, 1);
+    const at = seen[0].indexOf('-filter_complex_threads');
+    assert.notEqual(at, -1, 'the cap must not be silently dropped');
+    assert.match(seen[0][at + 1], /^[1-9]\d*$/, 'the cap must be a positive integer');
+  });
+}
