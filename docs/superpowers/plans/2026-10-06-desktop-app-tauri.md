@@ -1242,10 +1242,24 @@ test('a parent always comes before the children that need it', () => {
   }
 });
 
-test('a tier the source cannot fill is dropped for that source alone', () => {
+test('a source that cannot fill the only ticked tier plans nothing at all', () => {
+  // Not even a composite. The user asked for 30s; a 20s clip cannot give them
+  // one, and quietly writing it a full-length file instead would drop an
+  // unasked-for 20s video into the output folder under a name with no length
+  // in it. Silence is the honest answer -- the UI flags the clip as too short.
   const jobs = planBatch([source('short', 20), source('long', 200)], new Set(['9:16-30s']), 'speed');
-  assert.deepEqual(jobs.filter((j) => j.sourceId === 'short').map((j) => j.kind), ['composite']);
+  assert.deepEqual(jobs.filter((j) => j.sourceId === 'short'), []);
   assert.deepEqual(jobs.filter((j) => j.sourceId === 'long').map((j) => j.kind), ['composite', 'speed']);
+});
+
+test('a short source still renders the ticks it CAN fill', () => {
+  // The other half of the rule: dropping one tier must not drop the source.
+  const jobs = planBatch([source('short', 20), source('long', 200)], new Set(['9:16-15s', '9:16-30s']), 'speed');
+  assert.deepEqual(
+    jobs.filter((j) => j.sourceId === 'short').map((j) => j.duration),
+    [undefined, 15],
+    'the 15s tick applies, the 30s one does not',
+  );
 });
 
 test('cut children trim and speed children retime', () => {
@@ -1299,10 +1313,19 @@ test('cut mode orders parents first even when the catalog does not', () => {
 test('every dependsOn names a job that is actually in the plan', () => {
   // A dangling parent would mean rendering a child from a file this run never
   // writes -- silently, from whatever an older run left in the folder.
+  //
+  // Only children are ticked here, never a composite. That is the whole point:
+  // if the selection included the parents, they would be in the plan whether
+  // or not pullIn worked, and this test would pass on broken code.
   for (const [mode, duration] of [['cut', 120.5], ['cut', 200], ['speed', 200]] as const) {
     const jobs = planBatch([source('a', duration)], new Set([
-      '9:16', '9:16-6s', '9:16-15s', '9:16-30s', '9:16-120s',
+      '9:16-6s', '9:16-15s', '9:16-30s',
     ]), mode);
+    assert.ok(jobs.length > 0, `${mode} at d=${duration} planned nothing`);
+    assert.ok(
+      jobs.some((job) => job.kind === 'composite'),
+      `${mode} at d=${duration} planned no composite, so nothing pulled the parent in`,
+    );
     const ids = new Set(jobs.map((job) => job.id));
     for (const job of jobs) {
       if (job.dependsOn) assert.ok(ids.has(job.dependsOn), `${job.id} depends on a job that is not planned`);
