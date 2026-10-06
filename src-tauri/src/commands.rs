@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
-use crate::process::{lower_priority, Registry};
+use crate::process::{lower_priority, Kill, Registry};
 
 #[derive(Clone, serde::Serialize)]
 struct ProgressPayload {
@@ -33,7 +33,7 @@ pub async fn run_ffmpeg(
 
     lower_priority(child.pid());
     // On a duplicate id the registry kills this child itself and refuses it.
-    registry.insert(job_id.clone(), child)?;
+    let token = registry.insert(job_id.clone(), child)?;
 
     // ffmpeg writes progress to stderr, so the tail doubles as the error
     // report: when it exits non-zero these are the lines that say why.
@@ -56,10 +56,10 @@ pub async fn run_ffmpeg(
                 );
             }
             CommandEvent::Terminated(payload) => {
-                registry.take(&job_id);
-                // Consumed on every exit so a normal finish cannot leave a
-                // stale mark behind for a later run under the same id.
-                let was_cancelled = registry.take_cancelled(&job_id);
+                // Runs on every exit, so a normal finish cannot leave a mark
+                // behind. Token-checked: a stale exit never evicts a newer job
+                // that reused this id.
+                let was_cancelled = registry.finish(&job_id, token);
                 return match payload.code {
                     Some(0) => Ok(()),
                     _ if was_cancelled => Err("cancelled".to_string()),
@@ -71,27 +71,20 @@ pub async fn run_ffmpeg(
         }
     }
 
-    registry.take(&job_id);
-    registry.take_cancelled(&job_id);
+    registry.finish(&job_id, token);
     Err(format!("ffmpeg ended without reporting an exit code\n{}", tail.join("\n")))
 }
 
 #[tauri::command]
 pub fn cancel_job(registry: State<'_, Registry>, job_id: String) -> Result<(), String> {
-    // Marked before the take and the kill: run_ffmpeg sees the exit the
-    // instant the process dies, and must already know why. If nothing is
-    // running under this id the mark is withdrawn, or it would outlive any
-    // job and poison the next one that reuses the id.
-    registry.mark_cancelled(&job_id);
-    match registry.take(&job_id) {
-        Some(child) => {
-            if let Err(e) = child.kill() {
-                registry.take_cancelled(&job_id);
-                return Err(e.to_string());
-            }
-        }
-        None => {
-            registry.take_cancelled(&job_id);
+    // cancel() removes the job and records the intent under one lock, so
+    // run_ffmpeg cannot see the exit before it knows why. With nothing running
+    // it returns None and marks nothing: no ghost mark, and a second cancel
+    // cannot erase the first one's.
+    if let Some((token, child)) = registry.cancel(&job_id) {
+        if let Err(e) = Kill::kill(child) {
+            registry.unmark(token);
+            return Err(e);
         }
     }
     Ok(())

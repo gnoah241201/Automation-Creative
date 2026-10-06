@@ -4,12 +4,15 @@
  * Nothing else in `src/` imports `@tauri-apps/*`. That keeps every other
  * module runnable under plain Node, which is why the test suite needs no
  * browser and no window.
+ *
+ * `@tauri-apps/api/core` is imported statically: `fileUrl` must be
+ * synchronous, so it cannot await a dynamic import, and `invoke` comes along
+ * with it. Evaluating that module under Node is harmless, since it only
+ * touches `window` when a function is called. The plugin and event packages
+ * stay lazy: only a real window ever needs them.
  */
 
-// The one static import: fileUrl must be synchronous, so it cannot await a
-// dynamic one. Loading this module is harmless under plain Node; it only
-// touches `window` when convertFileSrc is called.
-import { convertFileSrc } from '@tauri-apps/api/core';
+import { convertFileSrc, invoke } from '@tauri-apps/api/core';
 
 export interface Bridge {
   pickVideos(): Promise<string[]>;
@@ -39,8 +42,11 @@ export const asRunError = (reason: unknown): unknown =>
 const VIDEO_EXTENSIONS = ['mp4', 'mov', 'm4v', 'webm', 'mkv', 'avi'];
 const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp'];
 
+const outsideTauri = (name: string) =>
+  new Error(`${name} was called outside a Tauri window. Use setBridge() in tests.`);
+
 const notInTauri = (name: string) => async (): Promise<never> => {
-  throw new Error(`${name} was called outside a Tauri window. Use setBridge() in tests.`);
+  throw outsideTauri(name);
 };
 
 const real: Bridge = {
@@ -61,11 +67,9 @@ const real: Bridge = {
     return typeof picked === 'string' ? picked : null;
   },
   async listFiles(folder) {
-    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<string[]>('list_files', { folder });
   },
   async runFfmpeg(jobId, args) {
-    const { invoke } = await import('@tauri-apps/api/core');
     try {
       return await invoke<void>('run_ffmpeg', { jobId, args });
     } catch (reason) {
@@ -73,7 +77,6 @@ const real: Bridge = {
     }
   },
   async cancelJob(jobId) {
-    const { invoke } = await import('@tauri-apps/api/core');
     return invoke<void>('cancel_job', { jobId });
   },
   async onProgress(fn) {
@@ -101,7 +104,9 @@ const fallback: Bridge = {
   runFfmpeg: notInTauri('runFfmpeg'),
   cancelJob: notInTauri('cancelJob'),
   onProgress: notInTauri('onProgress'),
-  fileUrl: (path) => path,
+  // Synchronous like the real one, so it throws instead of rejecting. Returning
+  // the path would hand a test a plausible src that silently points nowhere.
+  fileUrl: () => { throw outsideTauri('fileUrl'); },
   revealFolder: notInTauri('revealFolder'),
 };
 

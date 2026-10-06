@@ -14,7 +14,14 @@ test('a fake replaces only the calls it defines', async () => {
 
 test('fileUrl is synchronous so a preview can use it during render', () => {
   setBridge({ fileUrl: (path) => `fake://${path}` });
-  assert.equal(getBridge().fileUrl('D:\clip.mp4'), 'fake://D:\clip.mp4');
+  const windowsPath = 'D:\\clip.mp4';
+  assert.ok(windowsPath.includes('\\'), 'the fixture must really contain a backslash');
+  assert.equal(getBridge().fileUrl(windowsPath), `fake://${windowsPath}`);
+});
+
+test('an unfaked fileUrl outside Tauri throws instead of returning a src that points nowhere', () => {
+  setBridge({});
+  assert.throws(() => getBridge().fileUrl('D:\\clip.mp4'), /outside a Tauri window/);
 });
 
 test('an unfaked call outside Tauri fails loudly instead of silently doing nothing', async () => {
