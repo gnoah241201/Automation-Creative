@@ -12,6 +12,8 @@ export interface PlannedJob {
   filename: string;
   /** Job id this one reads from. Absent on a composite. */
   dependsOn?: string;
+  /** Filename this job reads from. Absent on a composite. */
+  parentFilename?: string;
   kind: 'composite' | 'trim' | 'speed';
 }
 
@@ -71,6 +73,7 @@ export const planBatch = (
     for (const id of required) {
       const output = byId.get(id)!;
       const parent = parentOf(output);
+      const parentOutput = parent ? byId.get(parent) : undefined;
       jobs.push({
         id: jobId(source.localId, output.id),
         sourceId: source.localId,
@@ -82,7 +85,14 @@ export const planBatch = (
           output.ratio,
           output.duration,
         ),
-        ...(parent ? { dependsOn: jobId(source.localId, parent) } : {}),
+        ...(parent ? {
+          dependsOn: jobId(source.localId, parent),
+          parentFilename: buildOutputFilename(
+            { gameName: source.gameName, version: source.version, suffix: source.suffix },
+            parentOutput!.ratio,
+            parentOutput!.duration,
+          ),
+        } : {}),
         kind: kindOf(output),
       });
     }

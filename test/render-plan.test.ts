@@ -133,3 +133,9 @@ test('job ids are unique across a whole batch', () => {
   const ids = jobs.map((job) => job.id);
   assert.equal(new Set(ids).size, ids.length);
 });
+
+test('a child knows the filename it reads, not just the job id', () => {
+  const jobs = planBatch([source('a', 200)], new Set(['9:16-15s']), 'speed');
+  const child = jobs.find((job) => job.kind === 'speed');
+  assert.equal(child?.parentFilename, 'BubbleTea_v60_9x16_TTO.mp4');
+});
