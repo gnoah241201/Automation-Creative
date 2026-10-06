@@ -234,8 +234,8 @@ test('per-source catalog skips outputs a shorter source cannot fill', async () =
   const wanted = new Set(['9:16', '9:16-15s', '9:16-30s']);
   const result = await submitResizeBatch({
     sources: [short, long],
-    outputs: deriveBatchOutputCatalog([short, long]).filter((output) => wanted.has(output.id)),
-    catalogForSource: deriveSourceOutputs,
+    outputs: deriveBatchOutputCatalog([short, long], 'speed').filter((output) => wanted.has(output.id)),
+    catalogForSource: (source) => deriveSourceOutputs(source, 'speed'),
     config: config(),
     createJob: async ({ source: item, output }) => {
       calls.push({ id: item.libraryId!, outputId: output.id });
@@ -266,8 +266,8 @@ test('one render per source carries every speed-up of that source', async () => 
   const wanted = new Set(['9:16', '9:16-15s', '9:16-30s']);
   await submitResizeBatch({
     sources: [medium, long],
-    outputs: deriveBatchOutputCatalog([medium, long]).filter((output) => wanted.has(output.id)),
-    catalogForSource: deriveSourceOutputs,
+    outputs: deriveBatchOutputCatalog([medium, long], 'speed').filter((output) => wanted.has(output.id)),
+    catalogForSource: (source) => deriveSourceOutputs(source, 'speed'),
     config: config(),
     createJob: async ({ source: item, output }) => {
       rendered.push(`${item.libraryId}:${output.id}`);
@@ -298,8 +298,8 @@ test('a speed-up selected without its full-length parent runs nothing and report
   const long = source('long', 200);
   const result = await submitResizeBatch({
     sources: [long],
-    outputs: deriveSourceOutputs(long).filter((output) => output.id === '9:16-30s'),
-    catalogForSource: deriveSourceOutputs,
+    outputs: deriveSourceOutputs(long, 'speed').filter((output) => output.id === '9:16-30s'),
+    catalogForSource: (source) => deriveSourceOutputs(source, 'speed'),
     config: config(),
     createJob: async ({ output }) => {
       submitted.push(output.id);

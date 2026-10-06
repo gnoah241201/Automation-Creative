@@ -1,6 +1,6 @@
 import { InputRatio } from './contract.ts';
 import { ResizeBatchSource } from './librarySources.ts';
-import { deriveOutputs, OutputConfig, planSelectedOutputs } from './outputDerivation.ts';
+import { deriveOutputs, LengthMode, OutputConfig, planSelectedOutputs } from './outputDerivation.ts';
 
 /**
  * Per-source output derivation for batch resize.
@@ -19,19 +19,19 @@ export const sourceInputRatio = (source: ResizeBatchSource): InputRatio =>
   source.inputRatio ?? '9:16';
 
 /** The full output list a single source can produce. */
-export const deriveSourceOutputs = (source: ResizeBatchSource): OutputConfig[] =>
-  deriveOutputs(sourceInputRatio(source), source.duration);
+export const deriveSourceOutputs = (source: ResizeBatchSource, mode: LengthMode): OutputConfig[] =>
+  deriveOutputs(sourceInputRatio(source), source.duration, mode);
 
 /**
  * Union of every source's outputs, in first-seen order, for the selection UI.
  * Selecting an entry here does not promise every source can produce it —
  * `selectSourceOutputs` decides that per source.
  */
-export const deriveBatchOutputCatalog = (sources: ResizeBatchSource[]): OutputConfig[] => {
+export const deriveBatchOutputCatalog = (sources: ResizeBatchSource[], mode: LengthMode): OutputConfig[] => {
   const catalog: OutputConfig[] = [];
   const seen = new Set<string>();
   for (const source of sources) {
-    for (const output of deriveSourceOutputs(source)) {
+    for (const output of deriveSourceOutputs(source, mode)) {
       if (seen.has(output.id)) continue;
       seen.add(output.id);
       catalog.push(output);
@@ -47,4 +47,5 @@ export const deriveBatchOutputCatalog = (sources: ResizeBatchSource[]): OutputCo
 export const selectSourceOutputs = (
   source: ResizeBatchSource,
   selectedIds: ReadonlySet<string>,
-): OutputConfig[] => planSelectedOutputs(deriveSourceOutputs(source), selectedIds);
+  mode: LengthMode,
+): OutputConfig[] => planSelectedOutputs(deriveSourceOutputs(source, mode), selectedIds);

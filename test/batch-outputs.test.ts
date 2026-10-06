@@ -33,8 +33,8 @@ test('an explicit source ratio is honoured instead of the library default', () =
 });
 
 test('each source derives outputs from its own duration, not the batch maximum', () => {
-  const shortIds = deriveSourceOutputs(source('short', 20)).map((output) => output.id);
-  const longIds = deriveSourceOutputs(source('long', 200)).map((output) => output.id);
+  const shortIds = deriveSourceOutputs(source('short', 20), 'speed').map((output) => output.id);
+  const longIds = deriveSourceOutputs(source('long', 200), 'speed').map((output) => output.id);
 
   assert.ok(longIds.includes('9:16-30s'), 'the long source reaches the 30s tier');
   assert.equal(
@@ -46,8 +46,8 @@ test('each source derives outputs from its own duration, not the batch maximum',
 });
 
 test('each source derives outputs from its own ratio', () => {
-  const portrait = deriveSourceOutputs(source('p', 200, '9:16'));
-  const landscape = deriveSourceOutputs(source('l', 200, '16:9'));
+  const portrait = deriveSourceOutputs(source('p', 200, '9:16'), 'speed');
+  const landscape = deriveSourceOutputs(source('l', 200, '16:9'), 'speed');
 
   // Both orientations offer the same catalog: the ratio decides how the frame
   // is composed, not which outputs exist. The whole video always carries the
@@ -66,8 +66,8 @@ test('each source derives outputs from its own ratio', () => {
 });
 
 test('every source speeds up from its own whole video', () => {
-  const long = deriveSourceOutputs(source('long', 200));
-  const medium = deriveSourceOutputs(source('medium', 45));
+  const long = deriveSourceOutputs(source('long', 200), 'speed');
+  const medium = deriveSourceOutputs(source('medium', 45), 'speed');
 
   assert.equal(long.find((output) => output.id === '9:16-30s')?.speedFrom, '9:16');
   assert.equal(medium.find((output) => output.id === '9:16-30s')?.speedFrom, '9:16');
@@ -75,7 +75,7 @@ test('every source speeds up from its own whole video', () => {
 });
 
 test('the batch catalog is the union of every source list with no duplicate ids', () => {
-  const catalog = deriveBatchOutputCatalog([source('short', 20), source('long', 200)]);
+  const catalog = deriveBatchOutputCatalog([source('short', 20), source('long', 200)], 'speed');
   const ids = catalog.map((output) => output.id);
 
   assert.equal(new Set(ids).size, ids.length, 'no duplicates');
@@ -84,33 +84,33 @@ test('the batch catalog is the union of every source list with no duplicate ids'
 });
 
 test('the batch catalog keeps first-seen order so the modal stays stable', () => {
-  const catalog = deriveBatchOutputCatalog([source('short', 20), source('long', 200)]);
-  const shortIds = deriveSourceOutputs(source('short', 20)).map((output) => output.id);
+  const catalog = deriveBatchOutputCatalog([source('short', 20), source('long', 200)], 'speed');
+  const shortIds = deriveSourceOutputs(source('short', 20), 'speed').map((output) => output.id);
   assert.deepEqual(catalog.slice(0, shortIds.length).map((output) => output.id), shortIds);
 });
 
 test('an empty batch yields an empty catalog', () => {
-  assert.deepEqual(deriveBatchOutputCatalog([]), []);
+  assert.deepEqual(deriveBatchOutputCatalog([], 'speed'), []);
 });
 
 test('selecting an output the source cannot fill drops it for that source only', () => {
   const selected = new Set(['9:16-15s', '9:16-30s']);
 
-  const forShort = selectSourceOutputs(source('short', 20), selected).map((output) => output.id);
-  const forLong = selectSourceOutputs(source('long', 200), selected).map((output) => output.id);
+  const forShort = selectSourceOutputs(source('short', 20), selected, 'speed').map((output) => output.id);
+  const forLong = selectSourceOutputs(source('long', 200), selected, 'speed').map((output) => output.id);
 
   assert.deepEqual(forShort, ['9:16-15s']);
   assert.deepEqual(forLong.sort(), ['9:16-15s', '9:16-30s']);
 });
 
 test('a selected speed-up keeps the parent its own source assigned', () => {
-  const [only] = selectSourceOutputs(source('medium', 45), new Set(['9:16-30s']));
+  const [only] = selectSourceOutputs(source('medium', 45), new Set(['9:16-30s']), 'speed');
   assert.equal(only?.id, '9:16-30s');
   assert.equal(only?.speedFrom, '9:16', 'the whole video is what it speeds up');
 });
 
 test('selecting both speed-ups pulls in no extra composite, they share one parent', () => {
-  const planned = selectSourceOutputs(source('long', 200), new Set(['9:16-15s', '9:16-30s']));
+  const planned = selectSourceOutputs(source('long', 200), new Set(['9:16-15s', '9:16-30s']), 'speed');
   assert.equal(planned.every((output) => output.speedFrom === '9:16'), true);
   assert.equal(planned.some((output) => !output.speedFrom), false,
     'the parent is offered by the catalog, not forced into the selection');
@@ -118,8 +118,8 @@ test('selecting both speed-ups pulls in no extra composite, they share one paren
 
 test('one selection resolves per source, dropping tiers a source cannot reach', () => {
   const wanted = new Set(['9:16-15s', '9:16-30s']);
-  const medium = new Map(selectSourceOutputs(source('medium', 20), wanted).map((o) => [o.id, o]));
-  const long = new Map(selectSourceOutputs(source('long', 200), wanted).map((o) => [o.id, o]));
+  const medium = new Map(selectSourceOutputs(source('medium', 20), wanted, 'speed').map((o) => [o.id, o]));
+  const long = new Map(selectSourceOutputs(source('long', 200), wanted, 'speed').map((o) => [o.id, o]));
 
   assert.equal(medium.has('9:16-30s'), false, '20s cannot fill a 30s output');
   assert.equal(medium.get('9:16-15s')?.speedFrom, '9:16');
@@ -134,8 +134,8 @@ test('a landscape source in a batch renders with its own input ratio', async () 
   const landscape = source('l', 200, '16:9');
   await submitResizeBatch({
     sources: [portrait, landscape],
-    outputs: deriveBatchOutputCatalog([portrait, landscape]).filter((o) => o.id === '4:5'),
-    catalogForSource: deriveSourceOutputs,
+    outputs: deriveBatchOutputCatalog([portrait, landscape], 'speed').filter((o) => o.id === '4:5'),
+    catalogForSource: (source) => deriveSourceOutputs(source, 'speed'),
     config: {
       inputRatio: '9:16' as const,
       bitrate: 6000,

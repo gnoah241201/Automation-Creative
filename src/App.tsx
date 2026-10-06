@@ -682,7 +682,7 @@ export default function App() {
         others: 0,
       };
     }
-    const [leading] = deriveSourceOutputs(first);
+    const [leading] = deriveSourceOutputs(first, 'speed');
     return {
       filename: buildOutputFilename(
         { gameName: first.gameName || 'untitled', version: first.version || 'v1', suffix: first.suffix },
@@ -698,8 +698,8 @@ export default function App() {
   // In batch mode each source has its own length, so the modal lists the union
   // of what the batch can produce; submitResizeBatch narrows it per source.
   const outputs = resizeBatchSources.length > 0
-    ? deriveBatchOutputCatalog(resizeBatchSources)
-    : deriveOutputs(activeInputRatio, activeFgDuration);
+    ? deriveBatchOutputCatalog(resizeBatchSources, 'speed')
+    : deriveOutputs(activeInputRatio, activeFgDuration, 'speed');
 
   // Whether an output is a speed-up or its own composite depends on what else
   // is selected, so the modal hint has to read the plan, not the raw catalog.
@@ -752,7 +752,7 @@ export default function App() {
       // be self-consistent for one and missing its parent for another.
       const selectedIds = new Set(selectedDownloads);
       const unmet = batchSnapshot.sources.flatMap((item) => {
-        const planned = selectSourceOutputs(item, selectedIds);
+        const planned = selectSourceOutputs(item, selectedIds, 'speed');
         const plannedIds = new Set(planned.map((output) => output.id));
         return planned
           .filter((output) => output.speedFrom && !plannedIds.has(output.speedFrom))
@@ -792,7 +792,7 @@ export default function App() {
           // is retrying.
           sources: batchSnapshot.sources,
           outputs: selectedOutputs,
-          catalogForSource: deriveSourceOutputs,
+          catalogForSource: (source) => deriveSourceOutputs(source, 'speed'),
           config: {
             inputRatio: '9:16', bitrate, fgPosition, bgType, backgroundSource, backgroundImageMode, blurAmount,
             logoX, logoY, logoSize, buttonType, buttonText, buttonX, buttonY, buttonSize,
@@ -816,7 +816,7 @@ export default function App() {
                     serverJobId: result.jobId,
                     status: result.status,
                     progress: 0,
-                    retryInputs: selectSourceOutputs(source, new Set(selectedDownloads)).some((candidate) => (
+                    retryInputs: selectSourceOutputs(source, new Set(selectedDownloads), 'speed').some((candidate) => (
                       candidate.speedFrom === output.id
                       && (!source.pendingOutputIds || source.pendingOutputIds.includes(candidate.id))
                     ))

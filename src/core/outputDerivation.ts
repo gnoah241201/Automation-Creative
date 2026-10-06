@@ -1,100 +1,115 @@
 import { InputRatio, AspectRatio } from './contract';
 
+/** Lengths a cut output can take. A cut keeps the first N seconds. */
+export const CUT_SECONDS = [6, 10, 12, 15, 30, 60, 90, 120] as const;
+
 /**
- * The shortened lengths every output ratio is offered at.
+ * Lengths a speed-up output can take.
  *
- * These are no longer cuts. A 15s output is the *whole* video played fast
- * enough to end at 15s, so nothing in the source is left out — which is the
- * point: a cut threw away everything after the mark, and for an ad the payoff
- * usually sits at the end.
- *
- * One table for all five ratios (9:16, 16:9, 4:5, 2:3, 1:1) and nothing outside
- * it, so an output's name can never describe a length that isn't here.
+ * A speed-up is the *whole* video retimed to end at N seconds, so nothing is
+ * left out — which is the point. A cut throws away everything after the mark,
+ * and in an ad the payoff usually sits at the end.
  */
 export const SPEED_SECONDS = [15, 30] as const;
 
 /** Listed in preview order. */
 export const RATIOS = ['9:16', '16:9', '4:5', '2:3', '1:1'] as const;
 
-/**
- * Output configuration for a single render variant.
- */
+export type LengthMode = 'cut' | 'speed';
+
 export interface OutputConfig {
   id: string;
   ratio: AspectRatio;
-  /** Duration in seconds. undefined means the whole video at its own pace. */
+  /** undefined means the whole video at its own pace. */
   duration?: number;
   label: string;
-  /**
-   * If set, this output is the output with this ID sped up to `duration`
-   * rather than composited again. Exactly one output per ratio is a full
-   * render — the whole video — and the shortened ones are derived from it.
-   */
+  /** Set on a cut child: the id of the output it trims with `-c copy`. */
+  trimFrom?: string;
+  /** Set on a speed child: the id of the output it retimes. */
   speedFrom?: string;
-  /** Whether this output should show a preview box. Derived variants skip preview. */
   showPreview?: boolean;
 }
 
-const speedLabel = (ratio: AspectRatio, seconds: number): string =>
-  `Output: ${ratio} (${seconds}s speed-up)`;
-
 /**
- * How much longer than a tier the source has to be for that tier to be offered.
+ * How much longer than a tier a source must run for speed mode to offer it.
  *
- * Two reasons for the margin. A 15.2s source sped into 15s is a 1.01x change —
- * the same file twice. And `buildOutputFilename` rounds, so without it a 30.2s
- * source would name its full-length output `_30s` too, putting two different
- * files under one name. Requiring `d > seconds + 0.5` keeps `round(d)` strictly
- * above the tier.
+ * `buildOutputFilename` rounds, so without the margin a 30.2s source would
+ * name its full-length output `_30s` as well — two different files under one
+ * name. It also stops a 1.01x "speed-up" that is the same file twice.
  */
 const SPEED_MARGIN_SECONDS = 0.5;
 
-/**
- * The tiers a source is long enough to be sped up into.
- *
- * A missing or non-finite duration qualifies for nothing: NaN fails every
- * comparison and Infinity passes all of them.
- */
-const activeSpeedTiers = (fgDuration: number | undefined): number[] => (
-  fgDuration === undefined || !Number.isFinite(fgDuration)
-    ? []
-    : SPEED_SECONDS.filter((seconds) => fgDuration > seconds + SPEED_MARGIN_SECONDS)
-);
+/** How close the longest cut has to be before a separate full-length is noise. */
+const FULL_LENGTH_TOLERANCE_SECONDS = 1;
+
+const usable = (d: number | undefined): d is number => d !== undefined && Number.isFinite(d) && d > 0;
+
+const activeTiers = (mode: LengthMode, fgDuration: number | undefined): number[] => {
+  if (!usable(fgDuration)) return [];
+  return mode === 'cut'
+    ? CUT_SECONDS.filter((seconds) => fgDuration > seconds)
+    : SPEED_SECONDS.filter((seconds) => fgDuration > seconds + SPEED_MARGIN_SECONDS);
+};
 
 /**
- * Derives the list of output configurations from the input ratio and the
- * foreground duration.
- *
- * Every ratio gets the same lengths. Within a ratio the whole video is the one
- * composited render, and each shortened tier is that render sped up, so a run
- * costs one composite per ratio however many lengths are selected. The
- * shortened tiers re-encode — speeding a video up is not a stream copy — but
- * they re-encode from the finished frame, with no blur, overlay or logo work
- * to redo.
- *
- * @param inputRatio - The aspect ratio of the input video (16:9 or 9:16)
- * @param fgDuration - The duration of the foreground video in seconds (undefined if not yet probed)
- * @returns Array of output configurations
+ * Cut mode drops the full-length output when the longest cut all but covers
+ * the source; speed mode never does, because the full length is the composite
+ * every retimed output is built from.
  */
-export function deriveOutputs(inputRatio: InputRatio, fgDuration?: number): OutputConfig[] {
-  const tiers = activeSpeedTiers(fgDuration);
+const needsFullLength = (mode: LengthMode, fgDuration: number | undefined, tiers: number[]): boolean => {
+  if (mode === 'speed') return true;
+  if (!usable(fgDuration)) return true;
+  if (tiers.length === 0) return true;
+  return fgDuration - tiers[tiers.length - 1] > FULL_LENGTH_TOLERANCE_SECONDS;
+};
+
+const label = (ratio: AspectRatio, mode: LengthMode, seconds?: number): string => {
+  if (seconds === undefined) return `Output: ${ratio}`;
+  return mode === 'cut' ? `Output: ${ratio} (${seconds}s)` : `Output: ${ratio} (${seconds}s speed-up)`;
+};
+
+/**
+ * Every output a source of this length can fill, in either mode.
+ *
+ * Each ratio composites exactly once. In cut mode the longest output carries
+ * the composite and the shorter ones trim from it with a stream copy; in speed
+ * mode the full length carries it and the shorter ones retime from it. Either
+ * way a run costs one composite per ratio however many lengths are ticked.
+ */
+export function deriveOutputs(
+  inputRatio: InputRatio,
+  fgDuration: number | undefined,
+  mode: LengthMode,
+): OutputConfig[] {
+  const tiers = activeTiers(mode, fgDuration);
+  const withFull = needsFullLength(mode, fgDuration, tiers);
   const outputs: OutputConfig[] = [];
 
   for (const ratio of RATIOS) {
-    // The whole video always carries the composite: every shortened tier is
-    // built from it, so it has to exist even when only a 15s output was asked
-    // for.
-    const rendered: OutputConfig = { id: ratio, ratio, label: `Output: ${ratio}`, showPreview: true };
-    outputs.push(rendered);
+    const full: OutputConfig | undefined = withFull
+      ? { id: ratio, ratio, label: label(ratio, mode), showPreview: true }
+      : undefined;
+
+    // In cut mode without a full-length output, the longest tier is the
+    // composite and the rest trim from it.
+    const longestTier = tiers.length > 0 ? tiers[tiers.length - 1] : undefined;
+    const parentId = full ? full.id : `${ratio}-${longestTier}s`;
+
+    if (full) outputs.push(full);
 
     for (const seconds of tiers) {
+      const id = `${ratio}-${seconds}s`;
+      const isParent = id === parentId;
       outputs.push({
-        id: `${ratio}-${seconds}s`,
+        id,
         ratio,
         duration: seconds,
-        label: speedLabel(ratio, seconds),
-        speedFrom: rendered.id,
-        showPreview: false,
+        label: label(ratio, mode, seconds),
+        ...(isParent
+          ? { showPreview: true }
+          : mode === 'cut'
+            ? { trimFrom: parentId, showPreview: false }
+            : { speedFrom: parentId, showPreview: false }),
       });
     }
   }
@@ -103,12 +118,12 @@ export function deriveOutputs(inputRatio: InputRatio, fgDuration?: number): Outp
 }
 
 /**
- * Narrows a catalog to what the user selected.
+ * Narrows a catalog to what the user ticked.
  *
- * The seam between what exists and what runs. It makes no decisions of its own:
- * which output carries the composite is fixed when the catalog is derived, so a
- * selected speed-up still needs its parent selected — the catalog offers the
- * parent, it cannot force it into the selection.
+ * It makes no decisions: which output carries the composite was fixed when the
+ * catalog was derived. A selected child still needs its parent — the catalog
+ * offers the parent, it cannot force it into the selection. `renderPlan` is
+ * what pulls the parent in.
  */
 export const planSelectedOutputs = (
   available: OutputConfig[],

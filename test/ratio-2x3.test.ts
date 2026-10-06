@@ -39,13 +39,13 @@ test('the 2:3 frame really is two thirds', () => {
 
 test('2:3 is offered for every input ratio, like every other ratio', () => {
   for (const input of ['16:9', '9:16'] as const) {
-    const mine = deriveOutputs(input, 200).filter((output) => output.ratio === '2:3');
+    const mine = deriveOutputs(input, 200, 'speed').filter((output) => output.ratio === '2:3');
     assert.ok(mine.length > 0, `2:3 missing for ${input} input`);
   }
 });
 
 test('2:3 offers exactly the same shape as 4:5', () => {
-  const outputs = deriveOutputs('9:16', 200);
+  const outputs = deriveOutputs('9:16', 200, 'speed');
   // Same shape; the parent id necessarily differs, each speeds up from its own ratio.
   const secondary = (ratio: string) => outputs
     .filter((output) => output.ratio === ratio)
@@ -57,14 +57,14 @@ test('2:3 offers exactly the same shape as 4:5', () => {
 });
 
 test('a 2:3 speed-up comes off the 2:3 render, never composites on its own', () => {
-  const speedUp = find(deriveOutputs('9:16', 200), '2:3-30s');
+  const speedUp = find(deriveOutputs('9:16', 200, 'speed'), '2:3-30s');
   assert.ok(speedUp);
   assert.equal(speedUp.speedFrom, '2:3', 'the whole 2:3 video is what it speeds up');
   assert.equal(speedUp.duration, 30);
 });
 
 test('2:3 gets the same two speed-up lengths as every other ratio', () => {
-  const outputs = deriveOutputs('9:16', 200);
+  const outputs = deriveOutputs('9:16', 200, 'speed');
   for (const seconds of [15, 30]) {
     assert.ok(find(outputs, `2:3-${seconds}s`), `2:3-${seconds}s missing`);
   }
@@ -73,12 +73,12 @@ test('2:3 gets the same two speed-up lengths as every other ratio', () => {
 });
 
 test('2:3 speed-ups follow the same duration gate as everything else', () => {
-  assert.equal(find(deriveOutputs('9:16', 30), '2:3-30s'), undefined);
-  assert.ok(find(deriveOutputs('9:16', 31), '2:3-30s'));
+  assert.equal(find(deriveOutputs('9:16', 30, 'speed'), '2:3-30s'), undefined);
+  assert.ok(find(deriveOutputs('9:16', 31, 'speed'), '2:3-30s'));
 });
 
 test('2:3 has one preview box, on the output that is rendered', () => {
-  const previewed = deriveOutputs('9:16', 200)
+  const previewed = deriveOutputs('9:16', 200, 'speed')
     .filter((output) => output.ratio === '2:3' && output.showPreview !== false);
   assert.equal(previewed.length, 1);
   assert.equal(previewed[0].speedFrom, undefined);
