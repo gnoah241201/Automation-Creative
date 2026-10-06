@@ -12,7 +12,7 @@ const MIN_JOBS = 1;
 const MAX_JOBS = 16;
 
 /**
- * Half the cores, minus one, so a batch never takes the whole machine.
+ * Half of (cores - 1), rounded down, so a batch never takes the whole machine.
  *
  * Each job also caps its own ffmpeg threads. The web version taught this the
  * hard way: lowering the job count alone changed nothing, because the thread
@@ -21,12 +21,19 @@ const MAX_JOBS = 16;
 export const defaultConcurrency = (cpuCount: number): number =>
   Math.min(MAX_JOBS, Math.max(MIN_JOBS, Math.floor((cpuCount - 1) / 2) || 1));
 
-export const DEFAULT_SETTINGS: Settings = {
+// The 3 is a deliberate static placeholder, not a missed call to
+// defaultConcurrency: the Settings UI re-seeds it from the real core count on
+// first run. Do not "fix" the apparent disagreement here.
+export const DEFAULT_SETTINGS: Settings = Object.freeze({
   lengthMode: 'speed',
   outputFolder: null,
   concurrency: 3,
   advancedOpen: false,
-};
+});
+
+// Fallbacks return a copy so a caller mutating its Settings cannot corrupt the
+// shared defaults for the rest of the session.
+const defaults = (): Settings => ({ ...DEFAULT_SETTINGS });
 
 const store = (given?: Storage): Storage | null => {
   if (given) return given;
@@ -50,17 +57,17 @@ const clampJobs = (value: unknown): number => {
  */
 export const readSettings = (storage?: Storage): Settings => {
   const target = store(storage);
-  if (!target) return DEFAULT_SETTINGS;
+  if (!target) return defaults();
 
   let raw: unknown;
   try {
     const text = target.getItem(KEY);
-    if (!text) return DEFAULT_SETTINGS;
+    if (!text) return defaults();
     raw = JSON.parse(text);
   } catch {
-    return DEFAULT_SETTINGS;
+    return defaults();
   }
-  if (typeof raw !== 'object' || raw === null) return DEFAULT_SETTINGS;
+  if (typeof raw !== 'object' || raw === null) return defaults();
 
   const value = raw as Partial<Record<keyof Settings, unknown>>;
   return {
