@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
@@ -32,7 +32,8 @@ pub async fn run_ffmpeg(
         .map_err(|e| e.to_string())?;
 
     lower_priority(child.pid());
-    registry.insert(job_id.clone(), child);
+    // On a duplicate id the registry kills this child itself and refuses it.
+    registry.insert(job_id.clone(), child)?;
 
     // ffmpeg writes progress to stderr, so the tail doubles as the error
     // report: when it exits non-zero these are the lines that say why.

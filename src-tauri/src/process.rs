@@ -11,17 +11,36 @@ use tauri_plugin_shell::process::CommandChild;
 pub struct Registry(pub Mutex<HashMap<String, CommandChild>>);
 
 impl Registry {
-    pub fn insert(&self, job_id: String, child: CommandChild) {
-        self.0.lock().unwrap().insert(job_id, child);
+    pub fn insert(&self, job_id: String, child: CommandChild) -> Result<(), String> {
+        let mut map = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if map.contains_key(&job_id) {
+            // Replacing would drop the old CommandChild, and dropping one does
+            // not kill the process -- it would become untracked, which is the
+            // exact thing this registry exists to prevent. The new child is
+            // ours to dispose of too: dropping it would orphan it just the
+            // same, so it is killed here before the error is returned.
+            let _ = child.kill();
+            return Err(format!("job {job_id} is already running"));
+        }
+        map.insert(job_id, child);
+        Ok(())
     }
 
     pub fn take(&self, job_id: &str) -> Option<CommandChild> {
-        self.0.lock().unwrap().remove(job_id)
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(job_id)
     }
 
     pub fn kill_all(&self) {
-        let mut map = self.0.lock().unwrap();
-        for (_, child) in map.drain() {
+        let map = {
+            let mut guard = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            std::mem::take(&mut *guard)
+        };
+        // The lock is released before TerminateProcess, so an event loop
+        // calling take() cannot block behind a blocking kill.
+        for (_, child) in map {
             let _ = child.kill();
         }
     }
