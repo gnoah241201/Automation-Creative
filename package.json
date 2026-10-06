@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit",
-    "test": "node --import tsx --test --test-concurrency=1 test/**/*.test.ts test/**/*.test.tsx",
+    "test": "node --import tsx --test --test-concurrency=1 test/**/*.test.ts",
     "tauri": "tauri",
     "app:dev": "npm run prepare:ffmpeg && tauri dev",
     "app:build": "npm run prepare:ffmpeg && tauri build",

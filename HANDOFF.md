@@ -9,7 +9,7 @@ own the code.
 - A Windows x64 desktop app: Tauri 2 shell (Rust) + React/Vite webview + a bundled ffmpeg.
 - App version `2.0.0` (`src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`). `package.json`
   still says `1.1.5` and is not used for anything the installer shows.
-- Tests at this commit: 348 TypeScript (`npm test`), 55 Rust (`cargo test`). `tsc --noEmit` is clean.
+- Tests at this commit: 352 TypeScript (`npm test`), 55 Rust (`cargo test`). `tsc --noEmit` is clean.
 - There is no server. This repo used to be an Express + Vite web service with a Hook
   Composer and a Local Library tab; all of that has been deleted. It is not maintained.
   If you need it, it is in git history (the design note
