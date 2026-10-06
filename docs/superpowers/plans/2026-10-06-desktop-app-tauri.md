@@ -1625,7 +1625,14 @@ export const runQueue = async (
   const byId = new Map(jobs.map((job) => [job.id, job]));
   const set = (id: string, state: JobState, error?: string) => {
     states.set(id, state);
-    onChange?.(id, state, error);
+    try {
+      onChange?.(id, state, error);
+    } catch {
+      // A listener is told what happened; it does not get to change it.
+      // Unguarded, a throw here lands in the job's own catch and marks a
+      // finished render failed -- sending someone back to re-render a file
+      // that was already correct.
+    }
   };
 
   const ready = (job: PlannedJob): boolean => {
@@ -1645,7 +1652,11 @@ export const runQueue = async (
 
   const start = (job: PlannedJob) => {
     set(job.id, 'running');
-    const task = run(job)
+    // Promise.resolve().then(run) rather than run() directly: a `run` that
+    // throws synchronously would otherwise take the whole queue down instead
+    // of failing its own job.
+    const task = Promise.resolve()
+      .then(() => run(job))
       .then(() => set(job.id, 'done'))
       .catch((error: unknown) => {
         set(job.id, 'failed', error instanceof Error ? error.message : String(error));
