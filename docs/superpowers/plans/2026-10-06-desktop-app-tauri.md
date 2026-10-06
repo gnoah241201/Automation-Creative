@@ -249,13 +249,54 @@ cp node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe src-tauri/binaries/ffmpeg
 
 The target-triple suffix is required — Tauri resolves sidecars by it.
 
-- [ ] **Step 2: Declare the sidecar**
+- [ ] **Step 2: Declare the sidecar, and grant the webview permission to exist**
 
 In `tauri.conf.json`, inside `"bundle"`:
 
 ```json
 "externalBin": ["binaries/ffmpeg"]
 ```
+
+Then give the window an explicit label, because the capability file names it.
+In `tauri.conf.json`, inside the window object:
+
+```json
+"label": "main",
+```
+
+**Now the part Task 1 left out.** In Tauri 2 a webview has **no permissions at all**
+until a capability file grants them. Three plugins are registered in `main.rs` and
+none of them can be called yet: a `dialog.open()` fails with an ACL error that says
+nothing about the missing file. Create `src-tauri/capabilities/default.json`:
+
+```json
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "What the Resize Video window is allowed to do.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "dialog:default",
+    "opener:default",
+    {
+      "identifier": "shell:allow-execute",
+      "allow": [{ "name": "binaries/ffmpeg", "sidecar": true, "args": true }]
+    }
+  ]
+}
+```
+
+**Verify the exact permission identifiers rather than trusting the block above.**
+The installed plugin versions are the authority, and their names have changed
+between Tauri 2 releases. After a build, each plugin's available permissions are
+listed under `src-tauri/gen/schemas/` — read them, and if an identifier here does
+not exist, use the real one and say what you changed. The sidecar entry in
+particular (`sidecar: true`, `args: true`) is the shape most likely to differ.
+
+`args: true` permits any arguments. That is correct here: the argv is built by
+tested TypeScript, and enumerating every ffmpeg flag in an allow-list would be a
+second, worse copy of `buildCommand.ts`.
 
 - [ ] **Step 3: Write the process registry**
 
