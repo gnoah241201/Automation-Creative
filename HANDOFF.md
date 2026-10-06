@@ -68,8 +68,9 @@ and `npm run app:build` (via `npm run prepare:ffmpeg`, which you can also run yo
 Things to know about the binary itself:
 
 - It is `ffmpeg N-92722` **built in 2018**, and a GPLv3 build (`--enable-gpl --enable-libx264`
-  and many others). It has no security updates. If the installer is ever distributed outside
-  the team, the GPL obligations come with it. Moving to a newer build means replacing what the
+  and many others). It has no security updates. Distributing the installer
+  brings the GPL obligations with it (see Open items: the installer does not carry the
+  licence text or a source offer). Moving to a newer build means replacing what the
   script copies; do that in the script, not by dropping a file in `binaries/`, because a file
   of a different size at that path is overwritten.
 - There is **no ffprobe**. Codec, container, duration and picture size are read from the banner
@@ -104,8 +105,9 @@ business logic.
   folder, write overlay PNGs), `process.rs` (the registry of running ffmpeg children, kill on
   close, priority lowering), `probe.rs` (parses `ffmpeg -i` output), `main.rs`.
 - `docs/superpowers/specs/` and `plans/`: the design and the plan for this conversion, and older
-  plans for features that still exist (banner modes, output rules). Some older ones describe code
-  that has been deleted.
+  plans for features that still exist (output rules, render concurrency). The design doc's file tree
+  (and the plan) predate the final structure: for example they still list `validation.ts` and
+  `submitBatch.ts`, which no longer exist. Treat the tree there as intent, not as current.
 
 ## Behaviour that is easy to break
 
@@ -126,7 +128,8 @@ business logic.
   finished parent whose file is still on disk. It does not go through the overwrite prompt,
   because the file it replaces is the broken one.
 - **Threads.** Each job is capped to `(cores - 1) / concurrency` ffmpeg threads and runs at below-normal
-  priority. The default concurrency is `(cores - 1) / 2`, so a run uses most of the machine. The
+  priority. The default concurrency is `(cores - 1) / 2`, rounded down and clamped to between 1 and 16 jobs
+  (`src/core/settings.ts`), so a run uses most of the machine. The
   web version used to leave half free; this one does not.
 - **Settings** are in the webview's `localStorage` under `resize.settings`, and the naming config
   under `resize-video:naming-config:v1`. They are per-user, not in the repo.
@@ -168,11 +171,17 @@ State these to users rather than finding out later.
 
 ```bash
 npm run lint                  # tsc --noEmit
-npm test                      # 348 tests
+npm test                      # 352 tests
+npm run prepare:ffmpeg        # needed before any cargo build / cargo test on a fresh clone
 cd src-tauri && cargo build   # must stay warning-free
 cd src-tauri && cargo test    # 55 tests
 npm run app:dev               # the window opens and the page renders
 ```
+
+Any direct `cargo` or `tauri` call bypasses the npm scripts, so the sidecar file
+`src-tauri/binaries/ffmpeg-x86_64-pc-windows-msvc.exe` must already exist. On a fresh clone it
+does not, and `tauri-build` fails without saying which file is missing; run
+`npm run prepare:ffmpeg` first (it needs `npm install` to have run).
 
 `test/output-derivation.test.ts` is the executable spec for output lengths, and
 `test/render-plan.test.ts` and `test/run-batch.test.ts` cover the planner and the ffmpeg arguments.
@@ -183,8 +192,11 @@ npm run app:dev               # the window opens and the page renders
 
 1. Build the installer on a clean Windows machine and record what happens (WebView2, SmartScreen).
 2. Decide on code signing, or accept the SmartScreen warning as the cost of an internal tool.
-3. Replace the 2018 ffmpeg build, which also settles the GPL question for distribution.
-4. Pick one source of truth for the version number: `package.json`, `Cargo.toml` and
-   `tauri.conf.json` currently disagree.
+3. **Settle the ffmpeg licence before distributing the installer.** The bundled ffmpeg is a GPLv3
+   build. Shipping it requires including the licence text and offering the corresponding source;
+   the installer bundles neither today. Replacing the 2018 build with a newer GPL build does not remove that obligation.
+4. Pick one source of truth for the version number. `Cargo.toml` and `tauri.conf.json` are both
+   `2.0.0`; only `package.json` (`1.1.5`) disagrees, and the installer takes its version from
+   `tauri.conf.json`.
 5. Pin `@tauri-apps/api` exactly; it is a caret range and the whole test suite depends on it not
    touching `window` at import time.

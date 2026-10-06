@@ -86,6 +86,43 @@ test('self-blur feeds the source in as its own background', () => {
   assert.deepEqual(inputs, ['D:\\in\\a.mp4', 'D:\\in\\a.mp4']);
 });
 
+// The background rules lived in a server function (resolveBackgroundVideoPath)
+// whose tests were deleted with it; they apply inline in argvFor now.
+const inputsOf = (args: string[]) => args.filter((arg, i) => args[i - 1] === '-i');
+
+test('an uploaded background video is used instead of the source', () => {
+  const src = source();
+  const [job] = planBatch([src], new Set(['16:9']), 'speed');
+  const upload = { ...spec, backgroundSource: 'upload' as const, backgroundVideoPath: 'D:/in/bg.mp4' };
+  assert.deepEqual(inputsOf(argvFor(job, src, 'D:/out', upload, 2)), [src.path, 'D:/in/bg.mp4']);
+});
+
+test('a self background ignores a background video that came along anyway', () => {
+  const src = source();
+  const [job] = planBatch([src], new Set(['16:9']), 'speed');
+  const stray = { ...spec, backgroundVideoPath: 'D:/in/stray.mp4' };
+  assert.deepEqual(inputsOf(argvFor(job, src, 'D:/out', stray, 2)), [src.path, src.path]);
+});
+
+test('a banner background loops the image and never borrows the source', () => {
+  const src = source();
+  const [job] = planBatch([src], new Set(['16:9']), 'speed');
+  const banner = {
+    ...spec, bgType: 'image' as const, backgroundSource: 'upload' as const, backgroundImagePath: 'D:/in/banner.png',
+  };
+  const args = argvFor(job, src, 'D:/out', banner, 2);
+  assert.deepEqual(inputsOf(args), [src.path, 'D:/in/banner.png']);
+  assert.equal(args[args.indexOf('D:/in/banner.png') - 3], '-loop');
+});
+
+test('an image background with no image still never borrows the source as its background', () => {
+  const src = source();
+  const [job] = planBatch([src], new Set(['16:9']), 'speed');
+  const noImage = { ...spec, bgType: 'image' as const };
+  const inputs = inputsOf(argvFor(job, src, 'D:/out', noImage, 2));
+  assert.equal(inputs.filter((input) => input === src.path).length, 1, 'the source is the foreground only');
+});
+
 test('a landscape source composes with its own input ratio, not the portrait default', () => {
   // Ported from the web build's batch test of the same idea: in a mixed batch
   // each source carries its own ratio into its own composite. The 4:5 output

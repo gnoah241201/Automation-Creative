@@ -77,7 +77,7 @@ Chosen in the settings panel; the default is **speed**.
 | Mode | What a shorter output is | Lengths offered |
 |---|---|---|
 | **speed** (default) | The *whole* video retimed (video and audio) to end at N seconds. Nothing is left out. | 15s, 30s |
-| **cut** | The first N seconds of the full-length output, stream-copied. | 6, 10, 12, 15, 30, 60, 90, 120s |
+| **cut** | The first N seconds, stream-copied from the ratio's longest output. | 6, 10, 12, 15, 30, 60, 90, 120s |
 
 A length is offered only when the source is longer than it (speed mode needs half a
 second of margin). So a 20s clip has a 15s output but no 30s one, and a batch of mixed
@@ -86,7 +86,8 @@ lengths offers each source only what it can fill.
 Either way each ratio is composited once; the shorter lengths are derived from that
 composite, so ticking more lengths costs a retime or a copy, not another full render.
 In cut mode the full-length file is dropped when the longest cut already covers the
-source to within a second. Cut lengths come from a stream copy, so they can be off by up
+source to within a second; the longest cut is then the composite itself and the shorter ones
+are copied from it, so you get no full-length file for that source. Cut lengths come from a stream copy, so they can be off by up
 to one keyframe interval.
 
 ## Tests
