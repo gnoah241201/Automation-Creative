@@ -3171,18 +3171,43 @@ test('a supplied plan is used as-is rather than re-derived', async () => {
 ```tsx
 const copyOriginals = async (list: ResizeBatchSource[], folder: string) => {
   const bridge = getBridge();
+  const failed: string[] = [];
+
   for (const source of list) {
-    const codec = await bridge.probeCodec(source.path);
-    const plan = planOriginal(source, codec, folder);
-    if (plan.action === 'copy') {
-      await bridge.copyFile(plan.from, plan.to);
-    } else {
-      await bridge.runFfmpeg(`original:${source.localId}`,
-        buildNormalizeCommand({ inputPath: plan.from, outputPath: plan.to, threads: 2 }));
+    // One source failing must not cost the other nineteen their original.
+    // planOriginal throws when a source has no inputRatio, and probeMedia
+    // rejects when the sidecar cannot spawn -- both are per-source problems.
+    try {
+      const probe = await bridge.probeMedia(source.path);
+      const plan = planOriginal(source, probe, folder);
+      if (plan.action === 'copy') {
+        await bridge.copyFile(plan.from, plan.to);
+      } else {
+        await bridge.runFfmpeg(`original:${source.localId}`,
+          buildNormalizeCommand({ inputPath: plan.from, outputPath: plan.to, threads: 2 }));
+      }
+    } catch (error) {
+      failed.push(`${source.filename}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+
+  if (failed.length > 0) setNotice(`Không chép được bản gốc của ${failed.length} video: ${failed.join('; ')}`);
 };
 ```
+
+Three things that snippet gets right and an earlier draft did not:
+
+`probeMedia` returns `{ codec, container }`, not a bare codec string — the container
+is what stops an h264 `.ts` being copied under a `.mp4` name.
+
+Every source is wrapped. `planOriginal` **throws** when a source has no
+`inputRatio`, rather than silently naming the file `9x16`, and `probeMedia`
+rejects if the sidecar cannot spawn. Unwrapped, either one would abandon the
+originals of every source after it.
+
+Library entries have no `inputRatio` by type. If this batch can contain them,
+the caller sets it to `'9:16'` deliberately at the point the source is built —
+a library output really is portrait — rather than letting a default invent it.
 
 - [ ] **Step 6: Point `main.tsx` at the new App**
 
