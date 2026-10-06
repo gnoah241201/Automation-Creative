@@ -37,6 +37,11 @@ export const runQueue = async (
     }
   };
 
+  const describe = (error: unknown): string => {
+    if (error instanceof Error) return error.message;
+    try { return String(error); } catch { return 'unknown error'; }
+  };
+
   const ready = (job: PlannedJob): boolean => {
     if (states.get(job.id) !== 'waiting') return false;
     if (!job.dependsOn) return true;
@@ -49,7 +54,9 @@ export const runQueue = async (
     return parent === 'failed' || parent === 'skipped';
   };
 
-  const slots = Math.max(1, Math.floor(concurrency));
+  // A cleared UI field arrives as NaN; treat that as one at a time rather than
+  // as a cap nothing can ever fit under.
+  const slots = Number.isFinite(concurrency) ? Math.max(1, Math.floor(concurrency)) : 1;
   const inFlight = new Set<Promise<void>>();
 
   const start = (job: PlannedJob) => {
@@ -58,7 +65,7 @@ export const runQueue = async (
       .then(() => run(job))
       .then(() => set(job.id, 'done'))
       .catch((error: unknown) => {
-        set(job.id, 'failed', error instanceof Error ? error.message : String(error));
+        set(job.id, 'failed', describe(error));
       })
       .finally(() => { inFlight.delete(task); });
     inFlight.add(task);
@@ -67,11 +74,17 @@ export const runQueue = async (
   for (;;) {
     // Resolve doomed jobs first so they free their place in the same pass
     // that killed their parent, rather than one pass later.
+    // Repeat until nothing more is doomed: a grandchild listed ahead of its
+    // parent only becomes doomed once that parent has been skipped in this pass.
     let changed = false;
-    for (const job of jobs) {
-      if (states.get(job.id) === 'waiting' && doomed(job)) {
-        set(job.id, 'skipped');
-        changed = true;
+    for (let again = true; again;) {
+      again = false;
+      for (const job of jobs) {
+        if (states.get(job.id) === 'waiting' && doomed(job)) {
+          set(job.id, 'skipped');
+          changed = true;
+          again = true;
+        }
       }
     }
 
