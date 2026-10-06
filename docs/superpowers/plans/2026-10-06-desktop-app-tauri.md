@@ -686,6 +686,46 @@ pub fn list_files(folder: String) -> Result<Vec<String>, String> {
 
 Add `commands::list_files` to the `generate_handler!` list in `main.rs`.
 
+- [ ] **Step 1b: Make a cancelled render stop looking like a crash**
+
+Today `cancel_job` kills the child, ffmpeg exits non-zero, and `run_ffmpeg`
+rejects with `ffmpeg exited with code 1` — the same string a real failure
+produces. A user who pressed Cancel would watch their own click come back as a
+red error line.
+
+The truth about why the process died is known at the place it was killed, so
+record it there. In `process.rs`, give `Registry` a second map:
+
+```rust
+#[derive(Default)]
+pub struct Registry {
+    children: Mutex<HashMap<String, CommandChild>>,
+    /// Ids killed on purpose, so their non-zero exit reads as a cancel and not
+    /// as a crash. ffmpeg cannot tell us the difference; only we know.
+    cancelled: Mutex<HashSet<String>>,
+}
+```
+
+`cancel_job` inserts the id into `cancelled` before killing. `run_ffmpeg`, on
+`Terminated` with a non-zero code, removes the id from `cancelled` and — if it
+was there — returns `Err("cancelled")` instead of the ffmpeg message. A job that
+finishes normally also clears its id, so a later run under the same id is not
+mistaken for cancelled.
+
+Surface it as a distinct value rather than a magic string the UI has to pattern
+match. `src/bridge/tauri.ts` gets:
+
+```ts
+/** Thrown when a run ended because `cancelJob` was called, not because it failed. */
+export class RenderCancelled extends Error {
+  constructor() { super('cancelled'); this.name = 'RenderCancelled'; }
+}
+```
+
+and `runFfmpeg` converts the `"cancelled"` rejection into it. The queue can then
+tell a cancelled job from a failed one without reading error text — which is the
+point, because error text is the one thing that changes between ffmpeg builds.
+
 - [ ] **Step 2: Write the failing test**
 
 Create `test/bridge.test.ts`:
