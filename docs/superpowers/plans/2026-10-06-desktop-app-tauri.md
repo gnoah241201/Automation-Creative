@@ -3209,7 +3209,62 @@ Library entries have no `inputRatio` by type. If this batch can contain them,
 the caller sets it to `'9:16'` deliberately at the point the source is built —
 a library output really is portrait — rather than letting a default invent it.
 
-- [ ] **Step 6: Point `main.tsx` at the new App**
+- [ ] **Step 5b: Running the failed jobs again, without running the other 117**
+
+A batch of 20 videos is around 120 ffmpeg runs. When three fail, re-running the
+whole lot costs about six minutes of a pinned machine to redo 117 files that
+were already correct.
+
+The queue already knows exactly what to re-run, so the decision is a pure
+function over its result. Add to `src/core/renderPlan.ts`:
+
+```ts
+/**
+ * The jobs a retry should run: the ones that failed, plus everything that was
+ * skipped waiting on them.
+ *
+ * A skipped job never ran -- its parent died first -- so it is not a second
+ * class of failure, it is simply unfinished work. Re-running a `done` job
+ * would overwrite a correct file with an identical one and cost the time this
+ * exists to save.
+ */
+export const planRetry = (
+  jobs: PlannedJob[],
+  states: ReadonlyMap<string, JobState>,
+): PlannedJob[] => {
+  const wanted = new Set<string>();
+  for (const job of jobs) {
+    const state = states.get(job.id);
+    if (state === 'failed' || state === 'skipped') wanted.add(job.id);
+  }
+  // A failed child needs its parent only if the parent's file is not already
+  // there. `done` means it is, so the chain stops at the first finished parent.
+  for (const job of jobs) {
+    if (!wanted.has(job.id) || !job.dependsOn) continue;
+    if (states.get(job.dependsOn) !== 'done') wanted.add(job.dependsOn);
+  }
+  return jobs.filter((job) => wanted.has(job.id));
+};
+```
+
+Tests to write first, each of which must fail against an empty implementation:
+
+```ts
+test('a retry runs the failed jobs and nothing that already succeeded', ...);
+test('a retry includes the children that were skipped waiting on a failure', ...);
+test('a retry does NOT re-run a parent that finished, even when its child failed', ...);
+test('retrying a clean run plans nothing', ...);
+test('the retry list is still in parent-before-child order', ...);
+```
+
+In the UI, when a run finishes with any job not `done`, the Render button is
+replaced by two: **"Chạy lại N job lỗi"** and **"Render lại từ đầu"**. The retry
+path calls `runBatch` with `plan: planRetry(plan, states)` and the same spec and
+folder; it must not re-derive the plan, or a settings change between the two
+runs would silently retry something different from what failed.
+
+A retried job overwrites its own previous output, which is correct — that file
+is the broken one. Do not send a retry through the collision prompt.
 
 ```tsx
 import App from './ui/App';
