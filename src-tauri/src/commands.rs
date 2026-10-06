@@ -2,6 +2,7 @@ use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_shell::process::CommandEvent;
 use tauri_plugin_shell::ShellExt;
 
+use crate::probe::MediaProbe;
 use crate::process::{lower_priority, Kill, Registry};
 
 #[derive(Clone, serde::Serialize)]
@@ -109,7 +110,7 @@ pub fn copy_file(from: String, to: String) -> Result<(), String> {
     std::fs::copy(&from, &to).map(|_| ()).map_err(|e| format!("{from} -> {to}: {e}"))
 }
 
-/// The video codec of a file, read from `ffmpeg -i`.
+/// The video codec and container of a file, read from `ffmpeg -i`.
 ///
 /// ffprobe would be the obvious tool and is not shipped: it is a 78 MB binary
 /// whose only remaining job is this one line, and ffmpeg already prints it.
@@ -119,7 +120,7 @@ pub fn copy_file(from: String, to: String) -> Result<(), String> {
 /// header and exits in milliseconds, so there is nothing worth cancelling and
 /// the process cannot be left running.
 #[tauri::command]
-pub async fn probe_codec(app: AppHandle, path: String) -> Result<Option<String>, String> {
+pub async fn probe_media(app: AppHandle, path: String) -> Result<MediaProbe, String> {
     let output = app
         .shell()
         .sidecar("ffmpeg")
@@ -130,7 +131,7 @@ pub async fn probe_codec(app: AppHandle, path: String) -> Result<Option<String>,
         .map_err(|e| e.to_string())?;
 
     // `-i` with no output file always exits non-zero; the stream listing is
-    // still on stderr, which is what we came for. `None` means "could not
-    // tell", and the caller converts rather than copies.
-    Ok(crate::probe::video_codec(&String::from_utf8_lossy(&output.stderr)))
+    // still on stderr, which is what we came for. A `None` field means "could
+    // not tell", and the caller converts rather than copies.
+    Ok(crate::probe::media(&String::from_utf8_lossy(&output.stderr)))
 }

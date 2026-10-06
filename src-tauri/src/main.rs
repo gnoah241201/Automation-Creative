@@ -17,7 +17,7 @@ fn main() {
             commands::cancel_job,
             commands::list_files,
             commands::copy_file,
-            commands::probe_codec
+            commands::probe_media
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {

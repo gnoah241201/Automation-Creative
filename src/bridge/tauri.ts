@@ -13,6 +13,7 @@
  */
 
 import { convertFileSrc, invoke } from '@tauri-apps/api/core';
+import type { MediaProbe } from '../core/originalCopy';
 
 export interface Bridge {
   pickVideos(): Promise<string[]>;
@@ -20,7 +21,7 @@ export interface Bridge {
   pickImage(): Promise<string | null>;
   listFiles(folder: string): Promise<string[]>;
   copyFile(from: string, to: string): Promise<void>;
-  probeCodec(path: string): Promise<string | null>;
+  probeMedia(path: string): Promise<MediaProbe>;
   runFfmpeg(jobId: string, args: string[]): Promise<void>;
   cancelJob(jobId: string): Promise<void>;
   onProgress(fn: (jobId: string, line: string) => void): Promise<() => void>;
@@ -74,8 +75,8 @@ const real: Bridge = {
   async copyFile(from, to) {
     return invoke<void>('copy_file', { from, to });
   },
-  async probeCodec(path) {
-    return invoke<string | null>('probe_codec', { path });
+  async probeMedia(path) {
+    return invoke<MediaProbe>('probe_media', { path });
   },
   async runFfmpeg(jobId, args) {
     try {
@@ -110,7 +111,7 @@ const fallback: Bridge = {
   pickImage: notInTauri('pickImage'),
   listFiles: notInTauri('listFiles'),
   copyFile: notInTauri('copyFile'),
-  probeCodec: notInTauri('probeCodec'),
+  probeMedia: notInTauri('probeMedia'),
   runFfmpeg: notInTauri('runFfmpeg'),
   cancelJob: notInTauri('cancelJob'),
   onProgress: notInTauri('onProgress'),
