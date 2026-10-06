@@ -91,3 +91,35 @@ test('the error message survives to the caller', async () => {
 test('an empty plan resolves rather than hanging', async () => {
   assert.equal((await runQueue([], { concurrency: 2, run: async () => {} })).size, 0);
 });
+
+test('a run that throws synchronously fails that job, not the whole queue', async () => {
+  const states = await runQueue([job('bad'), job('good')], {
+    concurrency: 2,
+    run: (j) => {
+      if (j.id === 'bad') throw new Error('argv build failed');
+      return Promise.resolve();
+    },
+  });
+  assert.equal(states.get('bad'), 'failed');
+  assert.equal(states.get('good'), 'done');
+});
+
+test('a listener that throws cannot turn a finished render into a failed one', async () => {
+  // The render wrote a good file. A UI callback blowing up afterwards must not
+  // send the user back to re-render it.
+  const states = await runQueue([job('1')], {
+    concurrency: 1,
+    run: async () => {},
+    onChange: (_id, state) => { if (state === 'done') throw new Error('setState after unmount'); },
+  });
+  assert.equal(states.get('1'), 'done');
+});
+
+test('a listener that throws on failure cannot reject the run', async () => {
+  const states = await runQueue([job('1')], {
+    concurrency: 1,
+    run: async () => { throw new Error('ffmpeg exited with code 1'); },
+    onChange: (_id, state) => { if (state === 'failed') throw new Error('listener blew up'); },
+  });
+  assert.equal(states.get('1'), 'failed');
+});

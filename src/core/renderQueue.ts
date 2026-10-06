@@ -28,7 +28,13 @@ export const runQueue = async (
   const byId = new Map(jobs.map((job) => [job.id, job]));
   const set = (id: string, state: JobState, error?: string) => {
     states.set(id, state);
-    onChange?.(id, state, error);
+    try {
+      onChange?.(id, state, error);
+    } catch {
+      // A listener is told what happened; it does not get to change it.
+      // Letting it throw here would mark a finished render failed, or reject
+      // the whole run from inside a progress callback.
+    }
   };
 
   const ready = (job: PlannedJob): boolean => {
@@ -48,7 +54,8 @@ export const runQueue = async (
 
   const start = (job: PlannedJob) => {
     set(job.id, 'running');
-    const task = run(job)
+    const task = Promise.resolve()
+      .then(() => run(job))
       .then(() => set(job.id, 'done'))
       .catch((error: unknown) => {
         set(job.id, 'failed', error instanceof Error ? error.message : String(error));
