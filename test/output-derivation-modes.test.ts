@@ -73,3 +73,34 @@ test('an unknown duration offers one composite per ratio in either mode', () => 
     assert.equal(outputs.some((o) => o.duration !== undefined), false);
   }
 });
+
+// With the full-length output dropped, the longest tier becomes the composite
+// and the shorter ones trim from it. These are the only cases where a child's
+// parent is not the bare ratio id, so a dangling `trimFrom` would hide here.
+for (const [duration, tiers] of [
+  [120.5, [6, 10, 12, 15, 30, 60, 90, 120]],
+  [16, [6, 10, 12, 15]],
+] as const) {
+  test(`cut mode at d=${duration} promotes the longest tier to composite and trims from a real output`, () => {
+    const outputs = deriveOutputs('9:16', duration, 'cut');
+    const byId = new Map(outputs.map((o) => [o.id, o]));
+
+    for (const ratio of RATIOS) {
+      const mine = forRatio(outputs, ratio);
+      assert.deepEqual(mine.map((o) => o.duration), [...tiers], `${ratio} lists only the tiers`);
+
+      const composites = mine.filter((o) => !o.trimFrom && !o.speedFrom);
+      assert.equal(composites.length, 1, `${ratio} composites once`);
+      assert.equal(composites[0].duration, tiers[tiers.length - 1], `${ratio} composite is the longest tier`);
+
+      for (const output of mine) {
+        assert.equal(output.speedFrom, undefined, `${output.id} must not retime`);
+        if (!output.trimFrom) continue;
+        const parent = byId.get(output.trimFrom);
+        assert.ok(parent, `${output.id} trims from ${output.trimFrom}, which is not in the list`);
+        assert.equal(parent.ratio, ratio, `${output.id} trims from another ratio`);
+        assert.equal(parent.id, composites[0].id, `${output.id} trims from the composite`);
+      }
+    }
+  });
+}

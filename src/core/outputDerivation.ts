@@ -75,6 +75,12 @@ const label = (ratio: AspectRatio, mode: LengthMode, seconds?: number): string =
  * the composite and the shorter ones trim from it with a stream copy; in speed
  * mode the full length carries it and the shorter ones retime from it. Either
  * way a run costs one composite per ratio however many lengths are ticked.
+ *
+ * Outputs are listed in display order: full length first when it exists, then
+ * tiers ascending. This is NOT dependency order — in cut mode without a
+ * full-length output the composite is the longest tier and therefore comes
+ * last. A consumer that must run parents first has to order by
+ * `trimFrom`/`speedFrom`, not by position.
  */
 export function deriveOutputs(
   inputRatio: InputRatio,
@@ -122,8 +128,8 @@ export function deriveOutputs(
  *
  * It makes no decisions: which output carries the composite was fixed when the
  * catalog was derived. A selected child still needs its parent — the catalog
- * offers the parent, it cannot force it into the selection. `renderPlan` is
- * what pulls the parent in.
+ * offers the parent, it cannot force it into the selection, so whoever turns
+ * the result into a render has to add any missing parent itself.
  */
 export const planSelectedOutputs = (
   available: OutputConfig[],
