@@ -93,11 +93,22 @@ const unlocked = (over: Partial<NamingConfig> = {}): NamingConfig => ({
   ...over,
 });
 
-test('a size the probe could not read falls back to portrait', () => {
-  // Not a guard -- it falls out of the comparison. NaN > NaN and 0 > 0 are
-  // both false, so anything unreadable lands on portrait by itself.
-  assert.equal(inputRatioFor(0, 0), '9:16');
-  assert.equal(inputRatioFor(Number.NaN, Number.NaN), '9:16');
+test('a size nobody could read gives the source NO ratio, not portrait', () => {
+  // inputRatioFor is only a comparison and answers 9:16 for NaN by accident.
+  // A source must never be labelled and composed that way: a landscape clip
+  // the webview could not decode would be filed as 9x16 and rendered portrait.
+  for (const [width, height] of [[Number.NaN, Number.NaN], [0, 0], [1920, Number.NaN], [-1, 1080]]) {
+    const [source] = buildBatchSources([probed('D:/a.mp4', 30, width, height)], locked());
+    assert.equal(source.inputRatio, undefined, `${width}x${height}`);
+  }
+});
+
+test('a readable size still decides the ratio', () => {
+  const [wide, tall] = buildBatchSources([
+    probed('D:/a.mp4', 30, 1280, 720),
+    probed('D:/b.mp4', 30, 720, 1280),
+  ], locked());
+  assert.deepEqual([wide.inputRatio, tall.inputRatio], ['16:9', '9:16']);
 });
 
 test('an unlocked config detects naming per file so different games stay apart', () => {

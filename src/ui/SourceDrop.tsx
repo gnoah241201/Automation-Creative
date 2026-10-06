@@ -78,14 +78,18 @@ export function SourceDrop({
                   {warning && (
                     <span
                       className="inline-flex items-center gap-1 rounded-md bg-amber-500/15 px-2 py-0.5 text-xs text-amber-300"
-                      title={`${warning}. Video này chỉ có bản full-length.`}
+                      title={`${warning}. Thiếu độ dài thì video chỉ có bản full-length; thiếu kích thước thì chưa render được.`}
                     >
                       <AlertTriangle className="h-3.5 w-3.5" />
-                      Không đọc được độ dài
+                      <span className="max-w-48 truncate">{warning}</span>
                     </span>
                   )}
-                  <span className="rounded-md bg-neutral-800 px-2 py-0.5 text-xs text-neutral-300" title="Tỉ lệ nguồn">
-                    {source.inputRatio}
+                  <span
+                    className={`rounded-md px-2 py-0.5 text-xs ${source.inputRatio ? 'bg-neutral-800 text-neutral-300' : 'bg-amber-500/15 text-amber-300'}`}
+                    title={source.inputRatio ? 'Tỉ lệ nguồn' : 'Không đọc được kích thước nên chưa biết tỉ lệ. Video này sẽ bị bỏ qua khi render.'}
+                    data-testid="source-ratio"
+                  >
+                    {source.inputRatio ?? '?'}
                   </span>
                   <span
                     className="w-16 text-right tabular-nums text-neutral-300"

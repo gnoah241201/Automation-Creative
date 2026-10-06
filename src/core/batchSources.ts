@@ -6,7 +6,9 @@ import { parseVideoNamingMeta } from './naming';
 
 export interface ProbedSource {
   path: string;
+  /** NaN when nobody could read it. */
   duration: number;
+  /** NaN when nobody could read it: the source then has no ratio at all. */
   width: number;
   height: number;
 }
@@ -20,6 +22,9 @@ export const basename = (path: string): string => {
 /** Square counts as portrait: a 1:1 source composes like a tall one, not a wide one. */
 export const inputRatioFor = (width: number, height: number): InputRatio =>
   (width > height ? '16:9' : '9:16');
+
+const hasSize = ({ width, height }: Pick<ProbedSource, 'width' | 'height'>): boolean =>
+  Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
 
 /**
  * Picked files become the batch.
@@ -45,7 +50,10 @@ export const buildBatchSources = (
       path: item.path,
       filename,
       duration: item.duration,
-      inputRatio: inputRatioFor(item.width, item.height),
+      // Unreadable is unknown, not portrait. `inputRatioFor` answers 9:16 for
+      // NaN by accident of the comparison, and a guess here would label and
+      // compose a landscape clip as portrait.
+      inputRatio: hasSize(item) ? inputRatioFor(item.width, item.height) : undefined,
       gameName: config.locked ? config.gameName : (detected.gameName ?? ''),
       version: config.locked ? (versions?.[index] ?? config.version) : (detected.version ?? ''),
       suffix: config.locked ? config.suffix : (detected.suffix ?? ''),

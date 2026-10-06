@@ -107,8 +107,12 @@ export default function App() {
   // editing the naming rewrites every name at once and removing a video counts
   // the versions up again without anyone re-picking anything.
   const sources = useMemo(() => buildBatchSources(probed, namingConfig), [probed, namingConfig]);
-  const catalog = useMemo(() => deriveBatchOutputCatalog(sources, mode), [sources, mode]);
-  const plan = useMemo(() => planBatch(sources, selected, mode), [sources, selected, mode]);
+  // A source whose shape nobody could read has no ratio and is never rendered:
+  // composing it from a guessed shape would be wrong more often than not. It
+  // stays in the list, marked "?", so the person can see why it is left out.
+  const renderable = useMemo(() => sources.filter((source) => source.inputRatio !== undefined), [sources]);
+  const catalog = useMemo(() => deriveBatchOutputCatalog(renderable, mode), [renderable, mode]);
+  const plan = useMemo(() => planBatch(renderable, selected, mode), [renderable, selected, mode]);
   const specBase = useMemo(() => buildSpecBase(background, advanced), [background, advanced]);
 
   const tickedRatios = useMemo(
@@ -133,8 +137,6 @@ export default function App() {
   const stopRef = useRef(false);
   const probedRef = useRef(probed);
   probedRef.current = probed;
-  const selectedRef = useRef(selected);
-  selectedRef.current = selected;
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
   const probingPaths = useRef(new Set<string>());
@@ -180,16 +182,9 @@ export default function App() {
       const results = await probeAll(fresh, (done, total) => setProbing({ done, total }));
       const next = [...probedRef.current, ...results];
       setProbed(next);
-
-      // First batch: tick the full-length output of every ratio. That is the
-      // set people nearly always want, and the rest is one click away.
-      if (selectedRef.current.size === 0) {
-        const firstSources = buildBatchSources(next, namingConfig);
-        const defaults = deriveBatchOutputCatalog(firstSources, settingsRef.current.lengthMode)
-          .filter((output) => output.duration === undefined)
-          .map((output) => output.id);
-        setSelected(new Set(defaults));
-      }
+      // Nothing is ticked for the person. A default of "every ratio" turns one
+      // accidental click on Render into five composites per video; the button
+      // stays disabled until something is chosen on purpose.
       setPreviewPath((current) => current ?? results[0]?.path ?? null);
     } finally {
       for (const path of fresh) probingPaths.current.delete(path.toLowerCase());
@@ -436,7 +431,7 @@ export default function App() {
     }
 
     // 1. Hard block: a shared version renders every video to one filename.
-    const namingErrors = validateBatchNaming(sources);
+    const namingErrors = validateBatchNaming(renderable);
     if (namingErrors.length > 0) {
       setBlockingError(namingErrors.join('\n'));
       return;
@@ -454,15 +449,22 @@ export default function App() {
     }
 
     // 3. Drop sources that vanished while the batch sat on screen.
+    const unknownRatio = sources.filter((source) => source.inputRatio === undefined);
+    if (unknownRatio.length > 0) {
+      setNotices((current) => [
+        ...current,
+        `Bỏ qua ${unknownRatio.length} video không đọc được kích thước nên chưa biết tỉ lệ: ${unknownRatio.map((source) => source.filename).join(', ')}`,
+      ]);
+    }
     let live: ResizeBatchSource[];
     try {
-      live = await dropGoneSources(sources);
+      live = await dropGoneSources(renderable);
     } catch (error) {
       setBlockingError(`Không kiểm tra được file nguồn. ${describe(error)}`);
       return;
     }
     if (live.length === 0) {
-      setBlockingError('Không còn video nguồn nào trên đĩa.');
+      setBlockingError('Không còn video nguồn nào để render.');
       return;
     }
 
@@ -619,6 +621,7 @@ export default function App() {
   const hasProblems = !running && runView !== null && retryCount > 0;
   const blockReason = (() => {
     if (sources.length === 0) return 'Chọn video trước.';
+    if (renderable.length === 0) return 'Không video nào đọc được kích thước, nên chưa render được.';
     if (selected.size === 0 || plan.length === 0) return 'Tick ít nhất một ô trong bảng xuất ra.';
     if (!settings.outputFolder) return 'Chọn thư mục lưu.';
     if (background.kind === 'banner' && !background.bannerPath) return 'Chọn ảnh banner hoặc đổi sang làm mờ chính video.';
@@ -695,7 +698,7 @@ export default function App() {
 
         <OutputMatrix
           catalog={catalog}
-          sources={sources}
+          sources={renderable}
           selected={selected}
           mode={mode}
           onToggle={toggleOutput}
@@ -770,7 +773,7 @@ export default function App() {
                 {hasProblems ? <RefreshCw className="h-5 w-5" /> : <Play className="h-5 w-5 fill-current" />}
                 {hasProblems
                   ? 'Render lại từ đầu'
-                  : `Render ${sources.length} video → ${plan.length + sources.length} file`}
+                  : `Render ${renderable.length} video → ${plan.length + renderable.length} file`}
               </button>
               {finishedFolder && (
                 <button

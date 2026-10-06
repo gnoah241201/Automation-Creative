@@ -32,7 +32,8 @@ export const DEFAULT_ADVANCED: AdvancedState = {
   ctaSize: DEFAULT_BUTTON_SIZE,
 };
 
-const BLUR_PX = 24;
+/** The blur the render applies, also what the preview shows: one number so they cannot drift. */
+export const BLUR_PX = 24;
 
 /**
  * What every composite in a run shares, assembled from what the person chose.

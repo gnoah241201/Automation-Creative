@@ -11,6 +11,14 @@ const MP4_DEMUXER = 'mp4';
 export interface MediaProbe {
   codec: string | null;
   container: string | null;
+  /**
+   * Length and picture size as ffmpeg states them, for a file the webview cannot
+   * decode. Null when ffmpeg did not state them unambiguously. Absent in the
+   * object a test builds by hand, which means the same thing.
+   */
+  duration?: number | null;
+  width?: number | null;
+  height?: number | null;
 }
 
 const isPlayable = ({ codec, container }: MediaProbe): boolean =>

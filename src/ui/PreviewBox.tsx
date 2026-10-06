@@ -12,6 +12,7 @@ import {
   shouldUsePrecomposedHiddenFgAnchor,
 } from '../core/precomposedAnchor';
 import { getBridge } from '../bridge/tauri';
+import { BLUR_PX } from '../render/specBase';
 
 /** What sits on top of the picture: the logo and the CTA button. Everything is optional. */
 export interface PreviewOverlay {
@@ -435,7 +436,7 @@ export function PreviewPane({
         bgType={isBanner ? 'image' : 'video'}
         fgPosition={fgPosition}
         backgroundImageMode={background.bannerMode}
-        blurAmount={24}
+        blurAmount={BLUR_PX}
         overlay={overlay ? { ...overlay, logoSrc } : undefined}
       />
     </section>

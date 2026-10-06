@@ -1,4 +1,11 @@
-/// What `ffmpeg -i` says about a file: the video codec and the container.
+/// What `ffmpeg -i` says about a file: the video codec, the container, and the
+/// length and picture size.
+///
+/// The length and size exist because the webview cannot always read them: a
+/// file in a codec WebView2 cannot decode (HEVC on a machine without the
+/// extension) reports no duration or dimensions to a `<video>`, yet ffmpeg
+/// reads both. They are a fallback, never a guess: each is `None` unless
+/// ffmpeg printed it unambiguously.
 ///
 /// Both are `None` when they cannot be stated with confidence, and the caller
 /// treats `None` as "convert". A file is only copied when it is h264 inside an
@@ -9,10 +16,119 @@
 pub struct MediaProbe {
     pub codec: Option<String>,
     pub container: Option<String>,
+    /// Seconds, from the `Duration:` line. `None` for `N/A` or no such line.
+    pub duration: Option<f64>,
+    /// Picture size as a viewer sees it: already swapped for a 90/270 degree
+    /// rotation. `None` unless every video stream agrees.
+    pub width: Option<u32>,
+    pub height: Option<u32>,
 }
 
 pub fn media(stderr: &str) -> MediaProbe {
-    MediaProbe { codec: video_codec(stderr), container: container(stderr) }
+    let size = video_size(stderr);
+    MediaProbe {
+        codec: video_codec(stderr),
+        container: container(stderr),
+        duration: duration_seconds(stderr),
+        width: size.map(|(w, _)| w),
+        height: size.map(|(_, h)| h),
+    }
+}
+
+/// The length from the `  Duration: 00:00:03.00, start: ...` line.
+///
+/// Only a line that BEGINS with `Duration: ` counts, so a metadata value that
+/// mentions one (mkv stores a `DURATION` tag, upper case, with spaces before
+/// the colon) is never read. `N/A` (live streams, some broken files) and a
+/// zero length are `None`: a length that cannot gate a tier is not a length.
+pub fn duration_seconds(stderr: &str) -> Option<f64> {
+    let rest = stderr.lines().find_map(|line| line.trim_start().strip_prefix("Duration: "))?;
+    let stamp = rest.split(',').next()?.trim();
+    let mut parts = stamp.split(':');
+    let hours: f64 = parts.next()?.parse().ok()?;
+    let minutes: f64 = parts.next()?.parse().ok()?;
+    let seconds: f64 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    let total = hours * 3600.0 + minutes * 60.0 + seconds;
+    (total.is_finite() && total > 0.0).then_some(total)
+}
+
+/// `WIDTHxHEIGHT` from the text after `Video: `, skipping hex such as
+/// `0x31637668` (a codec tag, which also has digits either side of an `x`).
+fn dimensions(text: &str) -> Option<(u32, u32)> {
+    let bytes = text.as_bytes();
+    for (at, byte) in bytes.iter().enumerate() {
+        if *byte != b'x' || at == 0 || at + 1 >= bytes.len() {
+            continue;
+        }
+        if !bytes[at - 1].is_ascii_digit() || !bytes[at + 1].is_ascii_digit() {
+            continue;
+        }
+        let mut start = at;
+        while start > 0 && bytes[start - 1].is_ascii_digit() {
+            start -= 1;
+        }
+        let mut end = at + 1;
+        while end < bytes.len() && bytes[end].is_ascii_digit() {
+            end += 1;
+        }
+        let before_ok = start == 0 || bytes[start - 1] == b' ';
+        let after_ok = end == bytes.len() || matches!(bytes[end], b' ' | b',' | b'[');
+        if !before_ok || !after_ok || bytes[start] == b'0' {
+            continue;
+        }
+        let width: u32 = text[start..at].parse().ok()?;
+        let height: u32 = text[at + 1..end].parse().ok()?;
+        if width > 0 && height > 0 {
+            return Some((width, height));
+        }
+    }
+    None
+}
+
+/// Degrees of rotation printed under a video stream, from either the
+/// `displaymatrix: rotation of -90.00 degrees` side data or a `rotate : 90` tag.
+/// The side data wins when both are present; the tag's sign is not reliable
+/// (a stream tagged `rotate : 270` printed a display matrix of 90).
+fn rotation_degrees(block: &[&str]) -> Option<f64> {
+    let from_matrix = block.iter().find_map(|line| {
+        let rest = line.trim().strip_prefix("displaymatrix: rotation of ")?;
+        rest.split(' ').next()?.parse::<f64>().ok()
+    });
+    from_matrix.or_else(|| {
+        block.iter().find_map(|line| {
+            let rest = line.trim().strip_prefix("rotate")?;
+            let (_, value) = rest.split_once(':')?;
+            value.trim().parse::<f64>().ok()
+        })
+    })
+}
+
+/// The picture size a viewer sees, or `None` when it cannot be stated.
+///
+/// Every video stream must agree. Cover art is a second video stream of a
+/// different size, and picking either would label the file by a thumbnail or
+/// by a guess. A 90/270 degree rotation swaps the two numbers, because that is
+/// the shape the file plays in and the shape its outputs are composed from.
+pub fn video_size(stderr: &str) -> Option<(u32, u32)> {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut sizes: Vec<(u32, u32)> = Vec::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Some(rest) = line.trim().strip_prefix("Stream #") else { continue };
+        let Some((_, video)) = rest.split_once("Video: ") else { continue };
+        let (width, height) = dimensions(video)?;
+        let block: Vec<&str> = lines[index + 1..]
+            .iter()
+            .copied()
+            .take_while(|next| !next.trim().starts_with("Stream #"))
+            .collect();
+        let turned = rotation_degrees(&block).map(|d| (d.abs().round() as i64) % 180 == 90).unwrap_or(false);
+        sizes.push(if turned { (height, width) } else { (width, height) });
+    }
+    let first = *sizes.first()?;
+    sizes.iter().all(|size| *size == first).then_some(first)
 }
 
 /// The demuxer list from the `Input #0, <demuxers>, from '<path>':` line.
@@ -73,7 +189,7 @@ pub fn video_codec(stderr: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{container, media, video_codec, MediaProbe};
+    use super::{container, duration_seconds, media, video_codec, video_size, MediaProbe};
 
     // Provenance. Samples marked REAL are lines copied from the bundled
     // ffmpeg's stderr (a 4.1 build); the only edit is that the quoted path in
@@ -220,7 +336,175 @@ junk.mp4: Invalid data found when processing input"#;
         let text = "Input #0, mpegts, from 'h264.ts':\n    Stream #0:0[0x100]: Video: h264 (High 4:4:4 Predictive) ([27][0][0][0] / 0x001B), yuv444p(progressive), 160x90";
         assert_eq!(
             media(text),
-            MediaProbe { codec: Some("h264".into()), container: Some("mpegts".into()) }
+            MediaProbe {
+                codec: Some("h264".into()),
+                container: Some("mpegts".into()),
+                duration: None,
+                width: Some(160),
+                height: Some(90),
+            }
         );
+    }
+
+    // Duration and size. REAL samples are stderr captured from the bundled
+    // ffmpeg for files generated here.
+
+    const LANDSCAPE_HEVC: &str = r#"Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'land_hevc.mp4':
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2mp41
+    encoder         : Lavf58.24.101
+  Duration: 00:00:03.00, start: 0.000000, bitrate: 1497 kb/s
+    Stream #0:0(und): Video: hevc (Main) (hvc1 / 0x31637668), yuv420p(tv, progressive), 1280x720 [SAR 1:1 DAR 16:9], 1487 kb/s, 25 fps, 25 tbr, 12800 tbn, 25 tbc (default)
+    Metadata:
+      handler_name    : VideoHandler
+At least one output file must be specified"#;
+
+    #[test]
+    fn a_landscape_hevc_file_reports_its_length_and_true_shape() {
+        // REAL. The case this exists for: a webview that cannot decode hevc
+        // reports neither, and the codec tag `0x31637668` must not be read as a size.
+        assert_eq!(duration_seconds(LANDSCAPE_HEVC), Some(3.0));
+        assert_eq!(video_size(LANDSCAPE_HEVC), Some((1280, 720)));
+        let probe = media(LANDSCAPE_HEVC);
+        assert_eq!((probe.codec.as_deref(), probe.width, probe.height), (Some("hevc"), Some(1280), Some(720)));
+    }
+
+    #[test]
+    fn a_portrait_file_stays_portrait() {
+        // REAL: h264 360x640.
+        let text = r#"  Duration: 00:00:02.00, start: 0.000000, bitrate: 48 kb/s
+    Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 360x640 [SAR 1:1 DAR 9:16], 44 kb/s, 10 fps, 10 tbr, 10240 tbn, 20 tbc (default)
+    Metadata:
+      handler_name    : VideoHandler"#;
+        assert_eq!(video_size(text), Some((360, 640)));
+        assert_eq!(duration_seconds(text), Some(2.0));
+    }
+
+    #[test]
+    fn a_rotated_file_is_reported_in_the_shape_it_plays_in() {
+        // REAL: the same 360x640 stream remuxed with `-metadata:s:v:0 rotate=90`.
+        // Note the tag reads 270 while the display matrix reads 90: the matrix is
+        // what is trusted, and either value is a quarter turn.
+        let text = r#"  Duration: 00:00:02.00, start: 0.000000, bitrate: 48 kb/s
+    Stream #0:0(und): Video: h264 (High) (avc1 / 0x31637661), yuv420p, 360x640 [SAR 1:1 DAR 9:16], 44 kb/s, 10 fps, 10 tbr, 10240 tbn, 20 tbc (default)
+    Metadata:
+      rotate          : 270
+      handler_name    : VideoHandler
+    Side data:
+      displaymatrix: rotation of 90.00 degrees
+At least one output file must be specified"#;
+        assert_eq!(video_size(text), Some((640, 360)));
+    }
+
+    #[test]
+    fn a_tag_alone_turns_the_picture_too() {
+        // SYNTHETIC: an older ffmpeg prints only the tag.
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 360x640 [SAR 1:1 DAR 9:16], 10 fps\n    Metadata:\n      rotate          : 90";
+        assert_eq!(video_size(text), Some((640, 360)));
+    }
+
+    #[test]
+    fn a_half_turn_does_not_swap() {
+        // SYNTHETIC: 180 degrees is upside down, not sideways.
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 360x640, 10 fps\n    Side data:\n      displaymatrix: rotation of 180.00 degrees";
+        assert_eq!(video_size(text), Some((360, 640)));
+    }
+
+    #[test]
+    fn a_negative_quarter_turn_swaps() {
+        // SYNTHETIC: ffmpeg prints -90 for the other direction.
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 360x640, 10 fps\n    Side data:\n      displaymatrix: rotation of -90.00 degrees";
+        assert_eq!(video_size(text), Some((640, 360)));
+    }
+
+    #[test]
+    fn a_rotation_under_a_later_stream_does_not_turn_an_earlier_one() {
+        // SYNTHETIC: the rotation belongs to the stream whose block it sits in.
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 360x640, 10 fps\n    Stream #0:1: Audio: aac (LC), 44100 Hz, mono\n    Side data:\n      displaymatrix: rotation of 90.00 degrees";
+        assert_eq!(video_size(text), Some((360, 640)));
+    }
+
+    #[test]
+    fn a_matroska_file_named_mp4_reads_its_length_from_the_duration_line_not_the_tag() {
+        // REAL: mkv stores a `DURATION` tag per stream, upper case, with spaces.
+        let text = r#"Input #0, matroska,webm, from 'mkv_named.mp4':
+  Metadata:
+    ENCODER         : Lavf58.24.101
+  Duration: 00:00:01.02, start: 0.000000, bitrate: 107 kb/s
+    Stream #0:0: Video: h264 (High), yuv420p(progressive), 160x90 [SAR 1:1 DAR 16:9], 10 fps, 10 tbr, 1k tbn, 20 tbc (default)
+    Metadata:
+      ENCODER         : Lavc58.42.102 libx264
+      DURATION        : 00:00:01.023000000
+    Stream #0:1: Audio: aac (LC), 44100 Hz, mono, fltp (default)"#;
+        assert_eq!(duration_seconds(text), Some(1.02));
+        assert_eq!(video_size(text), Some((160, 90)));
+    }
+
+    #[test]
+    fn a_file_ffmpeg_could_not_open_has_no_length_and_no_size() {
+        // REAL: 5000 random bytes named .mp4.
+        let text = "junk.mp4: Invalid data found when processing input";
+        assert_eq!(duration_seconds(text), None);
+        assert_eq!(video_size(text), None);
+        assert_eq!(duration_seconds(""), None);
+        assert_eq!(video_size(""), None);
+    }
+
+    #[test]
+    fn hours_and_minutes_count() {
+        // SYNTHETIC.
+        assert_eq!(duration_seconds("  Duration: 01:02:03.50, start: 0.0"), Some(3723.5));
+    }
+
+    #[test]
+    fn an_unknown_or_zero_length_is_none() {
+        // SYNTHETIC: ffmpeg prints N/A for some live and broken inputs.
+        assert_eq!(duration_seconds("  Duration: N/A, bitrate: N/A"), None);
+        assert_eq!(duration_seconds("  Duration: 00:00:00.00, start: 0.0"), None);
+        assert_eq!(duration_seconds("  Duration: 00:00, start: 0.0"), None);
+    }
+
+    #[test]
+    fn a_metadata_value_that_mentions_a_duration_is_not_the_duration() {
+        // SYNTHETIC.
+        let text = "  Metadata:\n    comment         : Duration: 99:00:00.00, fake\n  Duration: 00:00:05.00, start: 0.0";
+        assert_eq!(duration_seconds(text), Some(5.0));
+    }
+
+    #[test]
+    fn video_streams_that_disagree_on_size_give_no_size() {
+        // SYNTHETIC: a cover-art stream beside the picture. Picking either
+        // would label the file by a thumbnail or by a guess.
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 1280x720, 25 fps\n    Stream #0:1: Video: h264 (High), yuv420p, 300x300, 25 fps";
+        assert_eq!(video_size(text), None);
+    }
+
+    #[test]
+    fn video_streams_that_agree_on_size_give_it() {
+        // SYNTHETIC.
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 1280x720, 25 fps\n    Stream #0:1: Video: h264 (High), yuv420p, 1280x720, 25 fps";
+        assert_eq!(video_size(text), Some((1280, 720)));
+    }
+
+    #[test]
+    fn an_audio_only_file_has_a_length_but_no_size() {
+        // REAL shape: aac in an m4a.
+        let text = "  Duration: 00:00:01.02, start: 0.000000, bitrate: 112 kb/s\n    Stream #0:0(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s (default)";
+        assert_eq!(duration_seconds(text), Some(1.02));
+        assert_eq!(video_size(text), None);
+    }
+
+    #[test]
+    fn a_stream_line_with_no_readable_size_gives_no_size() {
+        // SYNTHETIC: a video stream whose line carries no WxH. It is doubt, not absence.
+        assert_eq!(video_size("    Stream #0:0: Video: h264 (High), yuv420p, 25 fps"), None);
+    }
+
+    #[test]
+    fn a_hex_codec_tag_is_never_a_size() {
+        // SYNTHETIC: the tag alone, no size after it.
+        assert_eq!(video_size("    Stream #0:0: Video: hevc (Main) (hvc1 / 0x31637668), yuv420p, 25 fps"), None);
     }
 }

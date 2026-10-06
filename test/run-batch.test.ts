@@ -107,7 +107,7 @@ test('a supplied plan is used as-is rather than re-derived', async () => {
   const full = planBatch([src], new Set(['9:16', '9:16-15s']), 'speed');
   await runBatch({
     sources: [src], selectedIds: new Set(['9:16', '9:16-15s']), mode: 'speed',
-    outputFolder: 'D:\out', spec, concurrency: 1,
+    outputFolder: 'D:\\out', spec, concurrency: 1,
     plan: full.filter((job) => job.kind === 'composite'),
   });
   assert.deepEqual(ran, [full[0].id], 'only the job that was handed over ran');
@@ -121,7 +121,7 @@ test('an empty supplied plan runs nothing rather than falling back to the select
   setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); } });
   await runBatch({
     sources: [source()], selectedIds: new Set(['9:16']), mode: 'speed',
-    outputFolder: 'D:\out', spec, concurrency: 1, plan: [],
+    outputFolder: 'D:\\out', spec, concurrency: 1, plan: [],
   });
   assert.deepEqual(ran, []);
 });
@@ -135,7 +135,7 @@ test('a retry runs the failed child against the parent file the first run left b
   // First run: the composite succeeds, the retime fails.
   setBridge({ runFfmpeg: async (jobId) => { if (jobId === child.id) throw 'ffmpeg exited with code 1'; } });
   const first = await runBatch({
-    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\out', spec, concurrency: 1,
+    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\\out', spec, concurrency: 1,
   });
   assert.equal(first.get(parent.id), 'done');
   assert.equal(first.get(child.id), 'failed');
@@ -146,7 +146,7 @@ test('a retry runs the failed child against the parent file the first run left b
   const ran: string[] = [];
   setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); } });
   const second = await runBatch({
-    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\out', spec, concurrency: 1,
+    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\\out', spec, concurrency: 1,
     plan: retry,
     alreadyDone: new Set([...first].filter(([, state]) => state === 'done').map(([id]) => id)),
   });
@@ -163,7 +163,7 @@ test('a stop request cancels what has not started and leaves what already ran al
   setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); stopped = true; } });
   const changes: Array<[string, JobState, string | undefined]> = [];
   const result = await runBatch({
-    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\out', spec, concurrency: 1,
+    sources: [src], selectedIds: ticks, mode: 'speed', outputFolder: 'D:\\out', spec, concurrency: 1,
     shouldStop: () => stopped,
     onChange: (id, state, error) => changes.push([id, state, error]),
   });
