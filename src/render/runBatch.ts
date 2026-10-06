@@ -42,12 +42,21 @@ export const argvFor = (
   threads: number,
   overlayPath?: string,
 ): string[] => {
+  // No default. A landscape source composed as portrait is a correctly named
+  // file that is wrong, and it would ship. The UI keeps such a source out of
+  // the plan; this is what holds if it ever does not. Same rule as
+  // `originalFilename`, for the same reason.
+  const inputRatio = source.inputRatio;
+  if (!inputRatio) {
+    throw new Error(`${source.filename} has no input ratio, so ${job.id} cannot be composed`);
+  }
+
   const outputPath = join(outputFolder, job.filename);
 
   if (job.kind === 'composite') {
     const spec: RenderSpec = {
       ...base,
-      inputRatio: source.inputRatio ?? '9:16',
+      inputRatio,
       outputRatio: job.ratio,
       duration: job.duration,
       naming: { gameName: source.gameName, version: source.version, suffix: source.suffix },

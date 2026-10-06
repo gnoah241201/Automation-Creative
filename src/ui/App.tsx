@@ -121,8 +121,10 @@ export default function App() {
   );
   const effectivePreviewRatio: AspectRatio = previewRatio ?? RATIOS.find((ratio) => tickedRatios.has(ratio)) ?? '9:16';
 
+  // The first video that will actually render, not the first in the list: an
+  // unreadable one has no ratio and no length, so its preview would be invented.
   const namingPreview = useMemo(() => {
-    const first = sources[0];
+    const first = renderable[0];
     if (!first) return null;
     const [leading] = deriveSourceOutputs(first, mode);
     return buildOutputFilename(
@@ -130,7 +132,7 @@ export default function App() {
       leading?.ratio ?? '9:16',
       leading?.duration,
     );
-  }, [sources, mode]);
+  }, [renderable, mode]);
 
   // --- refs that async handlers read, so they never act on a stale render ---
   const runningRef = useRef(false);

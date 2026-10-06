@@ -30,6 +30,10 @@
     "active": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico"],
-    "externalBin": ["binaries/ffmpeg"]
+    "externalBin": ["binaries/ffmpeg"],
+    "resources": {
+      "resources/COPYING.GPLv3": "licenses/COPYING.GPLv3",
+      "resources/FFMPEG-SOURCE.txt": "licenses/FFMPEG-SOURCE.txt"
+    }
   }
 }

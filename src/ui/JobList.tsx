@@ -62,7 +62,7 @@ export function JobList({
 
       {!running && summary.failed + summary.cancelled > 0 && (
         <p className="border-b border-neutral-800 px-4 py-2 text-xs text-neutral-400">
-          Job lỗi hoặc đã hủy có thể để lại file dở dang trong thư mục. Chạy lại sẽ ghi đè lên file đó.
+          Job lỗi hoặc đã hủy không để lại file dở dang: file tạm .part bị xóa, và tên file thật chỉ xuất hiện khi render xong. Chạy lại sẽ render lại job đó.
         </p>
       )}
 

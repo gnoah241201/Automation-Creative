@@ -1,5 +1,5 @@
-/// What `ffmpeg -i` says about a file: the video codec, the container, and the
-/// length and picture size.
+/// What `ffmpeg -i` says about a file: the video codec, the container, the
+/// audio, and the length and picture size.
 ///
 /// The length and size exist because the webview cannot always read them: a
 /// file in a codec WebView2 cannot decode (HEVC on a machine without the
@@ -13,9 +13,19 @@
 /// transport stream or matroska keeps that container when it is byte-copied
 /// and renamed `.mp4`, and still will not open on anyone else's machine.
 #[derive(Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaProbe {
     pub codec: Option<String>,
     pub container: Option<String>,
+    /// How many `Audio:` streams ffmpeg listed. A fact, not a judgement: `0`
+    /// is a silent file, which is fine to copy. It exists because
+    /// `audio_codec` alone cannot tell a silent file from one whose audio could
+    /// not be read, and those two must not be treated alike.
+    pub audio_streams: u32,
+    /// The audio codec: `Some` only when there is at least one audio stream,
+    /// every one of them is readable, and they all agree. `None` means silent
+    /// or cannot tell; `audio_streams` says which.
+    pub audio_codec: Option<String>,
     /// Seconds, from the `Duration:` line. `None` for `N/A` or no such line.
     pub duration: Option<f64>,
     /// Picture size as a viewer sees it: already swapped for a 90/270 degree
@@ -29,6 +39,8 @@ pub fn media(stderr: &str) -> MediaProbe {
     MediaProbe {
         codec: video_codec(stderr),
         container: container(stderr),
+        audio_streams: audio_stream_count(stderr),
+        audio_codec: audio_codec(stderr),
         duration: duration_seconds(stderr),
         width: size.map(|(w, _)| w),
         height: size.map(|(_, h)| h),
@@ -187,9 +199,57 @@ pub fn video_codec(stderr: &str) -> Option<String> {
     found
 }
 
+/// How many audio streams `ffmpeg -i` listed. Same line rule as the codec
+/// readers: only lines that begin with `Stream #` count.
+pub fn audio_stream_count(stderr: &str) -> u32 {
+    stderr
+        .lines()
+        .filter(|line| {
+            line.trim().strip_prefix("Stream #").is_some_and(|rest| rest.contains("Audio:"))
+        })
+        .count() as u32
+}
+
+/// The audio codec named in `ffmpeg -i` output, or `None` when there is none
+/// to state.
+///
+/// The same discipline as `video_codec`, because the same incident is
+/// reachable through the audio stream: an h264 mp4 carrying AMR or PCM audio
+/// opens on nobody's machine once it is byte-copied. So:
+/// - no audio stream gives `None` (the caller reads `audio_stream_count` to
+///   learn that this is silence and not doubt);
+/// - several audio streams that do not agree give `None`, because a copy would
+///   carry the odd one along;
+/// - an `Audio:` line whose shape is not the one ffmpeg prints gives `None`,
+///   not a skip: a stream we cannot read is a stream we cannot vouch for.
+///
+/// Lines look like `Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), ...`.
+pub fn audio_codec(stderr: &str) -> Option<String> {
+    let mut found: Option<String> = None;
+    for line in stderr.lines() {
+        let Some(rest) = line.trim().strip_prefix("Stream #") else { continue };
+        let Some((id, audio)) = rest.split_once("Audio:") else { continue };
+        if id.trim_end_matches(' ').contains(' ') {
+            return None;
+        }
+        let Some(codec) = audio.trim_start().split([' ', ',']).next().filter(|c| !c.is_empty()) else {
+            return None;
+        };
+        match &found {
+            None => found = Some(codec.to_string()),
+            Some(first) if first == codec => {}
+            Some(_) => return None,
+        }
+    }
+    found
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{container, duration_seconds, media, video_codec, video_size, MediaProbe};
+    use super::{
+        audio_codec, audio_stream_count, container, duration_seconds, media, video_codec, video_size,
+        MediaProbe,
+    };
 
     // Provenance. Samples marked REAL are lines copied from the bundled
     // ffmpeg's stderr (a 4.1 build); the only edit is that the quoted path in
@@ -339,6 +399,8 @@ junk.mp4: Invalid data found when processing input"#;
             MediaProbe {
                 codec: Some("h264".into()),
                 container: Some("mpegts".into()),
+                audio_streams: 0,
+                audio_codec: None,
                 duration: None,
                 width: Some(160),
                 height: Some(90),
@@ -506,5 +568,132 @@ At least one output file must be specified"#;
     fn a_hex_codec_tag_is_never_a_size() {
         // SYNTHETIC: the tag alone, no size after it.
         assert_eq!(video_size("    Stream #0:0: Video: hevc (Main) (hvc1 / 0x31637668), yuv420p, 25 fps"), None);
+    }
+
+    // Audio. Samples are stderr captured from the bundled ffmpeg (N-92722) for
+    // files generated here. This build's mp4 muxer refuses PCM and AMR, so
+    // those two were written as .mov and .3gp: ffmpeg prints the same
+    // `mov,mp4,m4a,3gp,3g2,mj2` demuxer line for all three, which is why such
+    // a file can be copied under an .mp4 name without anyone noticing.
+
+    #[test]
+    fn reads_aac_audio() {
+        // REAL: h264 mp4 with an aac track.
+        let text = "    Stream #0:0(und): Video: h264 (High 4:4:4 Predictive) (avc1 / 0x31637661), yuv444p, 160x90 [SAR 1:1 DAR 16:9], 28 kb/s, 10 fps, 10 tbr, 10240 tbn, 20 tbc (default)\n    Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s (default)";
+        assert_eq!(audio_codec(text).as_deref(), Some("aac"));
+        assert_eq!(audio_stream_count(text), 1);
+    }
+
+    #[test]
+    fn reads_mp3_audio_in_an_mp4() {
+        // REAL.
+        let text = "    Stream #0:1(und): Audio: mp3 (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 65 kb/s (default)";
+        assert_eq!(audio_codec(text).as_deref(), Some("mp3"));
+    }
+
+    #[test]
+    fn reads_pcm_audio() {
+        // REAL: h264 + pcm_s16le in a .mov (also what that file prints when renamed .mp4).
+        let text = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'pcm.mov':\n    Stream #0:0(eng): Video: h264 (High 4:4:4 Predictive) (avc1 / 0x31637661), yuv444p, 160x90 [SAR 1:1 DAR 16:9], 28 kb/s, 10 fps, 10 tbr, 10240 tbn, 20 tbc (default)\n    Stream #0:1(eng): Audio: pcm_s16le (sowt / 0x74776F73), 44100 Hz, mono, s16, 705 kb/s (default)";
+        assert_eq!(audio_codec(text).as_deref(), Some("pcm_s16le"));
+        let probe = media(text);
+        assert_eq!(probe.audio_codec.as_deref(), Some("pcm_s16le"));
+        assert_eq!(probe.container.as_deref(), Some("mov,mp4,m4a,3gp,3g2,mj2"));
+        assert_eq!(probe.codec.as_deref(), Some("h264"));
+    }
+
+    #[test]
+    fn reads_amr_audio() {
+        // REAL: h264 + amr_nb in a .3gp.
+        let text = "    Stream #0:1(und): Audio: amr_nb (samr / 0x726D6173), 8000 Hz, mono, flt, 12 kb/s (default)";
+        assert_eq!(audio_codec(text).as_deref(), Some("amr_nb"));
+    }
+
+    #[test]
+    fn reads_opus_audio() {
+        // REAL: h264 + opus in an mp4.
+        let text = "    Stream #0:1(und): Audio: opus (Opus / 0x7375704F), 48000 Hz, mono, fltp, 72 kb/s (default)";
+        assert_eq!(audio_codec(text).as_deref(), Some("opus"));
+    }
+
+    #[test]
+    fn reads_the_matroska_form_with_no_language_tag() {
+        // REAL: aac in an .mkv.
+        let text = "    Stream #0:1: Audio: aac (LC), 44100 Hz, mono, fltp (default)";
+        assert_eq!(audio_codec(text).as_deref(), Some("aac"));
+    }
+
+    #[test]
+    fn a_silent_file_has_no_audio_codec_and_no_audio_streams() {
+        // REAL: h264 mp4 made with -an.
+        let text = "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'silent.mp4':\n  Duration: 00:00:01.00, start: 0.000000, bitrate: 31 kb/s\n    Stream #0:0(und): Video: h264 (High 4:4:4 Predictive) (avc1 / 0x31637661), yuv444p, 160x90 [SAR 1:1 DAR 16:9], 28 kb/s, 10 fps, 10 tbr, 10240 tbn, 20 tbc (default)\n    Metadata:\n      handler_name    : VideoHandler";
+        assert_eq!(audio_codec(text), None);
+        assert_eq!(audio_stream_count(text), 0);
+        let probe = media(text);
+        assert_eq!((probe.audio_streams, probe.audio_codec), (0, None));
+    }
+
+    #[test]
+    fn agreeing_audio_streams_are_fine() {
+        // REAL: an mp4 with two aac tracks.
+        let text = "    Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s (default)\n    Stream #0:2(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 70 kb/s";
+        assert_eq!(audio_codec(text).as_deref(), Some("aac"));
+        assert_eq!(audio_stream_count(text), 2);
+    }
+
+    #[test]
+    fn disagreeing_audio_streams_are_not_trusted_but_are_counted() {
+        // REAL: an mp4 with an aac track then an mp3 track. Both are playable,
+        // but the probe does not choose between streams. The count is what
+        // tells the caller this is doubt and not silence.
+        let text = "    Stream #0:1(und): Audio: aac (LC) (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 69 kb/s (default)\n    Stream #0:2(und): Audio: mp3 (mp4a / 0x6134706D), 44100 Hz, mono, fltp, 65 kb/s";
+        assert_eq!(audio_codec(text), None);
+        assert_eq!(audio_stream_count(text), 2);
+        // SYNTHETIC: the case this exists for, an unplayable stream behind a playable one.
+        let bad = "    Stream #0:1: Audio: aac (LC), 44100 Hz, mono\n    Stream #0:2: Audio: amr_nb (samr / 0x726D6173), 8000 Hz, mono";
+        assert_eq!(audio_codec(bad), None);
+        assert_eq!(audio_stream_count(bad), 2);
+    }
+
+    #[test]
+    fn an_audio_line_of_an_unknown_shape_is_doubt_not_absence() {
+        // SYNTHETIC. A stream line whose id holds a space, or with no codec
+        // after the marker: skipping either would let an unreadable stream pass
+        // unseen beside a readable aac one.
+        let odd_id = "    Stream #0:1: Audio: aac (LC), 44100 Hz\n    Stream #0:2 odd id: Audio: amr_nb, 8000 Hz";
+        assert_eq!(audio_codec(odd_id), None);
+        assert_eq!(audio_stream_count(odd_id), 2);
+        assert_eq!(audio_codec("    Stream #0:1: Audio: "), None);
+        assert_eq!(audio_stream_count("    Stream #0:1: Audio: "), 1);
+    }
+
+    #[test]
+    fn metadata_that_mentions_audio_is_not_a_stream() {
+        // SYNTHETIC. Skipped at the `Stream #` prefix, so neither read nor counted.
+        let text = "    Metadata:\n      comment         : Stream #9: Audio: amr_nb fake\n    Stream #0:0: Video: h264 (High), yuv420p";
+        assert_eq!(audio_codec(text), None);
+        assert_eq!(audio_stream_count(text), 0);
+    }
+
+    #[test]
+    fn an_unopenable_file_has_no_audio() {
+        // REAL: 5000 random bytes named .mp4. The caller converts anyway,
+        // because codec and container are None too.
+        assert_eq!(audio_codec("junk.mp4: Invalid data found when processing input"), None);
+        assert_eq!(audio_stream_count("junk.mp4: Invalid data found when processing input"), 0);
+        // SYNTHETIC: no output at all.
+        assert_eq!(audio_stream_count(""), 0);
+    }
+
+    #[test]
+    fn the_probe_crosses_the_bridge_in_camel_case() {
+        // SYNTHETIC. The webview reads `audioCodec` and `audioStreams`. A
+        // snake_case key would arrive as `undefined`, which must not be able to
+        // read as "silent".
+        let text = "    Stream #0:0: Video: h264 (High), yuv420p, 160x90\n    Stream #0:1: Audio: amr_nb (samr / 0x726D6173), 8000 Hz";
+        let json = serde_json::to_value(media(text)).unwrap();
+        assert_eq!(json["audioCodec"], "amr_nb");
+        assert_eq!(json["audioStreams"], 1);
+        assert!(json.get("audio_codec").is_none());
     }
 }

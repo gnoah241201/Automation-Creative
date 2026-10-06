@@ -26,7 +26,13 @@ test('a landscape original is labelled 16:9', () => {
 });
 
 const MP4 = 'mov,mp4,m4a,3gp,3g2,mj2';
-const media = (codec: string | null, container: string | null = MP4) => ({ codec, container });
+// AAC by default: the common case, and the one every older test here meant.
+const media = (
+  codec: string | null,
+  container: string | null = MP4,
+  audio: { audioStreams: number; audioCodec: string | null } = { audioStreams: 1, audioCodec: 'aac' },
+) => ({ codec, container, ...audio });
+const silent = { audioStreams: 0, audioCodec: null };
 
 test('an h264 source in an mp4 is copied, not re-encoded', () => {
   const plan = planOriginal(source(), media('h264'), 'D:\\out');
@@ -71,4 +77,49 @@ test('a source with no known ratio is refused, not named 9x16', () => {
   // Nothing knew the ratio, so there is nothing true to put in the name.
   assert.throws(() => originalFilename(source({ inputRatio: undefined })), /hook\.mov.*ratio/);
   assert.throws(() => planOriginal(source({ inputRatio: undefined }), media('h264'), 'D:\\out'), /ratio/);
+});
+
+// The audio stream is the third thing that decides whether an mp4 opens on a
+// colleague's machine. Samples below are what the bundled ffmpeg printed for
+// real h264 files (see src-tauri/src/probe.rs).
+
+test('h264 with aac or mp3 audio is copied', () => {
+  for (const audioCodec of ['aac', 'mp3', 'AAC']) {
+    assert.equal(
+      planOriginal(source(), media('h264', MP4, { audioStreams: 1, audioCodec }), 'D:\out').action,
+      'copy',
+      audioCodec,
+    );
+  }
+});
+
+test('a silent h264 mp4 is copied: no audio is not bad audio', () => {
+  assert.equal(planOriginal(source(), media('h264', MP4, silent), 'D:\out').action, 'copy');
+});
+
+test('h264 carrying PCM, AMR or opus audio is converted, whatever its container says', () => {
+  // PCM from a .mov, AMR from a .3gp: both print the same mp4-family demuxer line.
+  for (const audioCodec of ['pcm_s16le', 'amr_nb', 'opus', 'ac3']) {
+    assert.equal(
+      planOriginal(source(), media('h264', MP4, { audioStreams: 1, audioCodec }), 'D:\out').action,
+      'convert',
+      audioCodec,
+    );
+  }
+});
+
+test('audio that could not be read is converted, not mistaken for silence', () => {
+  // Several audio streams that disagree, or a line the probe could not parse:
+  // streams were listed (audioStreams > 0) but no single codec could be stated.
+  assert.equal(planOriginal(source(), media('h264', MP4, { audioStreams: 2, audioCodec: null }), 'D:\out').action, 'convert');
+  assert.equal(planOriginal(source(), media('h264', MP4, { audioStreams: 1, audioCodec: null }), 'D:\out').action, 'convert');
+});
+
+test('a probe that says nothing about audio is converted, never read as silent', () => {
+  // A webview that received no audio fields (or a number that is not a count)
+  // must not fall through to "no audio, fine".
+  const bare = { codec: 'h264', container: MP4 } as unknown as Parameters<typeof planOriginal>[1];
+  assert.equal(planOriginal(source(), bare, 'D:\out').action, 'convert');
+  const snake = { codec: 'h264', container: MP4, audio_streams: 0, audio_codec: null } as unknown as Parameters<typeof planOriginal>[1];
+  assert.equal(planOriginal(source(), snake, 'D:\out').action, 'convert');
 });

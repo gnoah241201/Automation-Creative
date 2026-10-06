@@ -17,7 +17,7 @@ const items = (sources: ResizeBatchSource[]) => nameOriginals(sources, []).named
 test('an h264 mp4 is copied byte for byte', async () => {
   const copies: Array<[string, string]> = [];
   setBridge({
-    probeMedia: async () => ({ codec: 'h264', container: MP4 }),
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' }),
     copyFile: async (from, to) => { copies.push([from, to]); },
   });
   const { failed } = await copyOriginals(items([source('a')]), 'D:/out');
@@ -30,7 +30,7 @@ test('an h264 mp4 is copied byte for byte', async () => {
 test('anything else is converted to h264 instead, under its own job id', async () => {
   const runs: Array<{ id: string; args: string[] }> = [];
   setBridge({
-    probeMedia: async () => ({ codec: 'hevc', container: MP4 }),
+    probeMedia: async () => ({ codec: 'hevc', container: MP4, audioStreams: 1, audioCodec: 'aac' }),
     copyFile: async () => { throw new Error('must not copy an hevc file'); },
     runFfmpeg: async (id, args) => { runs.push({ id, args }); },
   });
@@ -45,7 +45,7 @@ test('a probe that rejects costs that source its original and no other', async (
   setBridge({
     probeMedia: async (path) => {
       if (path.endsWith('bb.mp4')) throw new Error('could not spawn the sidecar');
-      return { codec: 'h264', container: MP4 };
+      return { codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' };
     },
     copyFile: async (from) => { copied.push(from); },
   });
@@ -60,7 +60,7 @@ test('a source planOriginal refuses to name costs only itself', async () => {
   // Reaches planOriginal by bypassing the naming step, as a caller bug would.
   const copied: string[] = [];
   setBridge({
-    probeMedia: async () => ({ codec: 'h264', container: MP4 }),
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' }),
     copyFile: async (from) => { copied.push(from); },
   });
   const good = items([source('a'), source('ccc')]);
@@ -74,7 +74,7 @@ test('a source planOriginal refuses to name costs only itself', async () => {
 test('a failed copy is reported, and the next source is still attempted', async () => {
   const attempts: string[] = [];
   setBridge({
-    probeMedia: async () => ({ codec: 'h264', container: MP4 }),
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' }),
     copyFile: async (from) => { attempts.push(from); if (from.endsWith('a.mp4')) throw 'disk full'; },
   });
   const { failed } = await copyOriginals(items([source('a'), source('bb')]), 'D:/out');
@@ -86,7 +86,7 @@ test('a failed copy is reported, and the next source is still attempted', async 
 test('progress is reported per source, and a throwing listener cannot fail a copy', async () => {
   const steps: number[] = [];
   setBridge({
-    probeMedia: async () => ({ codec: 'h264', container: MP4 }),
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' }),
     copyFile: async () => {},
   });
   const { failed } = await copyOriginals(items([source('a'), source('bb')]), 'D:/out', {
@@ -103,7 +103,7 @@ test('a stop request leaves the remaining originals untouched and reports them a
   const copied: string[] = [];
   let stop = false;
   setBridge({
-    probeMedia: async () => ({ codec: 'h264', container: MP4 }),
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' }),
     copyFile: async (from) => { copied.push(from); stop = true; },
   });
   const all = items([source('a'), source('bb'), source('ccc')]);
@@ -114,7 +114,30 @@ test('a stop request leaves the remaining originals untouched and reports them a
 });
 
 test('a run that was never asked to stop reaches every source', async () => {
-  setBridge({ probeMedia: async () => ({ codec: 'h264', container: MP4 }), copyFile: async () => {} });
+  setBridge({ probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'aac' }), copyFile: async () => {} });
   const result = await copyOriginals(items([source('a'), source('bb')]), 'D:/out', { shouldStop: () => false });
   assert.deepEqual(result.notReached, []);
+});
+
+test('an h264 mp4 whose audio is AMR is converted, not byte-copied', async () => {
+  const runs: string[] = [];
+  setBridge({
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 1, audioCodec: 'amr_nb' }),
+    copyFile: async () => { throw new Error('must not copy a file whose audio will not play elsewhere'); },
+    runFfmpeg: async (id) => { runs.push(id); },
+  });
+  const { failed } = await copyOriginals(items([source('a')]), 'D:/out');
+  assert.deepEqual(failed, []);
+  assert.deepEqual(runs, ['original:a']);
+});
+
+test('a silent h264 mp4 is copied', async () => {
+  const copies: string[] = [];
+  setBridge({
+    probeMedia: async () => ({ codec: 'h264', container: MP4, audioStreams: 0, audioCodec: null }),
+    copyFile: async (from) => { copies.push(from); },
+  });
+  const { failed } = await copyOriginals(items([source('a')]), 'D:/out');
+  assert.deepEqual(failed, []);
+  assert.deepEqual(copies, ['D:/in/a.mp4']);
 });

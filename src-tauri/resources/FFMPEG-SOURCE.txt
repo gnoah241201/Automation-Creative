@@ -1,0 +1,53 @@
+FFmpeg in Resize Video: licence and source
+==========================================
+
+Resize Video renders with a separate program, ffmpeg.exe, installed next to
+resize-video.exe. That program is not our work. It is FFmpeg, and this copy was
+built with GPL components enabled, so it is distributed under the GNU General
+Public License, version 3. The full licence text is in COPYING.GPLv3, in this
+folder. You may copy and redistribute ffmpeg.exe under those terms.
+
+Which build
+-----------
+
+  ffmpeg version   N-92722-gf22fcd4483  (built with gcc 8.2.1, December 2018)
+  FFmpeg commit    f22fcd4483fca8dda10e035906b8f8bc60f8b69c
+  Build ID         20181217-f22fcd4
+  Obtained from    the npm package @ffmpeg-installer/win32-x64 4.1.0, which
+                   repackages a Windows static build from
+                   https://ffmpeg.zeranoe.com/builds/win64/static/
+  Configuration    --enable-gpl --enable-version3 --enable-libx264
+                   --enable-libx265 --enable-libvpx --enable-libmp3lame
+                   --enable-libopus ... (run "ffmpeg.exe -version" for the
+                   complete line)
+
+Where the corresponding source is
+---------------------------------
+
+FFmpeg itself: the source of exactly this build is FFmpeg commit f22fcd4483
+(17 December 2018), available from the official repository:
+
+  https://git.ffmpeg.org/ffmpeg.git
+  https://github.com/FFmpeg/FFmpeg/commit/f22fcd4483fca8dda10e035906b8f8bc60f8b69c
+
+Build with the options in the "Configuration" line above.
+
+The libraries linked into the build (x264, x265, libvpx, LAME, Opus and the
+others named in the configuration line) are separate projects, each distributed
+by its own authors. The exact versions that went into the 20181217 build are
+not recorded in this repository. If you need the sources of those components
+as they were in this binary, ask for them (below); do not assume the current
+releases are the same.
+
+Asking for the source
+---------------------
+
+If you received Resize Video from your team, ask the people who gave you the
+installer. They are obliged to give you the corresponding source of the
+ffmpeg.exe in it, or to tell you where to get it, on request.
+
+No warranty
+-----------
+
+FFmpeg is provided without warranty of any kind, as described in
+COPYING.GPLv3. This build is from 2018 and has had no security updates since.

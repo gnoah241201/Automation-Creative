@@ -25,7 +25,7 @@ test('a file the webview reads is taken from the webview and ffmpeg is never ask
 });
 
 test('a landscape HEVC file the webview cannot decode comes out landscape, with its true length', async () => {
-  bridgeWith(async () => ({ codec: 'hevc', container: MP4, duration: 120, width: 1280, height: 720 }));
+  bridgeWith(async () => ({ codec: 'hevc', container: MP4, audioStreams: 0, audioCodec: null, duration: 120, width: 1280, height: 720 }));
   const got = await probeWith('D:/echo.mp4', async () => failed);
   assert.equal(got.duration, 120);
   assert.equal(got.warning, undefined, 'nothing is missing, so nothing is flagged');
@@ -37,7 +37,7 @@ test('a landscape HEVC file the webview cannot decode comes out landscape, with 
 });
 
 test('when both the webview and ffmpeg fail the source is unknown, never portrait', async () => {
-  bridgeWith(async () => ({ codec: null, container: null, duration: null, width: null, height: null }));
+  bridgeWith(async () => ({ codec: null, container: null, audioStreams: 0, audioCodec: null, duration: null, width: null, height: null }));
   const got = await probeWith('D:/junk.mp4', async () => failed);
   assert.ok(Number.isNaN(got.width) && Number.isNaN(got.height) && Number.isNaN(got.duration));
   assert.match(got.warning ?? '', /Browser could not read/);
@@ -53,36 +53,36 @@ test('an ffmpeg that cannot even spawn is reported, and the source is unknown', 
 });
 
 test('a webview probe that throws still falls through to ffmpeg', async () => {
-  bridgeWith(async () => ({ codec: 'hevc', container: MP4, duration: 8, width: 360, height: 640 }));
+  bridgeWith(async () => ({ codec: 'hevc', container: MP4, audioStreams: 0, audioCodec: null, duration: 8, width: 360, height: 640 }));
   const got = await probeWith('D:/a.mp4', async () => { throw new Error('no video element'); });
   assert.equal(got.duration, 8);
   assert.equal(got.height, 640);
 });
 
 test('a length without a size is kept, flagged, and leaves the ratio unknown', () => {
-  const got = fromMediaProbe('D:/a.mp4', { codec: 'hevc', container: MP4, duration: 30, width: null, height: null })!;
+  const got = fromMediaProbe('D:/a.mp4', { codec: 'hevc', container: MP4, audioStreams: 0, audioCodec: null, duration: 30, width: null, height: null })!;
   assert.equal(got.duration, 30);
   assert.ok(Number.isNaN(got.width));
   assert.match(got.warning ?? '', /kích thước/);
 });
 
 test('a size without a length is kept, flagged, and limited to full length', () => {
-  const got = fromMediaProbe('D:/a.mp4', { codec: 'hevc', container: MP4, duration: null, width: 720, height: 1280 })!;
+  const got = fromMediaProbe('D:/a.mp4', { codec: 'hevc', container: MP4, audioStreams: 0, audioCodec: null, duration: null, width: 720, height: 1280 })!;
   assert.ok(Number.isNaN(got.duration));
   assert.equal(got.width, 720);
   assert.match(got.warning ?? '', /độ dài/);
 });
 
 test('ffmpeg stating nothing usable is not a source', () => {
-  assert.equal(fromMediaProbe('D:/a.mp4', { codec: null, container: null }), null);
-  assert.equal(fromMediaProbe('D:/a.mp4', { codec: 'h264', container: MP4, duration: 0, width: 0, height: 0 }), null);
-  assert.equal(fromMediaProbe('D:/a.mp4', { codec: 'h264', container: MP4, duration: Number.NaN, width: -5, height: 100 }), null);
+  assert.equal(fromMediaProbe('D:/a.mp4', { codec: null, container: null, audioStreams: 0, audioCodec: null }), null);
+  assert.equal(fromMediaProbe('D:/a.mp4', { codec: 'h264', container: MP4, audioStreams: 0, audioCodec: null, duration: 0, width: 0, height: 0 }), null);
+  assert.equal(fromMediaProbe('D:/a.mp4', { codec: 'h264', container: MP4, audioStreams: 0, audioCodec: null, duration: Number.NaN, width: -5, height: 100 }), null);
 });
 
 test('a webview that reads the length but reports a 0x0 picture gets its size from ffmpeg', async () => {
   // Real behaviour for HEVC on a machine without the extension: the header's
   // duration is readable, nothing decodes, videoWidth and videoHeight are 0.
-  bridgeWith(async () => ({ codec: 'hevc', container: MP4, duration: 40.02, width: 1280, height: 720 }));
+  bridgeWith(async () => ({ codec: 'hevc', container: MP4, audioStreams: 0, audioCodec: null, duration: 40.02, width: 1280, height: 720 }));
   const got = await probeWith('D:/fox.mp4', async () => ({ status: 'ready', duration: 40, width: 0, height: 0 }));
   assert.equal(got.duration, 40, 'the webview length is kept');
   assert.deepEqual([got.width, got.height], [1280, 720]);
@@ -92,7 +92,7 @@ test('a webview that reads the length but reports a 0x0 picture gets its size fr
 });
 
 test('a 0x0 picture that ffmpeg cannot size either is unknown, not zero and not portrait', async () => {
-  bridgeWith(async () => ({ codec: null, container: null }));
+  bridgeWith(async () => ({ codec: null, container: null, audioStreams: 0, audioCodec: null }));
   const got = await probeWith('D:/fox.mp4', async () => ({ status: 'ready', duration: 40, width: 0, height: 0 }));
   assert.equal(got.duration, 40);
   assert.ok(Number.isNaN(got.width) && Number.isNaN(got.height));

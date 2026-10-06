@@ -67,6 +67,34 @@ for (const [mode, tick, kind] of [['cut', '9:16-30s', 'trim'], ['speed', '9:16-1
   });
 }
 
+// The UI filters out a source with no ratio before anything is planned, and
+// that filter has no test of its own. This is the tested end of the same rule.
+test('a source with no input ratio is refused, never composed as 9:16', () => {
+  const src = source();
+  const plan = planBatch([src], new Set(['9:16', '9:16-15s']), 'speed');
+  const unknown: ResizeBatchSource = { ...src, inputRatio: undefined };
+  for (const job of plan) {
+    assert.throws(() => argvFor(job, unknown, 'D:/out', spec, 2), /a\.mp4.*ratio/, job.kind);
+  }
+});
+
+test('a job whose source has no input ratio fails and renders nothing', async () => {
+  const src = source();
+  const ticks = new Set(['9:16']);
+  const plan = planBatch([src], ticks, 'speed');
+  const ran: string[] = [];
+  setBridge({ runFfmpeg: async (jobId) => { ran.push(jobId); } });
+  const errors: string[] = [];
+  const states = await runBatch({
+    sources: [{ ...src, inputRatio: undefined }], selectedIds: ticks, mode: 'speed',
+    outputFolder: 'D:/out', spec, concurrency: 1, plan,
+    onChange: (_id, state, error) => { if (state === 'failed' && error) errors.push(error); },
+  });
+  assert.deepEqual(ran, [], 'ffmpeg was never started');
+  assert.equal(states.get(plan[0].id), 'failed');
+  assert.match(errors.join(), /ratio/);
+});
+
 test('every encoding job carries the thread cap', () => {
   for (const { args } of argvs('speed', ['9:16', '9:16-15s'])) {
     const at = args.indexOf('-filter_complex_threads');

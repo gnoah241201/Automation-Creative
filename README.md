@@ -48,6 +48,13 @@ named from `productName` and `version` in `src-tauri/tauri.conf.json`
 (`Resize Video_<version>_x64-setup.exe`). The installer version comes from that file,
 not from `package.json`.
 
+The installer carries the licence for the ffmpeg it contains. That ffmpeg is a GPLv3
+build, so the installer puts `COPYING.GPLv3` (the licence text) and `FFMPEG-SOURCE.txt`
+(which build it is, and where its source comes from) in a `licenses` folder next to the
+app. Both come from `src-tauri/resources/` through `bundle.resources` in
+`src-tauri/tauri.conf.json`. If you replace the ffmpeg build, update `FFMPEG-SOURCE.txt`
+to match.
+
 The installer is **not code-signed**. Windows SmartScreen will warn
 ("Windows protected your PC") the first time anyone runs it: choose
 *More info*, then *Run anyway*. Signing needs a certificate this repo does not have.
@@ -61,9 +68,10 @@ if it does not exist, and the app refuses to start a run if it cannot write ther
   `BubbleTea_v60_9x16_15s_TTO.mp4`. The three naming fields are read from the source
   filename and can be overridden for the whole batch.
 - Each source's **original** is copied into the same folder, named from the same
-  fields plus the source's own ratio and length. A source that is not h264 in an mp4
-  container is converted to h264 first, so the copy opens on any machine; that copy is
-  therefore a re-encode, not byte-identical.
+  fields plus the source's own ratio and length. A source is copied byte for byte only
+  when it is h264 in an mp4 container with aac or mp3 audio (or none). Anything else,
+  including h264 carrying AMR or PCM audio, is converted to h264 and aac first, so the
+  copy opens on any machine; that copy is therefore a re-encode, not byte-identical.
 - A file is written as `<name>.mp4.part` and renamed only when ffmpeg finishes
   successfully, so a cancelled or failed render never leaves a truncated file under a
   real name. A `.part` file left behind means a render was killed; delete it.

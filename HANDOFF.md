@@ -9,7 +9,7 @@ own the code.
 - A Windows x64 desktop app: Tauri 2 shell (Rust) + React/Vite webview + a bundled ffmpeg.
 - App version `2.0.0` (`src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml`). `package.json`
   still says `1.1.5` and is not used for anything the installer shows.
-- Tests at this commit: 352 TypeScript (`npm test`), 55 Rust (`cargo test`). `tsc --noEmit` is clean.
+- Tests at this commit: 362 TypeScript (`npm test`), 68 Rust (`cargo test`). `tsc --noEmit` is clean.
 - There is no server. This repo used to be an Express + Vite web service with a Hook
   Composer and a Local Library tab; all of that has been deleted. It is not maintained.
   If you need it, it is in git history (the design note
@@ -68,12 +68,16 @@ and `npm run app:build` (via `npm run prepare:ffmpeg`, which you can also run yo
 Things to know about the binary itself:
 
 - It is `ffmpeg N-92722` **built in 2018**, and a GPLv3 build (`--enable-gpl --enable-libx264`
-  and many others). It has no security updates. Distributing the installer
-  brings the GPL obligations with it (see Open items: the installer does not carry the
-  licence text or a source offer). Moving to a newer build means replacing what the
-  script copies; do that in the script, not by dropping a file in `binaries/`, because a file
-  of a different size at that path is overwritten.
-- There is **no ffprobe**. Codec, container, duration and picture size are read from the banner
+  and many others). It has no security updates (see Known limitations). Distributing the
+  installer brings the GPL obligations with it, and the installer carries what it can of them:
+  `bundle.resources` in `tauri.conf.json` ships `src-tauri/resources/COPYING.GPLv3` and
+  `src-tauri/resources/FFMPEG-SOURCE.txt` to `licenses\` under the install folder. The second names the
+  build and the upstream commit its source comes from. It cannot name the exact versions of
+  x264 and the other libraries linked into that 2018 build, because this repo does not record them.
+  Moving to a newer build means replacing what the
+  script copies **and** updating `FFMPEG-SOURCE.txt` to match; do that in the script, not by dropping a
+  file in `binaries/`, because a file of a different size at that path is overwritten.
+- There is **no ffprobe**. Codec, container, audio codec, duration and picture size are read from the banner
   that `ffmpeg -i` prints (`src-tauri/src/probe.rs`).
 - The script's size check is not a hash. A same-size but different file would be kept.
 
@@ -146,10 +150,18 @@ State these to users rather than finding out later.
 - **HEVC sources cannot be previewed** on a machine without the Windows HEVC video extension,
   because the webview cannot decode them. Their duration and size are still read through ffmpeg
   and they render correctly; only the preview is blank.
-- **The audio codec of an original is never checked.** An h264 mp4 carrying AMR or PCM audio is
-  copied as is and may not play on another machine. A source that is h264 in a `mov` or `3gp`
-  container is also copied under a `.mp4` name; that was judged acceptable, since they share the
-  same structure.
+- **Untrusted video is parsed by an unpatched 2018 ffmpeg.** This tool's job is to open creative that
+  arrives from outside the company with an ffmpeg built in December 2018, which has had no security
+  updates, running with the full privileges of the user who started the app, and with no CSP
+  (`"csp": null`, `assetProtocol.scope: ["**"]`) around the webview. Every `-i` path is passed to ffmpeg
+  verbatim and nothing sandboxes it. The owning team should decide knowingly that this is acceptable;
+  replacing the binary is a separate piece of work.
+- **An original is copied only when video, container and audio are all known to play.** That means h264
+  in an mp4-family container with aac or mp3 audio, or with no audio. A file that is h264 in a `mov` or
+  `3gp` container is still copied under a `.mp4` name, because ffmpeg reports the same demuxer for all
+  three and they share the same structure. Audio that cannot be named (streams that disagree, a line the
+  probe could not read) converts. Several audio streams that are not all the same codec convert, even
+  when each would play.
 - **Pixel aspect ratio is not applied** when ffmpeg, not the webview, has to supply a file's picture
   size (HEVC and other files the webview cannot read). An anamorphic source of that kind could be
   classified by its stored size rather than its displayed one.
@@ -160,9 +172,11 @@ State these to users rather than finding out later.
 - **`copy_file` overwrites silently** when called directly; the overwrite prompt is the guard,
   and it covers the originals as well as the renders.
 - **Some leftovers.** A source whose picture size could not be read has no ratio and is kept out of
-  the plan, but `batchOutputs.ts`, `renderPlan.ts`, `runBatch.ts`, `ui/overlays.ts`, `PreviewBox.tsx`
-  and `ui/App.tsx` still say `?? '9:16'` as a fallback, which would mislabel such a source if the
-  filter were ever bypassed; `src/core/sourceNormalize.ts` imports `node:path`, which makes Vite print an
+  the plan (`App.tsx` filters it into `renderable`). `argvFor` in `runBatch.ts` throws on such a source,
+  and `test/run-batch.test.ts` covers it, so a bypassed filter ends as a failed job and not as a landscape
+  video composed as portrait. `batchOutputs.ts`, `renderPlan.ts`, `ui/overlays.ts`, `PreviewBox.tsx`, the
+  overlay lookup in `runBatch.ts` and the preview ratio in `ui/App.tsx` still say `?? '9:16'` as a fallback;
+  none of them decides what a file contains, but they would mislabel such a source on screen; `src/core/sourceNormalize.ts` imports `node:path`, which makes Vite print an
   externalisation warning at build (harmless, the desktop app never calls the function that
   needs it); `src/core/librarySources.ts` keeps its name from the Local Library days though it
   only defines the batch-source type.
@@ -171,10 +185,10 @@ State these to users rather than finding out later.
 
 ```bash
 npm run lint                  # tsc --noEmit
-npm test                      # 352 tests
+npm test                      # 362 tests
 npm run prepare:ffmpeg        # needed before any cargo build / cargo test on a fresh clone
 cd src-tauri && cargo build   # must stay warning-free
-cd src-tauri && cargo test    # 55 tests
+cd src-tauri && cargo test    # 68 tests
 npm run app:dev               # the window opens and the page renders
 ```
 
@@ -192,11 +206,8 @@ does not, and `tauri-build` fails without saying which file is missing; run
 
 1. Build the installer on a clean Windows machine and record what happens (WebView2, SmartScreen).
 2. Decide on code signing, or accept the SmartScreen warning as the cost of an internal tool.
-3. **Settle the ffmpeg licence before distributing the installer.** The bundled ffmpeg is a GPLv3
-   build. Shipping it requires including the licence text and offering the corresponding source;
-   the installer bundles neither today. Replacing the 2018 build with a newer GPL build does not remove that obligation.
-4. Pick one source of truth for the version number. `Cargo.toml` and `tauri.conf.json` are both
+3. Pick one source of truth for the version number. `Cargo.toml` and `tauri.conf.json` are both
    `2.0.0`; only `package.json` (`1.1.5`) disagrees, and the installer takes its version from
    `tauri.conf.json`.
-5. Pin `@tauri-apps/api` exactly; it is a caret range and the whole test suite depends on it not
+4. Pin `@tauri-apps/api` exactly; it is a caret range and the whole test suite depends on it not
    touching `window` at import time.
