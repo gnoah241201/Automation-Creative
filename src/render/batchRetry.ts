@@ -15,7 +15,7 @@ export type BatchRetryInputs = (BatchRetryAssets & {
   kind: 'library';
   libraryId: string;
 }) | {
-  kind: 'trim';
+  kind: 'speedup';
   sourceJobId: string;
 };
 
@@ -32,12 +32,12 @@ interface RetryBatchJobInput {
     backgroundImageFile?: File | null;
     overlayPng?: Blob | null;
   }) => Promise<CreateJobResponse>;
-  createTrim: (input: { spec: RenderSpec; sourceJobId: string }) => Promise<CreateJobResponse>;
+  createSpeedUp: (input: { spec: RenderSpec; sourceJobId: string }) => Promise<CreateJobResponse>;
 }
 
 export async function retryBatchJob(input: RetryBatchJobInput): Promise<CreateJobResponse> {
-  if (input.retry.kind === 'trim') {
-    return input.createTrim({ spec: input.spec, sourceJobId: input.retry.sourceJobId });
+  if (input.retry.kind === 'speedup') {
+    return input.createSpeedUp({ spec: input.spec, sourceJobId: input.retry.sourceJobId });
   }
   const { sessions } = await input.createLibrarySessions([input.retry.libraryId]);
   const session = sessions[0];

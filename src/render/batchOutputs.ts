@@ -6,10 +6,9 @@ import { deriveOutputs, OutputConfig, planSelectedOutputs } from './outputDeriva
  * Per-source output derivation for batch resize.
  *
  * A batch holds sources of different lengths, so one shared output list is
- * wrong in two ways: a short source gets asked for cuts it cannot fill, and
- * `trimFrom` is source-specific — the long-form master is the longest tier that
- * *that* source qualifies for, so a 200s source trims its 30s cut from
- * `9:16-120s` while a 105s source trims the same cut from `9:16-90s`.
+ * wrong: a 12s source has nothing to gain from a 15s or 30s speed-up, while a
+ * 45s source qualifies for both. Each source's own length decides which tiers
+ * it offers.
  */
 
 /**

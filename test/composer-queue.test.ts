@@ -118,21 +118,21 @@ test('preview composer jobs persist their distinct kind and immutable inputs', a
   harness.queue.stopCleanupScheduler();
 });
 
-test('persisted jobs without kind migrate to resize or trim jobs', async () => {
+test('persisted jobs without kind migrate to resize or speed-up jobs', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'composer-legacy-'));
   const resizeFiles = await createFiles(root, 'legacy-resize');
-  const trimFiles = await createFiles(root, 'legacy-trim');
+  const legacyDerivedFiles = await createFiles(root, 'legacy-trim');
   const legacy = [
     { id: 'legacy-resize', spec: resizeSpec(), files: resizeFiles, status: 'failed', progress: 0 },
-    { id: 'legacy-trim', spec: { ...resizeSpec(), trimFromJobId: 'source' }, files: trimFiles, status: 'failed', progress: 0 },
+    { id: 'legacy-trim', spec: { ...resizeSpec(), trimFromJobId: 'source' }, files: legacyDerivedFiles, status: 'failed', progress: 0 },
   ];
   await fs.writeFile(path.join(root, 'queue-state.json'), JSON.stringify(legacy));
   const harness = await createHarness(1, root);
 
   assert.equal(harness.queue.getJob('legacy-resize')?.kind, 'resize');
-  assert.equal(harness.queue.getJob('legacy-trim')?.kind, 'trim');
+  assert.equal(harness.queue.getJob('legacy-trim')?.kind, 'speedup');
   const migrated = JSON.parse(await fs.readFile(path.join(root, 'queue-state.json'), 'utf8'));
-  assert.deepEqual(migrated.map((job: { kind: string }) => job.kind), ['resize', 'trim']);
+  assert.deepEqual(migrated.map((job: { kind: string }) => job.kind), ['resize', 'speedup']);
   harness.queue.stopCleanupScheduler();
 });
 

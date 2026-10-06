@@ -5,7 +5,7 @@ import { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { RenderSpec } from '../../shared/render-contract';
 import { ComposerRenderSpec } from '../../shared/composer-contract';
 import { ensureTempRoot, cleanupJobByWorkDir, cleanupExpiredJobs, isManagedJobExpired } from './fileStore';
-import { getInputDuration, runRenderJob, runTrimJob, RenderProgress, determineProgressMode } from './renderRunner';
+import { getInputDuration, runRenderJob, runSpeedUpJob, RenderProgress, determineProgressMode } from './renderRunner';
 import { ComposerJobRecord, JobFiles, NativeJobRecord, RenderJobRecord } from '../types/renderJob';
 import { runComposerJob } from './composerRunner';
 import { JobStore } from './jobStore';
@@ -332,10 +332,13 @@ export class JobQueueService {
   }
 
   /**
-   * Create a trim-only job that takes the output of a completed job and trims it.
-   * Uses stream copy (no re-encode) for very fast processing.
+   * Create a speed-up job that takes the output of a completed job and retimes
+   * the whole of it to end at `spec.duration`.
+   *
+   * Re-encodes, unlike the stream-copy trim it replaced, but from a finished
+   * render: no blur, overlay or scaling is redone.
    */
-  async createTrimJob(spec: RenderSpec, sourceJobId: string, ownerKey?: string): Promise<RenderJobRecord> {
+  async createSpeedUpJob(spec: RenderSpec, sourceJobId: string, ownerKey?: string): Promise<RenderJobRecord> {
     const sourceJob = this.jobs.get(sourceJobId);
     if (!sourceJob) {
       throw new Error(`Source job ${sourceJobId} not found`);
@@ -346,20 +349,20 @@ export class JobQueueService {
 
     const id = randomUUID();
     // Create output dir inside source job's workDir (share workDir for cleanup)
-    const outputDir = path.join(sourceJob.files.workDir, 'trim-output');
+    const outputDir = path.join(sourceJob.files.workDir, 'speedup-output');
     await fs.mkdir(outputDir, { recursive: true });
-    const outputPath = path.join(outputDir, spec.outputFilename || `trim-${id}.mp4`);
+    const outputPath = path.join(outputDir, spec.outputFilename || `speedup-${id}.mp4`);
 
     const job: RenderJobRecord = {
       id,
-      kind: 'trim',
-      spec: { ...spec, trimFromJobId: sourceJobId },
+      kind: 'speedup',
+      spec: { ...spec, speedFromJobId: sourceJobId },
       files: {
         foregroundPath: sourceJob.files.outputPath, // Use source output as input
         outputPath,
         workDir: sourceJob.files.workDir,
       },
-      // Trims are a continuation of the same user's flow, so fall back to the source job's owner.
+      // Speed-ups are a continuation of the same user's flow, so fall back to the source job's owner.
       ownerKey: ownerKey ?? sourceJob.ownerKey,
       status: 'queued',
       progress: 0,
@@ -416,7 +419,7 @@ export class JobQueueService {
     if (!this.localLibrary) return;
     const activeResizeReferences = this.getAllJobs()
       .filter((job) => (
-        (job.kind === 'resize' || job.kind === 'trim')
+        (job.kind === 'resize' || job.kind === 'speedup')
         && (job.status === 'queued' || job.status === 'processing' || (job.status as string) === 'cancelling')
       ))
       .map((job) => job.id);
@@ -696,11 +699,11 @@ export class JobQueueService {
     // slot gone for the lifetime of the process.
     await this.persistQuietly(`job ${job.id} started`);
     
-    // Check if this is a trim-only job
-    const isTrimJob = job.kind === 'trim';
+    // Check if this is a derived speed-up job
+    const isSpeedUpJob = job.kind === 'speedup';
     
-    if (isTrimJob || isComposerJob(job)) {
-      // Trim jobs are always determinate (we know the target duration)
+    if (isSpeedUpJob || isComposerJob(job)) {
+      // Speed-up jobs are always determinate (we know the target duration)
       job.progressMode = 'determinate';
     } else {
       // CRITICAL: Set progressMode IMMEDIATELY when entering processing state
@@ -747,24 +750,29 @@ export class JobQueueService {
         const result = this.runComposerJobImpl(job, updateProgress);
         child = result.child;
         completion = result.completion;
-      } else if (isTrimJob && job.spec.duration) {
-        if (this.diskCapacityGuard) {
-          // Trim is a stream copy of a subset of the source output, so the
-          // source file's size is a safe upper bound on the trimmed output.
-          const sourceStat = await fs.stat(job.files.foregroundPath).catch(() => null);
-          if (sourceStat) {
-            await this.diskCapacityGuard.requireCapacity(
-              path.dirname(job.files.outputPath),
-              sourceStat.size,
-            );
-          }
+      } else if (isSpeedUpJob && job.spec.duration) {
+        // The whole parent output has to fit into the target length, so its own
+        // length is the one number this job cannot do without.
+        const sourceDuration = getInputDuration(job.files.foregroundPath);
+        if (!sourceDuration) {
+          throw new Error('Could not read the source length, which a speed-up needs');
         }
-        // Run trim job (stream copy, no re-encode)
-        const result = runTrimJob(
+        const bitrateKbps = job.spec.bitrate && job.spec.bitrate > 0 ? job.spec.bitrate : 6000;
+        if (this.diskCapacityGuard) {
+          // A speed-up re-encodes at the same bitrate over a shorter timeline,
+          // so the target length at that bitrate bounds the output.
+          await this.diskCapacityGuard.requireCapacity(
+            path.dirname(job.files.outputPath),
+            Math.ceil((job.spec.duration * bitrateKbps * 1000) / 8),
+          );
+        }
+        const result = runSpeedUpJob(
           job.files.foregroundPath, // This is the source output path
+          sourceDuration,
           job.spec.duration,
           job.files.outputPath,
           updateProgress,
+          { bitrate: job.spec.bitrate },
         );
         child = result.child;
         completion = result.completion;

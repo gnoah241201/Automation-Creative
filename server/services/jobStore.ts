@@ -5,6 +5,15 @@ import { NativeJobRecord } from '../types/renderJob';
 const STATE_FILE = 'queue-state.json';
 
 /**
+ * A record as it may appear on disk. `kind` is optional because the field
+ * postdates the first releases, and 'trim' is still accepted because that is
+ * what derived outputs were called before they became speed-ups.
+ */
+type PersistedJobRecord = Omit<NativeJobRecord, 'kind'> & {
+  kind?: NativeJobRecord['kind'] | 'trim';
+};
+
+/**
  * Persistence layer for queue state.
  * 
  * Uses atomic writes (temp file + rename) to prevent corruption.
@@ -32,12 +41,27 @@ export class JobStore {
       }
 
       const content = await fs.readFile(this.statePath, 'utf-8');
-      const data = JSON.parse(content) as Array<NativeJobRecord & { kind?: NativeJobRecord['kind'] }>;
-      
+      const data = JSON.parse(content) as PersistedJobRecord[];
+
       console.log(`[jobStore] Loaded ${data.length} persisted jobs`);
-      return data.map((job) => job.kind
-        ? job as NativeJobRecord
-        : { ...job, kind: 'trimFromJobId' in job.spec && job.spec.trimFromJobId ? 'trim' : 'resize' } as NativeJobRecord);
+      // Two shapes predate speed-ups: records with no `kind` at all, and
+      // records written while the shortened outputs were stream-copy trims.
+      // Both are read as speed-ups here, so a job queued before a restart still
+      // takes the derived-output path instead of being re-composited from its
+      // parent's finished output.
+      return data.map((job) => {
+        const spec = job.spec as { trimFromJobId?: string; speedFromJobId?: string };
+        const legacyDerived = job.kind === 'trim' || (!job.kind && Boolean(spec.trimFromJobId));
+        if (!legacyDerived) {
+          return (job.kind ? job : { ...job, kind: 'resize' }) as NativeJobRecord;
+        }
+        const { trimFromJobId, ...rest } = spec;
+        return {
+          ...job,
+          kind: 'speedup',
+          spec: { ...rest, speedFromJobId: spec.speedFromJobId ?? trimFromJobId },
+        } as unknown as NativeJobRecord;
+      });
     } catch (error) {
       console.error('[jobStore] Failed to load persisted state:', error);
       // If state is corrupted, start fresh but log the issue

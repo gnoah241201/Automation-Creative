@@ -126,17 +126,17 @@ test('outputs of one upload share a single copy of the original', async () => {
   assert.equal(prepared[0].entryCount, 3, 'two outputs plus one shared original');
 });
 
-test('a trim job contributes its output but never an original', async () => {
-  const trim = record({
+test('a speed-up job contributes its output but never an original', async () => {
+  const speedUp = record({
     id: 'j2',
-    kind: 'trim',
+    kind: 'speedup',
     sourceUploadId: undefined,
-    spec: spec({ trimFromJobId: 'j1', outputFilename: 'HeroWars_v3_9x16_6s_UGC.mp4' }),
+    spec: spec({ speedFromJobId: 'j1', outputFilename: 'HeroWars_v3_9x16_15s_UGC.mp4' }),
     outputFilename: 'HeroWars_v3_9x16_6s_UGC.mp4',
     files: { foregroundPath: '/work/j1/output/out.mp4', outputPath: '/work/j2/out.mp4', workDir: '/work/j2' },
   });
-  const prepared = await service([trim]).prepare(['j2'], 'owner-a');
-  assert.equal(prepared[0].entryCount, 1, 'a trim input is another output, not an original');
+  const prepared = await service([speedUp]).prepare(['j2'], 'owner-a');
+  assert.equal(prepared[0].entryCount, 1, 'a speed-up input is another output, not an original');
 });
 
 test('a probe failure still bundles the original instead of failing the whole zip', async () => {

@@ -46,33 +46,33 @@ test('2:3 is offered for every input ratio, like every other ratio', () => {
 
 test('2:3 offers exactly the same shape as 4:5', () => {
   const outputs = deriveOutputs('9:16', 200);
-  // Same shape; the parent id necessarily differs, each trims from its own ratio.
+  // Same shape; the parent id necessarily differs, each speeds up from its own ratio.
   const secondary = (ratio: string) => outputs
     .filter((output) => output.ratio === ratio)
     .map((output) => ({
       duration: output.duration,
-      trimsFromOwnRatio: output.trimFrom === undefined ? null : output.trimFrom === ratio,
+      speedsUpFromOwnRatio: output.speedFrom === undefined ? null : output.speedFrom === ratio,
     }));
   assert.deepEqual(secondary('2:3'), secondary('4:5'));
 });
 
-test('a 2:3 cut trims from the 2:3 render, never encodes on its own', () => {
-  const cut = find(deriveOutputs('9:16', 200), '2:3-30s');
-  assert.ok(cut);
-  assert.equal(cut.trimFrom, '2:3', 'a 200s source keeps its whole video as the 2:3 render');
-  assert.equal(cut.duration, 30);
+test('a 2:3 speed-up comes off the 2:3 render, never composites on its own', () => {
+  const speedUp = find(deriveOutputs('9:16', 200), '2:3-30s');
+  assert.ok(speedUp);
+  assert.equal(speedUp.speedFrom, '2:3', 'the whole 2:3 video is what it speeds up');
+  assert.equal(speedUp.duration, 30);
 });
 
-test('2:3 gets the same eight lengths as every other ratio', () => {
+test('2:3 gets the same two speed-up lengths as every other ratio', () => {
   const outputs = deriveOutputs('9:16', 200);
-  for (const seconds of [6, 10, 12, 15, 30, 60, 90, 120]) {
+  for (const seconds of [15, 30]) {
     assert.ok(find(outputs, `2:3-${seconds}s`), `2:3-${seconds}s missing`);
   }
-  const rendered = outputs.filter((output) => output.ratio === '2:3' && !output.trimFrom);
-  assert.equal(rendered.length, 1, '2:3 costs exactly one encode');
+  const rendered = outputs.filter((output) => output.ratio === '2:3' && !output.speedFrom);
+  assert.equal(rendered.length, 1, '2:3 costs exactly one composite');
 });
 
-test('2:3 cuts follow the same duration gate as everything else', () => {
+test('2:3 speed-ups follow the same duration gate as everything else', () => {
   assert.equal(find(deriveOutputs('9:16', 30), '2:3-30s'), undefined);
   assert.ok(find(deriveOutputs('9:16', 31), '2:3-30s'));
 });
@@ -81,7 +81,7 @@ test('2:3 has one preview box, on the output that is rendered', () => {
   const previewed = deriveOutputs('9:16', 200)
     .filter((output) => output.ratio === '2:3' && output.showPreview !== false);
   assert.equal(previewed.length, 1);
-  assert.equal(previewed[0].trimFrom, undefined);
+  assert.equal(previewed[0].speedFrom, undefined);
 });
 
 // --- Accepted by the server ---

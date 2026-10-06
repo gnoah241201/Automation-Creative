@@ -1,6 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn, execSync } from 'node:child_process';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
-import { buildFfmpegCommand, buildTrimCommand } from '../ffmpeg/buildCommand';
+import { buildFfmpegCommand, buildSpeedUpCommand } from '../ffmpeg/buildCommand';
 import { RenderJobRecord } from '../types/renderJob';
 import { EncoderMode, getFfmpegPath } from './encoderConfig';
 import { lowerRenderPriority } from './processPriority.ts';
@@ -176,16 +176,31 @@ export const runRenderJob = (
 };
 
 /**
- * Run a trim-only job using stream copy (no re-encode).
- * Much faster than full render since it just copies the encoded stream.
+ * Run a speed-up job: replay a finished render fast enough to end at
+ * `targetDuration`.
+ *
+ * Slower than the stream copy this replaced — retiming frames means encoding
+ * them again — but it keeps the whole video instead of the first few seconds of
+ * it. The input is an already-composited output, so nothing but the retime and
+ * the encode is left to do.
  */
-export const runTrimJob = (
+export const runSpeedUpJob = (
   inputPath: string,
-  duration: number,
+  sourceDuration: number,
+  targetDuration: number,
   outputPath: string,
   onProgress: (progress: RenderProgress) => void,
+  options?: { bitrate?: number },
 ): { child: ChildProcessWithoutNullStreams; completion: Promise<void> } => {
-  const args = buildTrimCommand({ inputPath, duration, outputPath });
+  const args = buildSpeedUpCommand({
+    inputPath,
+    sourceDuration,
+    targetDuration,
+    outputPath,
+    encoder: currentEncoder,
+    threads: currentThreadLimit,
+    bitrate: options?.bitrate,
+  });
 
   const child = spawn(getFfmpegPath(), args, {
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -193,5 +208,7 @@ export const runTrimJob = (
   lowerRenderPriority(child.pid);
   pinRenderToCores(child.pid);
 
-  return observeFfmpegProcess(child, duration, onProgress, 'FFmpeg trim');
+  // FFmpeg reports progress on the output timeline, which a speed-up has
+  // already shortened, so the target length is what 100% means here.
+  return observeFfmpegProcess(child, targetDuration, onProgress, 'FFmpeg speed-up');
 };

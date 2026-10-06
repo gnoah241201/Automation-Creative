@@ -55,11 +55,11 @@ test('resize batch applies one shared output configuration to every library sour
   assert.deepEqual(result.outcomes.map((item) => item.accepted), [true, true]);
 });
 
-test('resize batch waits for each primary before creating its trim variants', async () => {
+test('resize batch waits for each primary before creating its speed-up variants', async () => {
   const events: string[] = [];
   const outputs: OutputConfig[] = [
     { id: '16:9', ratio: '16:9', label: 'full' },
-    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' },
+    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'speed-up', speedFrom: '16:9' },
   ];
 
   const result = await submitResizeBatch({
@@ -74,21 +74,21 @@ test('resize batch waits for each primary before creating its trim variants', as
       events.push(`wait:${job.jobId}`);
       return job.jobId;
     },
-    createTrimJob: async ({ output, sourceJobId }) => {
-      events.push(`trim:${output.id}:${sourceJobId}`);
-      return { jobId: 'trim-job', status: 'queued' };
+    createSpeedUpJob: async ({ output, sourceJobId }) => {
+      events.push(`speedup:${output.id}:${sourceJobId}`);
+      return { jobId: 'speedup-job', status: 'queued' };
     },
   });
 
-  assert.deepEqual(events, ['create:16:9', 'wait:primary-job', 'trim:16:9-15s:primary-job']);
-  assert.deepEqual(result.submitted.map((item) => item.jobId), ['primary-job', 'trim-job']);
+  assert.deepEqual(events, ['create:16:9', 'wait:primary-job', 'speedup:16:9-15s:primary-job']);
+  assert.deepEqual(result.submitted.map((item) => item.jobId), ['primary-job', 'speedup-job']);
 });
 
-test('trim failure for one source does not prevent later independent sources', async () => {
+test('speed-up failure for one source does not prevent later independent sources', async () => {
   const events: string[] = [];
   const outputs: OutputConfig[] = [
     { id: '16:9', ratio: '16:9', label: 'full' },
-    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' },
+    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'speed-up', speedFrom: '16:9' },
   ];
   const result = await submitResizeBatch({
     sources: [source('a', 40), source('b', 40)], outputs, config: config(),
@@ -98,12 +98,12 @@ test('trim failure for one source does not prevent later independent sources', a
       if (job.sourceId === 'a') throw new Error('a failed');
       return job.jobId;
     },
-    createTrimJob: async ({ source: item }) => {
-      events.push(`trim:${item.localId}`);
-      return { jobId: `trim-${item.localId}`, status: 'queued' };
+    createSpeedUpJob: async ({ source: item }) => {
+      events.push(`speedup:${item.localId}`);
+      return { jobId: `speedup-${item.localId}`, status: 'queued' };
     },
   });
-  assert.deepEqual(events, ['wait:a', 'wait:b', 'trim:b']);
+  assert.deepEqual(events, ['wait:a', 'wait:b', 'speedup:b']);
   assert.equal(result.outcomes.find((item) => item.sourceId === 'a')?.errors.length, 1);
   assert.equal(result.outcomes.find((item) => item.sourceId === 'b')?.errors.length, 0);
 });
@@ -128,16 +128,16 @@ test('two outputs keep only the failed combination retryable', async () => {
   ]);
 });
 
-test('accepted primary that later fails leaves primary and dependent trim recoverable', async () => {
+test('accepted primary that later fails leaves primary and dependent speed-up recoverable', async () => {
   const outputs: OutputConfig[] = [
     { id: '16:9', ratio: '16:9', label: 'full' },
-    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' },
+    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'speed-up', speedFrom: '16:9' },
   ];
   const result = await submitResizeBatch({
     sources: [source('recover', 40)], outputs, config: config(),
     createJob: async () => ({ jobId: 'failed-primary', status: 'queued' }),
     waitForPrimary: async () => { throw new Error('primary failed'); },
-    createTrimJob: async () => { throw new Error('must not run'); },
+    createSpeedUpJob: async () => { throw new Error('must not run'); },
   });
   assert.deepEqual(result.workItems.map((item) => [item.outputId, item.status]), [
     ['16:9', 'retryable'],
@@ -162,9 +162,9 @@ test('retry submits no already accepted source-output combination', async () => 
   assert.deepEqual(calls, ['9:16']);
 });
 
-test('retrying only a failed primary records it for an unselected pending dependent trim', async () => {
+test('retrying only a failed primary records it for an unselected pending dependent speed-up', async () => {
   const primary: OutputConfig = { id: '16:9', ratio: '16:9', label: 'primary' };
-  const trim: OutputConfig = { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' };
+  const speedUp: OutputConfig = { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'speed-up', speedFrom: '16:9' };
   const retrySource = {
     ...source('dependency', 40),
     pendingOutputIds: ['16:9', '16:9-15s'],
@@ -172,11 +172,11 @@ test('retrying only a failed primary records it for an unselected pending depend
   const first = await submitResizeBatch({
     sources: [retrySource],
     outputs: [primary],
-    outputCatalog: [primary, trim],
+    outputCatalog: [primary, speedUp],
     config: config(),
     createJob: async () => ({ jobId: 'replacement-primary', status: 'queued' }),
     waitForPrimary: async (job) => job.jobId,
-    createTrimJob: async () => { throw new Error('trim was intentionally not selected'); },
+    createSpeedUpJob: async () => { throw new Error('the speed-up was intentionally not selected'); },
   });
   assert.equal(first.workItems[0].completedPrimaryJobId, 'replacement-primary');
 
@@ -188,24 +188,24 @@ test('retrying only a failed primary records it for an unselected pending depend
   const calls: string[] = [];
   await submitResizeBatch({
     sources: next.sources,
-    outputs: [trim],
-    outputCatalog: [primary, trim],
+    outputs: [speedUp],
+    outputCatalog: [primary, speedUp],
     config: config(),
     createJob: async () => { throw new Error('primary must not be duplicated'); },
     waitForPrimary: async () => { throw new Error('completed primary must not be awaited twice'); },
-    createTrimJob: async ({ sourceJobId }) => {
+    createSpeedUpJob: async ({ sourceJobId }) => {
       calls.push(sourceJobId);
-      return { jobId: 'trim-job', status: 'queued' };
+      return { jobId: 'speedup-job', status: 'queued' };
     },
   });
   assert.deepEqual(calls, ['replacement-primary']);
 });
 
-test('resize batch submits every primary before entering the trim phase', async () => {
+test('resize batch submits every primary before entering the speed-up phase', async () => {
   const events: string[] = [];
   const outputs: OutputConfig[] = [
     { id: '16:9', ratio: '16:9', label: 'full' },
-    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'trim', trimFrom: '16:9' },
+    { id: '16:9-15s', ratio: '16:9', duration: 15, label: 'speed-up', speedFrom: '16:9' },
   ];
   await submitResizeBatch({
     sources: [source('a', 40), source('b', 40)],
@@ -219,9 +219,9 @@ test('resize batch submits every primary before entering the trim phase', async 
       events.push(`wait:${job.jobId}`);
       return job.jobId;
     },
-    createTrimJob: async ({ source: item }) => {
-      events.push(`trim:${item.localId}`);
-      return { jobId: `trim-${item.localId}`, status: 'queued' };
+    createSpeedUpJob: async ({ source: item }) => {
+      events.push(`speedup:${item.localId}`);
+      return { jobId: `speedup-${item.localId}`, status: 'queued' };
     },
   });
   assert.deepEqual(events.slice(0, 2), ['create:a', 'create:b']);
@@ -229,9 +229,9 @@ test('resize batch submits every primary before entering the trim phase', async 
 
 test('per-source catalog skips outputs a shorter source cannot fill', async () => {
   const calls: Array<{ id: string; outputId: string }> = [];
-  const short = source('short', 40);
+  const short = source('short', 20);
   const long = source('long', 200);
-  const wanted = new Set(['9:16', '9:16-30s', '9:16-120s']);
+  const wanted = new Set(['9:16', '9:16-15s', '9:16-30s']);
   const result = await submitResizeBatch({
     sources: [short, long],
     outputs: deriveBatchOutputCatalog([short, long]).filter((output) => wanted.has(output.id)),
@@ -242,28 +242,28 @@ test('per-source catalog skips outputs a shorter source cannot fill', async () =
       return { jobId: `${item.libraryId}-${output.id}`, status: 'queued' };
     },
     waitForPrimary: async (job) => job.jobId,
-    createTrimJob: async ({ source: item, output }) => {
+    createSpeedUpJob: async ({ source: item, output }) => {
       calls.push({ id: item.libraryId!, outputId: output.id });
       return { jobId: `${item.libraryId}-${output.id}`, status: 'queued' };
     },
   });
 
   assert.equal(
-    calls.some((call) => call.id === 'short' && call.outputId === '9:16-120s'),
+    calls.some((call) => call.id === 'short' && call.outputId === '9:16-30s'),
     false,
-    'a 40s source must never be sent a 120s cut',
+    'a 20s source must never be sent a 30s output',
   );
-  assert.ok(calls.some((call) => call.id === 'long' && call.outputId === '9:16-120s'));
-  assert.ok(calls.some((call) => call.id === 'short' && call.outputId === '9:16-30s'));
+  assert.ok(calls.some((call) => call.id === 'long' && call.outputId === '9:16-30s'));
+  assert.ok(calls.some((call) => call.id === 'short' && call.outputId === '9:16-15s'));
   assert.equal(result.outcomes.every((outcome) => outcome.errors.length === 0), true);
 });
 
-test('one render per source carries every cut of that source', async () => {
+test('one render per source carries every speed-up of that source', async () => {
   const rendered: string[] = [];
-  const trims: Array<{ id: string; outputId: string; sourceJobId: string }> = [];
-  const medium = source('medium', 105);
+  const speedUps: Array<{ id: string; outputId: string; sourceJobId: string }> = [];
+  const medium = source('medium', 20);
   const long = source('long', 200);
-  const wanted = new Set(['9:16', '9:16-30s', '9:16-90s', '9:16-120s']);
+  const wanted = new Set(['9:16', '9:16-15s', '9:16-30s']);
   await submitResizeBatch({
     sources: [medium, long],
     outputs: deriveBatchOutputCatalog([medium, long]).filter((output) => wanted.has(output.id)),
@@ -274,28 +274,26 @@ test('one render per source carries every cut of that source', async () => {
       return { jobId: `${item.libraryId}-${output.id}`, status: 'queued' };
     },
     waitForPrimary: async (job) => job.jobId,
-    createTrimJob: async ({ source: item, output, sourceJobId }) => {
-      trims.push({ id: item.libraryId!, outputId: output.id, sourceJobId });
+    createSpeedUpJob: async ({ source: item, output, sourceJobId }) => {
+      speedUps.push({ id: item.libraryId!, outputId: output.id, sourceJobId });
       return { jobId: `${item.libraryId}-${output.id}`, status: 'queued' };
     },
   });
 
-  // One encode per source — the whole video, since both run well past their
-  // longest cut — and every cut trims from it.
+  // One composite per source — the whole video — and every speed-up comes off
+  // it. The 20s source reaches only the 15s tier.
   assert.deepEqual(rendered.sort(), ['long:9:16', 'medium:9:16']);
   assert.deepEqual(
-    trims.map((trim) => `${trim.id}:${trim.outputId}<-${trim.sourceJobId}`).sort(),
+    speedUps.map((item) => `${item.id}:${item.outputId}<-${item.sourceJobId}`).sort(),
     [
-      'long:9:16-120s<-long-9:16',
+      'long:9:16-15s<-long-9:16',
       'long:9:16-30s<-long-9:16',
-      'long:9:16-90s<-long-9:16',
-      'medium:9:16-30s<-medium-9:16',
-      'medium:9:16-90s<-medium-9:16',
+      'medium:9:16-15s<-medium-9:16',
     ],
   );
 });
 
-test('a cut selected without its full-length parent runs nothing and reports why', async () => {
+test('a speed-up selected without its full-length parent runs nothing and reports why', async () => {
   const submitted: string[] = [];
   const long = source('long', 200);
   const result = await submitResizeBatch({
@@ -308,15 +306,16 @@ test('a cut selected without its full-length parent runs nothing and reports why
       return { jobId: output.id, status: 'queued' };
     },
     waitForPrimary: async (job) => job.jobId,
-    createTrimJob: async ({ output }) => {
-      submitted.push(`trim:${output.id}`);
+    createSpeedUpJob: async ({ output }) => {
+      submitted.push(`speedup:${output.id}`);
       return { jobId: output.id, status: 'queued' };
     },
   });
 
-  // Every cut is a trim now, so a selection with no full-length output has
-  // nothing to trim from. The UI guards against this before submitting.
+  // Every shortened output is a speed-up of the whole video, so a selection
+  // without the full-length output has nothing to speed up. The UI guards
+  // against this before submitting.
   assert.deepEqual(submitted, []);
   assert.equal(result.outcomes[0].accepted, false);
-  assert.ok(result.outcomes[0].errors.some((error) => error.phase === 'trim'));
+  assert.ok(result.outcomes[0].errors.some((error) => error.phase === 'speedup'));
 });

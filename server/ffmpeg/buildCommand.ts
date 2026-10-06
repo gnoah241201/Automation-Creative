@@ -195,20 +195,99 @@ export const buildFfmpegCommand = (params: {
 };
 
 /**
- * Build FFmpeg args for a trim-only job (stream copy, no re-encode).
- * This is very fast since it copies the encoded stream directly.
+ * Splits a tempo change into hops `atempo` will accept.
+ *
+ * The filter is documented for 0.5x-2.0x, so a 3.4x speed-up has to be applied
+ * as several passes. Speeding up uses 2.0 hops and slowing down 0.5 hops, with
+ * the remainder as the last hop; the product is the requested factor exactly,
+ * so audio and video still end together.
  */
-export const buildTrimCommand = (params: {
+export const buildAtempoChain = (factor: number): string[] => {
+  const hops: string[] = [];
+  let remaining = factor;
+  while (remaining > 2) {
+    hops.push('atempo=2.0');
+    remaining /= 2;
+  }
+  while (remaining < 0.5) {
+    hops.push('atempo=0.5');
+    remaining /= 0.5;
+  }
+  // A factor of exactly 1 still needs a filter, or `-filter:a` would be empty.
+  hops.push(`atempo=${remaining.toFixed(6)}`);
+  return hops;
+};
+
+/**
+ * Build FFmpeg args for a speed-up job: the whole of an already-rendered output
+ * replayed fast enough to end at `targetDuration`.
+ *
+ * This re-encodes — retiming frames is not something a stream copy can do — but
+ * it works from a finished render, so none of the composite (blur, overlay,
+ * logo, scaling) is redone. Audio is retimed with it rather than dropped, and
+ * `atempo` holds the pitch.
+ *
+ * `-t` is a guard, not the mechanism: `setpts` already lands the last frame at
+ * `targetDuration`, and the cap only absorbs the rounding when
+ * `sourceDuration` came from a probe.
+ */
+export const buildSpeedUpCommand = (params: {
   inputPath: string;
-  duration: number;
+  /** Length of `inputPath`, from ffprobe. */
+  sourceDuration: number;
+  /** Length the output must end at. */
+  targetDuration: number;
   outputPath: string;
+  encoder?: EncoderMode;
+  threads?: number;
+  bitrate?: number;
 }): string[] => {
-  return [
-    '-y',
+  const { sourceDuration, targetDuration } = params;
+  if (!Number.isFinite(sourceDuration) || sourceDuration <= 0) {
+    throw new Error(`A speed-up needs the source length; got ${sourceDuration}.`);
+  }
+  if (!Number.isFinite(targetDuration) || targetDuration <= 0) {
+    throw new Error(`A speed-up needs a positive target length; got ${targetDuration}.`);
+  }
+
+  const factor = sourceDuration / targetDuration;
+  const bitrateKbps = params.bitrate && params.bitrate > 0 ? params.bitrate : 6000;
+  const encoder: EncoderMode = params.encoder || 'libx264';
+
+  const args = ['-y'];
+  if (params.threads && params.threads > 0) {
+    args.push('-filter_complex_threads', String(params.threads));
+  }
+  args.push(
     '-i', params.inputPath,
-    '-t', String(params.duration),
-    '-c', 'copy',
+    // PTS/factor pulls every frame's timestamp toward zero by the same
+    // proportion, so the clip plays faster without a frame being dropped here;
+    // `-r` below decides which of them survive at 30fps.
+    '-filter:v', `setpts=PTS/${factor.toFixed(6)}`,
+    '-filter:a', buildAtempoChain(factor).join(','),
+    '-map', '0:v:0',
+    // Optional: a render whose foreground had no audio has no stream to retime.
+    '-map', '0:a?',
+  );
+
+  if (encoder === 'h264_nvenc') {
+    args.push('-c:v', 'h264_nvenc', '-preset', 'slow');
+  } else {
+    args.push('-c:v', 'libx264', '-preset', 'ultrafast');
+    if (params.threads && params.threads > 0) {
+      args.push('-threads', String(params.threads));
+    }
+  }
+
+  args.push(
+    '-b:v', `${bitrateKbps}k`,
+    '-maxrate', `${Math.round(bitrateKbps * 1.17)}k`,
+    '-bufsize', `${Math.round(bitrateKbps * 2.33)}k`,
+    '-r', '30',
+    '-pix_fmt', 'yuv420p',
+    '-t', String(targetDuration),
     '-movflags', '+faststart',
     params.outputPath,
-  ];
+  );
+  return args;
 };

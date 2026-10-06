@@ -37,8 +37,11 @@ export interface RenderSpec {
   duration?: number;
   /** Bitrate in kbps. Undefined means default (6000 kbps). */
   bitrate?: number;
-  /** If set, this job is a trim-only job: trim from the completed job's output using stream copy. */
-  trimFromJobId?: string;
+  /**
+   * If set, this job is a speed-up of the completed job's output: that whole
+   * video retimed to end at `duration`, rather than a fresh composite.
+   */
+  speedFromJobId?: string;
   fgPosition: ForegroundPosition;
   bgType: BackgroundType;
   backgroundSource?: BackgroundSource;

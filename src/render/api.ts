@@ -157,13 +157,14 @@ export const downloadRenderJob = async (jobId: string): Promise<Blob> => {
 };
 
 /**
- * Create a trim-only job that trims from a completed job's output (stream copy, no re-encode).
+ * Create a speed-up job: the whole of a completed job's output retimed to end
+ * at `spec.duration`.
  */
-export const createTrimJob = async (params: {
+export const createSpeedUpJob = async (params: {
   spec: RenderSpec;
   sourceJobId: string;
 }): Promise<CreateJobResponse> => {
-  const response = await fetch(`${API_BASE}/trim`, {
+  const response = await fetch(`${API_BASE}/speedup`, {
     method: 'POST',
     credentials: 'include',
     headers: { 'Content-Type': 'application/json' },

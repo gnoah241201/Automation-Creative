@@ -18,7 +18,7 @@ import { createOverlayPng } from './render/overlay';
 import {
   cancelRenderJob,
   createRenderJob,
-  createTrimJob,
+  createSpeedUpJob,
   createUploadSession,
   downloadRenderJob,
   getAuthSession,
@@ -701,8 +701,8 @@ export default function App() {
     ? deriveBatchOutputCatalog(resizeBatchSources)
     : deriveOutputs(activeInputRatio, activeFgDuration);
 
-  // Whether an output is a trim or its own encode depends on what else is
-  // selected, so the modal hint has to read the plan, not the raw catalog.
+  // Whether an output is a speed-up or its own composite depends on what else
+  // is selected, so the modal hint has to read the plan, not the raw catalog.
   const plannedById = new Map(
     planSelectedOutputs(outputs, new Set(selectedDownloads)).map((output) => [output.id, output]),
   );
@@ -755,11 +755,11 @@ export default function App() {
         const planned = selectSourceOutputs(item, selectedIds);
         const plannedIds = new Set(planned.map((output) => output.id));
         return planned
-          .filter((output) => output.trimFrom && !plannedIds.has(output.trimFrom))
-          .map((output) => `${item.filename}: chọn ${output.trimFrom} trước ${output.id}`);
+          .filter((output) => output.speedFrom && !plannedIds.has(output.speedFrom))
+          .map((output) => `${item.filename}: chọn ${output.speedFrom} trước ${output.id}`);
       });
       if (unmet.length > 0) {
-        window.alert(`Thiếu output nguồn cho bản cắt:\n${unmet.join('\n')}`);
+        window.alert(`Thiếu output nguồn cho bản speed-up:\n${unmet.join('\n')}`);
         return;
       }
       // Hard stop: two sources under one naming would render to the same file.
@@ -817,7 +817,7 @@ export default function App() {
                     status: result.status,
                     progress: 0,
                     retryInputs: selectSourceOutputs(source, new Set(selectedDownloads)).some((candidate) => (
-                      candidate.trimFrom === output.id
+                      candidate.speedFrom === output.id
                       && (!source.pendingOutputIds || source.pendingOutputIds.includes(candidate.id))
                     ))
                       ? undefined
@@ -847,29 +847,29 @@ export default function App() {
               const state = await getRenderJob(primary.jobId);
               if (state.status === 'completed') return primary.jobId;
               if (state.status === 'failed' || state.status === 'cancelled') {
-                throw new Error('Source render failed before trim');
+                throw new Error('Source render failed before speed-up');
               }
               await new Promise((resolve) => window.setTimeout(resolve, 1000));
             }
-            throw new Error('Source render timed out before trim');
+            throw new Error('Source render timed out before speed-up');
           },
-          createTrimJob: async ({ source, output, spec, sourceJobId }) => {
+          createSpeedUpJob: async ({ source, output, spec, sourceJobId }) => {
             const localId = addPending(source, output, spec);
             try {
-              const result = await createTrimJob({ spec, sourceJobId });
+              const result = await createSpeedUpJob({ spec, sourceJobId });
               setJobs((current) => current.map((job) => job.id === localId
                 ? {
                     ...job,
                     serverJobId: result.jobId,
                     status: result.status,
                     progress: 0,
-                    retryInputs: { kind: 'trim', sourceJobId },
+                    retryInputs: { kind: 'speedup', sourceJobId },
                   }
                 : job));
               return result;
             } catch (cause) {
               setJobs((current) => current.map((job) => job.id === localId
-                ? { ...job, status: 'failed', error: cause instanceof Error ? cause.message : 'Failed to submit trim job' }
+                ? { ...job, status: 'failed', error: cause instanceof Error ? cause.message : 'Failed to submit speed-up job' }
                 : job));
               throw cause;
             }
@@ -904,9 +904,9 @@ export default function App() {
     };
     if (!confirmNamingReuse([singleNaming])) return;
 
-    // Separate primary renders from trim variants
-    const primaryOutputs = selectedOutputs.filter(o => !o.trimFrom);
-    const trimOutputs = selectedOutputs.filter(o => !!o.trimFrom);
+    // Separate the composited renders from the speed-up variants
+    const primaryOutputs = selectedOutputs.filter(o => !o.speedFrom);
+    const speedUpOutputs = selectedOutputs.filter(o => !!o.speedFrom);
 
     const primarySubmissions = primaryOutputs.map((output) => {
       const spec = buildRenderSpec({
@@ -998,7 +998,7 @@ export default function App() {
       }
     }
 
-    // Track completed primary jobs by output ID for trim job resolution
+    // Track completed primary jobs by output ID for speed-up job resolution
     const completedPrimaryJobs = new Map<string, string>(); // outputId -> serverJobId
 
     // Submit primary render jobs
@@ -1035,27 +1035,27 @@ export default function App() {
       }
     }
 
-    // Submit trim jobs: wait for source primary job to complete, then create trim
-    if (trimOutputs.length > 0) {
-      // Group trim outputs by their source (trimFrom) output ID
-      const trimsBySource = new Map<string, typeof trimOutputs>();
-      for (const trimOutput of trimOutputs) {
-        const sourceId = trimOutput.trimFrom!;
-        if (!trimsBySource.has(sourceId)) {
-          trimsBySource.set(sourceId, []);
+    // Submit speed-up jobs: wait for the source render, then retime it
+    if (speedUpOutputs.length > 0) {
+      // Group speed-up outputs by their source (speedFrom) output ID
+      const speedUpsBySource = new Map<string, typeof speedUpOutputs>();
+      for (const speedUpOutput of speedUpOutputs) {
+        const sourceId = speedUpOutput.speedFrom!;
+        if (!speedUpsBySource.has(sourceId)) {
+          speedUpsBySource.set(sourceId, []);
         }
-        trimsBySource.get(sourceId)!.push(trimOutput);
+        speedUpsBySource.get(sourceId)!.push(speedUpOutput);
       }
 
       // For each source, find matching primary job and wait for completion
-      for (const [sourceOutputId, trims] of trimsBySource) {
-        // Add trim jobs to UI immediately as 'submitting'
-        const trimJobLocalIds: { localId: string; output: OutputConfig }[] = [];
-        for (const trimOutput of trims) {
+      for (const [sourceOutputId, speedUps] of speedUpsBySource) {
+        // Add speed-up jobs to UI immediately as 'submitting'
+        const speedUpJobLocalIds: { localId: string; output: OutputConfig }[] = [];
+        for (const speedUpOutput of speedUps) {
           const spec = buildRenderSpec({
             inputRatio,
-            outputRatio: trimOutput.ratio,
-            duration: trimOutput.duration ?? fgDuration,
+            outputRatio: speedUpOutput.ratio,
+            duration: speedUpOutput.duration ?? fgDuration,
             bitrate,
             fgPosition,
             bgType,
@@ -1077,15 +1077,15 @@ export default function App() {
           const localId = Math.random().toString(36).slice(2);
           const pendingJob: RenderJob = {
             id: localId,
-            outputId: trimOutput.id,
-            label: trimOutput.label,
+            outputId: speedUpOutput.id,
+            label: speedUpOutput.label,
             filename: spec.outputFilename,
             spec,
             status: 'submitting',
             progress: 0,
           };
           setJobs((prev) => [...prev, pendingJob]);
-          trimJobLocalIds.push({ localId, output: trimOutput });
+          speedUpJobLocalIds.push({ localId, output: speedUpOutput });
         }
 
         // Wait for the source primary job to complete (poll until completed)
@@ -1114,7 +1114,7 @@ export default function App() {
                 return serverJobId;
               }
               if (state.status === 'failed' || state.status === 'cancelled') {
-                return null; // Source failed, trim cannot proceed
+                return null; // Source failed, the speed-up cannot proceed
               }
             } catch {
               // Polling error, continue
@@ -1123,12 +1123,12 @@ export default function App() {
           return null;
         };
 
-        // Fire and forget: wait for source then submit trims
+        // Fire and forget: wait for source then submit the speed-ups
         (async () => {
           const sourceServerJobId = await waitForSource();
           if (!sourceServerJobId) {
-            // Source job failed or timed out - mark all trim jobs as failed
-            for (const { localId } of trimJobLocalIds) {
+            // Source job failed or timed out - mark all speed-up jobs as failed
+            for (const { localId } of speedUpJobLocalIds) {
               setJobs(prev => prev.map(j =>
                 j.id === localId
                   ? { ...j, status: 'failed', error: 'Source render failed or timed out' }
@@ -1138,13 +1138,13 @@ export default function App() {
             return;
           }
 
-          // Submit each trim job
-          for (const { localId, output: trimOutput } of trimJobLocalIds) {
+          // Submit each speed-up job
+          for (const { localId, output: speedUpOutput } of speedUpJobLocalIds) {
             try {
               const spec = buildRenderSpec({
                 inputRatio,
-                outputRatio: trimOutput.ratio,
-                duration: trimOutput.duration,
+                outputRatio: speedUpOutput.ratio,
+                duration: speedUpOutput.duration,
                 bitrate,
                 fgPosition,
                 bgType,
@@ -1164,7 +1164,7 @@ export default function App() {
                 suffix,
               });
 
-              const result = await createTrimJob({
+              const result = await createSpeedUpJob({
                 spec,
                 sourceJobId: sourceServerJobId,
               });
@@ -1177,7 +1177,7 @@ export default function App() {
             } catch (error) {
               setJobs(prev => prev.map(j =>
                 j.id === localId
-                  ? { ...j, status: 'failed', error: error instanceof Error ? error.message : 'Failed to submit trim job' }
+                  ? { ...j, status: 'failed', error: error instanceof Error ? error.message : 'Failed to submit speed-up job' }
                   : j
               ));
             }
@@ -1312,7 +1312,7 @@ export default function App() {
               buttonImageFile: assets.buttonImageFile ?? undefined,
             }),
             createRender: createRenderJob,
-            createTrim: createTrimJob,
+            createSpeedUp: createSpeedUpJob,
           });
 
       setJobs(prev => prev.map(job =>
@@ -2279,9 +2279,9 @@ export default function App() {
                   />
                   <div className="flex flex-col">
                     <span className="text-sm font-medium text-neutral-200 group-hover:text-white">{output.label}</span>
-                    {plannedById.get(output.id)?.trimFrom && (
+                    {plannedById.get(output.id)?.speedFrom && (
                       <span className="text-[10px] text-amber-400/70 font-medium">
-                        ⚡ Trim from {plannedById.get(output.id)!.trimFrom} (fast)
+                        ⏩ Speed up từ {plannedById.get(output.id)!.speedFrom} (giữ nguyên toàn bộ video)
                       </span>
                     )}
                   </div>

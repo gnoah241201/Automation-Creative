@@ -21,8 +21,8 @@ export interface SubmitResizeBatchInput {
   /**
    * Full output list for one source. When supplied, `outputs` is read as a set
    * of selected ids and each source contributes only the ones it can actually
-   * produce, wired with its own `trimFrom`. Sources in a batch differ in length,
-   * so both the available cuts and the long-form master differ per source.
+   * produce, wired with its own `speedFrom`. Sources in a batch differ in
+   * length, so which speed-up tiers they qualify for differs per source.
    * Omit it to apply one shared list to every source.
    */
   catalogForSource?: (source: ResizeBatchSource) => OutputConfig[];
@@ -33,7 +33,7 @@ export interface SubmitResizeBatchInput {
     spec: RenderSpec;
   }) => Promise<CreateJobResponse>;
   waitForPrimary?: (job: SubmittedResizeJob) => Promise<string>;
-  createTrimJob?: (input: {
+  createSpeedUpJob?: (input: {
     source: ResizeBatchSource;
     output: OutputConfig;
     spec: RenderSpec;
@@ -43,7 +43,7 @@ export interface SubmitResizeBatchInput {
 
 export interface ResizeBatchFailure {
   outputId: string;
-  phase: 'primary' | 'wait' | 'trim';
+  phase: 'primary' | 'wait' | 'speedup';
   message: string;
 }
 
@@ -105,7 +105,7 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
     for (const output of outputs) {
       workItems.push({ sourceId: outcome.sourceId, outputId: output.id, status: 'retryable' });
     }
-    for (const output of outputs.filter((item) => !item.trimFrom)) {
+    for (const output of outputs.filter((item) => !item.speedFrom)) {
       const spec = buildSpec(input.config, source, output);
       try {
         const result = await input.createJob({ source, output, spec });
@@ -132,16 +132,16 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
     const selectedIds = new Set(outputs.map((output) => output.id));
     const pendingIds = new Set(source.pendingOutputIds ?? selectedIds);
     // Retry can leave a dependency pending without it being selected now; plan
-    // it against the same union so its trimFrom matches this source's master.
+    // it against the same union so its speedFrom matches this source's master.
     const deferredCatalog = input.catalogForSource
       ? planSelectedOutputs(catalog, new Set([...selectedIds, ...pendingIds]))
       : catalog;
     const deferredDependencies = deferredCatalog.filter((output) => (
-      output.trimFrom
+      output.speedFrom
       && pendingIds.has(output.id)
       && !selectedIds.has(output.id)
     ));
-    for (const primaryOutputId of new Set(deferredDependencies.map((output) => output.trimFrom!))) {
+    for (const primaryOutputId of new Set(deferredDependencies.map((output) => output.speedFrom!))) {
       const primary = primaryByOutput.get(primaryOutputId);
       if (!primary || !input.waitForPrimary) continue;
       let ready = readyPrimaryIds.get(primary.jobId);
@@ -164,27 +164,27 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
     }
   }
   for (const { source, outputs, primaryByOutput, outcome } of sourcePrimaries) {
-    for (const output of outputs.filter((item) => item.trimFrom)) {
-      if (!input.waitForPrimary || !input.createTrimJob) {
-        outcome.errors.push({ outputId: output.id, phase: 'trim', message: 'Trim submission callbacks are required' });
+    for (const output of outputs.filter((item) => item.speedFrom)) {
+      if (!input.waitForPrimary || !input.createSpeedUpJob) {
+        outcome.errors.push({ outputId: output.id, phase: 'speedup', message: 'Speed-up submission callbacks are required' });
         continue;
       }
-      const completedPrimaryJobId = source.completedPrimaryJobIds?.[output.trimFrom!];
-      const primary = primaryByOutput.get(output.trimFrom!);
+      const completedPrimaryJobId = source.completedPrimaryJobIds?.[output.speedFrom!];
+      const primary = primaryByOutput.get(output.speedFrom!);
       if (completedPrimaryJobId) {
         const spec = buildSpec(input.config, source, output);
         try {
-          const result = await input.createTrimJob({ source, output, spec, sourceJobId: completedPrimaryJobId });
+          const result = await input.createSpeedUpJob({ source, output, spec, sourceJobId: completedPrimaryJobId });
           submitted.push({ sourceId: outcome.sourceId, outputId: output.id, spec, ...result });
           workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.id)!.status = 'accepted';
           outcome.accepted = true;
         } catch (error) {
-          outcome.errors.push({ outputId: output.id, phase: 'trim', message: failureMessage(error) });
+          outcome.errors.push({ outputId: output.id, phase: 'speedup', message: failureMessage(error) });
         }
         continue;
       }
       if (!primary) {
-        outcome.errors.push({ outputId: output.id, phase: 'trim', message: `Primary output ${output.trimFrom} was not accepted` });
+        outcome.errors.push({ outputId: output.id, phase: 'speedup', message: `Primary output ${output.speedFrom} was not accepted` });
         continue;
       }
       let ready = readyPrimaryIds.get(primary.jobId);
@@ -197,16 +197,16 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
         readyPrimaryIds.set(primary.jobId, ready);
       }
       if (!ready.sourceJobId) {
-        const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.trimFrom);
+        const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.speedFrom);
         if (primaryWorkItem) primaryWorkItem.status = 'retryable';
         outcome.errors.push({ outputId: output.id, phase: 'wait', message: ready.error ?? 'Primary output is unavailable' });
         continue;
       }
-      const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.trimFrom);
+      const primaryWorkItem = workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.speedFrom);
       if (primaryWorkItem) primaryWorkItem.completedPrimaryJobId = ready.sourceJobId;
       const spec = buildSpec(input.config, source, output);
       try {
-        const result = await input.createTrimJob({ source, output, spec, sourceJobId: ready.sourceJobId });
+        const result = await input.createSpeedUpJob({ source, output, spec, sourceJobId: ready.sourceJobId });
         submitted.push({
           sourceId: source.libraryId ?? source.localId,
           outputId: output.id,
@@ -216,7 +216,7 @@ export async function submitResizeBatch(input: SubmitResizeBatchInput): Promise<
         workItems.find((item) => item.sourceId === outcome.sourceId && item.outputId === output.id)!.status = 'accepted';
         outcome.accepted = true;
       } catch (error) {
-        outcome.errors.push({ outputId: output.id, phase: 'trim', message: failureMessage(error) });
+        outcome.errors.push({ outputId: output.id, phase: 'speedup', message: failureMessage(error) });
       }
     }
   }

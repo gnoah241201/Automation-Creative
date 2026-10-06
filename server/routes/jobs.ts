@@ -460,8 +460,9 @@ export const buildJobsRouter = (
     },
   );
 
-  // Trim-only endpoint: creates a job that trims from a completed job's output (stream copy)
-  router.post('/trim', express.json(), async (req, res) => {
+  // Speed-up endpoint: creates a job that retimes the whole of a completed
+  // job's output down to spec.duration.
+  router.post('/speedup', express.json(), async (req, res) => {
     try {
       const { spec, sourceJobId } = req.body as { spec?: RenderSpec; sourceJobId?: string };
 
@@ -476,12 +477,12 @@ export const buildJobsRouter = (
       if (!spec.duration || spec.duration <= 0) {
         res.status(400).json({
           error: 'ValidationError',
-          message: 'spec.duration is required and must be positive for trim jobs',
+          message: 'spec.duration is required and must be positive for speed-up jobs',
         });
         return;
       }
 
-      const job = await queue.createTrimJob(spec, sourceJobId, res.locals.authSessionOwnerKey as string | undefined);
+      const job = await queue.createSpeedUpJob(spec, sourceJobId, res.locals.authSessionOwnerKey as string | undefined);
 
       res.json({
         jobId: job.id,
@@ -496,7 +497,7 @@ export const buildJobsRouter = (
         error: statusCode === 404 ? 'NotFound' : statusCode === 409 ? 'NotReady' : 'InternalError',
         message: statusCode === 404 ? 'Source job not found'
           : statusCode === 409 ? 'Source job is not completed'
-            : 'Failed to create trim job',
+            : 'Failed to create speed-up job',
       });
     }
   });

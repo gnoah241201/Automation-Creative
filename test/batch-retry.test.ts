@@ -23,21 +23,21 @@ test('accepted library job retry creates a fresh trusted session without a foreg
       events.push(`render:${input.uploadId}:${String(Boolean(input.foregroundFile))}`);
       return { jobId: 'retry-job', status: 'queued' };
     },
-    createTrim: async () => { throw new Error('not trim'); },
+    createSpeedUp: async () => { throw new Error('not a speed-up'); },
   });
   assert.deepEqual(events, ['session', 'render:fresh-upload:false']);
 });
 
-test('accepted trim retry reuses its completed primary without rendering it again', async () => {
+test('accepted speed-up retry reuses its completed primary without rendering it again', async () => {
   const events: string[] = [];
   await retryBatchJob({
-    retry: { kind: 'trim', sourceJobId: 'primary-job' }, spec,
+    retry: { kind: 'speedup', sourceJobId: 'primary-job' }, spec,
     createLibrarySessions: async () => { throw new Error('not library'); },
     createOverlay: async () => null,
     createRender: async () => { throw new Error('not render'); },
-    createTrim: async ({ sourceJobId }) => {
+    createSpeedUp: async ({ sourceJobId }) => {
       events.push(sourceJobId);
-      return { jobId: 'trim-retry', status: 'queued' };
+      return { jobId: 'speedup-retry', status: 'queued' };
     },
   });
   assert.deepEqual(events, ['primary-job']);

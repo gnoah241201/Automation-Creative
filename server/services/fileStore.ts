@@ -117,7 +117,7 @@ export const isJobExpired = (
 
 type RetainedJob = {
   id: string;
-  kind?: 'resize' | 'trim' | 'compose' | 'compose-preview';
+  kind?: 'resize' | 'speedup' | 'compose' | 'compose-preview';
   status: string;
   finishedAt?: number;
   downloadedAt?: number;

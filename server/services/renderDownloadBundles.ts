@@ -62,7 +62,7 @@ interface BundleRecord extends ClaimedRenderBundle {
 }
 
 const isResizeRecord = (job: NativeJobRecord): job is RenderJobRecord =>
-  job.kind === 'resize' || job.kind === 'trim';
+  job.kind === 'resize' || job.kind === 'speedup';
 
 /**
  * How many sources the per-source caches keep. Far above any one download, and
@@ -174,7 +174,7 @@ export class RenderDownloadBundleService {
       );
     }
 
-    // A trim job's foreground is another job's output, not an original.
+    // A speed-up job's foreground is another job's output, not an original.
     // A missing original is dropped — the outputs are still worth shipping.
     const hasOriginal = job.kind === 'resize' && await this.exists(job.files.foregroundPath);
     // Identifies the source itself. Jobs predating upload sessions carry no id,

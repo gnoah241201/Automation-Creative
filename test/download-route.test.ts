@@ -189,21 +189,21 @@ test('job status and queue diagnostics never expose internal render paths or FFm
   }
 });
 
-test('trim submission conceals unexpected internal diagnostics', async (t) => {
+test('speed-up submission conceals unexpected internal diagnostics', async (t) => {
   const queue = {
-    createTrimJob: async () => { throw new Error('ffmpeg failed at D:\\private\\trim-source.mp4: stderr'); },
+    createSpeedUpJob: async () => { throw new Error('ffmpeg failed at D:\\private\\speedup-source.mp4: stderr'); },
   } as unknown as JobQueueService;
   const app = express(); app.use('/api/jobs', buildJobsRouter(queue));
   const server = app.listen(0);
   t.after(() => new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
   await new Promise<void>((resolve) => server.once('listening', resolve));
   const address = server.address() as AddressInfo;
-  const response = await fetch(`http://127.0.0.1:${address.port}/api/jobs/trim`, {
+  const response = await fetch(`http://127.0.0.1:${address.port}/api/jobs/speedup`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sourceJobId: 'job-1', spec: { duration: 1 } }),
   });
   assert.equal(response.status, 500);
   const body = await response.json();
-  assert.deepEqual(body, { error: 'InternalError', message: 'Failed to create trim job' });
-  assert.doesNotMatch(JSON.stringify(body), /private|trim-source|ffmpeg|stderr/);
+  assert.deepEqual(body, { error: 'InternalError', message: 'Failed to create speed-up job' });
+  assert.doesNotMatch(JSON.stringify(body), /private|speedup-source|ffmpeg|stderr/);
 });

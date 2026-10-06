@@ -13,13 +13,13 @@ export interface JobFiles {
 export interface CommonNativeJobRecord {
   id: string;
   files: JobFiles;
-  kind: 'resize' | 'trim' | 'compose' | 'compose-preview';
+  kind: 'resize' | 'speedup' | 'compose' | 'compose-preview';
   /** Session-derived ownership key used to fair-share queue slots across users. Absent for legacy/unauthenticated jobs. */
   ownerKey?: string;
   /**
    * Upload this job rendered from. Every job of one upload copies the file into
    * its own work dir, so this is the only way to tell that several outputs share
-   * one original. Absent for trim jobs and for direct multipart uploads.
+   * one original. Absent for speed-up jobs and for direct multipart uploads.
    */
   sourceUploadId?: string;
   status: RenderJobStatus;
@@ -34,7 +34,7 @@ export interface CommonNativeJobRecord {
 }
 
 export interface ResizeJobRecord extends CommonNativeJobRecord {
-  kind: 'resize' | 'trim';
+  kind: 'resize' | 'speedup';
   spec: RenderSpec;
 }
 
@@ -55,5 +55,5 @@ export interface ComposerJobRecord extends CommonNativeJobRecord {
 }
 
 export type NativeJobRecord = ResizeJobRecord | ComposerJobRecord;
-/** Backwards-compatible name for resize and trim callers. */
+/** Backwards-compatible name for resize and speed-up callers. */
 export type RenderJobRecord = ResizeJobRecord;
