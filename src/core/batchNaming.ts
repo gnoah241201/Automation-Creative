@@ -1,6 +1,17 @@
-import { namingKey } from '../naming/namingHistory';
+import { NamingMeta } from './contract';
 import { parseVersion } from './naming/versionSequence';
 import { ResizeBatchSource } from './librarySources';
+
+/**
+ * Two namings share a key exactly when they would produce the same filenames.
+ * Output names are compared case-insensitively because the filesystems these
+ * land on are. Fields are length-prefixed so a separator inside one cannot
+ * imitate a different split.
+ */
+export const namingKey = (meta: NamingMeta): string => [meta.gameName, meta.version, meta.suffix]
+  .map((part) => (part ?? '').toLocaleLowerCase('en-US'))
+  .map((part) => `${part.length}:${part}`)
+  .join('|');
 
 /**
  * Refuses a batch whose sources would render to the same filenames.

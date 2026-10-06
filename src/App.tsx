@@ -30,7 +30,6 @@ import { deriveOutputs, OutputConfig, planSelectedOutputs } from './core/outputD
 import { deriveBatchOutputCatalog, deriveSourceOutputs, selectSourceOutputs } from './core/batchOutputs';
 import { buildBatchSources, nextConfigVersion, type ProbedUpload } from './render/batchUpload';
 import { validateBatchNaming } from './core/batchNaming';
-import { findAlreadyUsed, loadNamingHistory, rememberNaming } from './naming/namingHistory';
 import { sequenceVersions } from './core/naming/versionSequence';
 import {
   browserProbeDeps,
@@ -707,29 +706,6 @@ export default function App() {
     planSelectedOutputs(outputs, new Set(selectedDownloads)).map((output) => [output.id, output]),
   );
 
-  /**
-   * Soft stop: re-rendering a naming that has already been produced overwrites
-   * the earlier download, but doing it on purpose is legitimate — so warn and
-   * let the user decide.
-   */
-  const confirmNamingReuse = (metas: NamingMeta[]): boolean => {
-    if (typeof window === 'undefined') return true;
-    const reused = findAlreadyUsed(loadNamingHistory(window.localStorage), metas);
-    if (reused.length === 0) return true;
-    const listed = reused
-      .map((meta) => `· ${[meta.gameName, meta.version, meta.suffix].filter(Boolean).join(' / ')}`)
-      .join('\n');
-    return window.confirm(
-      `Tên / version này đã render rồi:\n${listed}\n\n`
-      + 'Render tiếp sẽ tạo ra file trùng tên với lần trước. Vẫn tiếp tục?',
-    );
-  };
-
-  const rememberRenderedNaming = (metas: NamingMeta[]) => {
-    if (typeof window === 'undefined') return;
-    rememberNaming(window.localStorage, metas);
-  };
-
   const handleOpenDownloadModal = () => {
     setSelectedDownloads(outputs.map(o => o.id));
     setIsDownloadModalOpen(true);
@@ -768,7 +744,6 @@ export default function App() {
         window.alert(namingErrors.join('\n\n'));
         return;
       }
-      if (!confirmNamingReuse(batchSnapshot.sources)) return;
       setIsBatchSubmitting(true);
       setIsDownloadModalOpen(false);
       setIsSidebarOpen(true);
@@ -876,7 +851,6 @@ export default function App() {
           },
         });
         setResizeBatchState((current) => applyResizeBatchWorkResult(current, batchSnapshot, batchResult.workItems));
-        rememberRenderedNaming(batchSnapshot.sources);
         // Move the config past the numbers this run consumed, visibly, so the
         // next upload does not start back on one already rendered.
         const resumeVersion = nextConfigVersion(namingConfig, batchSnapshot.sources.length);
@@ -894,15 +868,6 @@ export default function App() {
       }
       return;
     }
-
-    // buildRenderSpec substitutes these defaults, so warn about what will
-    // actually be written, not about the blank fields.
-    const singleNaming: NamingMeta = {
-      gameName: gameName || 'untitled',
-      version: version || 'v1',
-      suffix,
-    };
-    if (!confirmNamingReuse([singleNaming])) return;
 
     // Separate the composited renders from the speed-up variants
     const primaryOutputs = selectedOutputs.filter(o => !o.speedFrom);
@@ -956,8 +921,6 @@ export default function App() {
 
       return { output, spec, localId, pendingJob };
     });
-
-    rememberRenderedNaming([singleNaming]);
 
     flushSync(() => {
       setIsDownloadModalOpen(false);
