@@ -1,4 +1,4 @@
-import { RenderSpec, InputRatio, AspectRatio, BackgroundType, BackgroundSource, ForegroundPosition, ButtonType, BackgroundImageMode } from '../../shared/render-contract';
+import { RenderSpec, InputRatio, AspectRatio, BackgroundType, BackgroundSource, ForegroundPosition, ButtonType, BackgroundImageMode } from './contract';
 
 export interface ValidationError {
   error: string;

@@ -1,4 +1,4 @@
-import { InputRatio, AspectRatio } from '../../shared/render-contract';
+import { InputRatio, AspectRatio } from './contract';
 
 /**
  * The shortened lengths every output ratio is offered at.

@@ -1,5 +1,5 @@
-import { NamingMeta } from '../../shared/render-contract';
-import { NamingStorage } from './namingConfig';
+import { NamingMeta } from '../core/contract';
+import { NamingStorage } from '../core/naming/namingConfig';
 
 /**
  * Remembers which game/version/suffix combinations have already been rendered.

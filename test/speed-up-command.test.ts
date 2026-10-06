@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAtempoChain, buildSpeedUpCommand } from '../server/ffmpeg/buildCommand.ts';
+import { buildAtempoChain, buildSpeedUpCommand } from '../src/core/buildCommand.ts';
 
 const args = (over: Partial<Parameters<typeof buildSpeedUpCommand>[0]> = {}) => buildSpeedUpCommand({
   inputPath: '/out/whole.mp4',

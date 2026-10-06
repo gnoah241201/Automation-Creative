@@ -6,7 +6,7 @@ import {
   buildNormalizeCommand,
   needsNormalizing,
   normalizedPathFor,
-} from '../server/services/sourceNormalize.ts';
+} from '../src/core/sourceNormalize.ts';
 
 // --- Deciding ---
 

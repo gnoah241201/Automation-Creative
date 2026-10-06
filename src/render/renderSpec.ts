@@ -1,5 +1,5 @@
 import { buildOutputFilename } from '../naming';
-import { RenderSpec } from '../../shared/render-contract';
+import { RenderSpec } from '../core/contract';
 
 type BuilderInput = {
   inputRatio: RenderSpec['inputRatio'];

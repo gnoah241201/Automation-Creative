@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { validateRenderSpec } from '../server/services/validation.ts';
+import { validateRenderSpec } from '../src/core/validation.ts';
 import { resolveBackgroundVideoPath } from '../server/services/backgroundSource.ts';
-import { buildFfmpegCommand } from '../server/ffmpeg/buildCommand.ts';
-import { RenderSpec } from '../shared/render-contract.ts';
+import { buildFfmpegCommand } from '../src/core/buildCommand.ts';
+import { RenderSpec } from '../src/core/contract.ts';
 
 const spec = (over: Partial<RenderSpec> = {}): RenderSpec => ({
   inputRatio: '9:16',

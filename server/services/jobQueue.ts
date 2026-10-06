@@ -2,7 +2,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { ChildProcessWithoutNullStreams } from 'node:child_process';
-import { RenderSpec } from '../../shared/render-contract';
+import { RenderSpec } from '../../src/core/contract';
 import { ComposerRenderSpec } from '../../shared/composer-contract';
 import { ensureTempRoot, cleanupJobByWorkDir, cleanupExpiredJobs, isManagedJobExpired } from './fileStore';
 import { getInputDuration, runRenderJob, runSpeedUpJob, RenderProgress, determineProgressMode } from './renderRunner';

@@ -5,7 +5,7 @@ import {
   isUsableDuration,
   probeVideoDuration,
   type ProbeTarget,
-} from '../src/render/fgDuration.ts';
+} from '../src/core/fgDuration.ts';
 
 /** Minimal stand-in for the HTMLVideoElement the real probe drives. */
 class FakeVideo implements ProbeTarget {

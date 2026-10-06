@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { NativeJobRecord, RenderJobRecord } from '../types/renderJob.ts';
 import { probeMedia } from './mediaProbe.ts';
-import { needsNormalizing, normalizedPathFor } from './sourceNormalize.ts';
+import { needsNormalizing, normalizedPathFor } from '../../src/core/sourceNormalize.ts';
 import { normalizeToH264, probeVideoCodec } from './sourceNormalizeRunner.ts';
 import {
   BundleEntry,

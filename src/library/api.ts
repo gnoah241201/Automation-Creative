@@ -1,4 +1,4 @@
-import { ApiError } from '../../shared/render-contract.ts';
+import { ApiError } from '../core/contract.ts';
 import { LocalLibraryEntry } from '../../shared/composer-contract.ts';
 
 export interface LibraryUploadSession {

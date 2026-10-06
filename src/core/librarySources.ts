@@ -1,4 +1,4 @@
-import { InputRatio } from '../../shared/render-contract.ts';
+import { InputRatio } from './contract.ts';
 
 export interface ResizeBatchSource {
   localId: string;

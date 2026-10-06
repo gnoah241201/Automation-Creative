@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveOutputs } from '../src/render/outputDerivation.ts';
-import { getOutputFrameDimensions } from '../shared/precomposedAnchor.ts';
+import { deriveOutputs } from '../src/core/outputDerivation.ts';
+import { getOutputFrameDimensions } from '../src/core/precomposedAnchor.ts';
 import { ratioLabelFor } from '../server/services/renderBundlePlan.ts';
-import { validateRenderSpec } from '../server/services/validation.ts';
-import { buildFfmpegCommand } from '../server/ffmpeg/buildCommand.ts';
-import { RenderSpec } from '../shared/render-contract.ts';
+import { validateRenderSpec } from '../src/core/validation.ts';
+import { buildFfmpegCommand } from '../src/core/buildCommand.ts';
+import { RenderSpec } from '../src/core/contract.ts';
 
 const find = (outputs: ReturnType<typeof deriveOutputs>, id: string) =>
   outputs.find((output) => output.id === id);

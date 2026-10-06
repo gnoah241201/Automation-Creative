@@ -1,8 +1,8 @@
-import { InputRatio } from '../../shared/render-contract';
+import { InputRatio } from '../core/contract';
 import { parseVideoNamingMeta } from '../naming';
-import { NamingConfig } from '../naming/namingConfig';
-import { sequenceVersions } from '../naming/versionSequence';
-import { ResizeBatchSource } from './librarySources';
+import { NamingConfig } from '../core/naming/namingConfig';
+import { sequenceVersions } from '../core/naming/versionSequence';
+import { ResizeBatchSource } from '../core/librarySources';
 
 /**
  * Turns a multi-file upload into batch resize sources.

@@ -1,6 +1,6 @@
 import path from 'node:path';
-import { NamingMeta } from '../../shared/render-contract.ts';
-import { buildOutputFilename } from '../../shared/naming.ts';
+import { NamingMeta } from '../../src/core/contract.ts';
+import { buildOutputFilename } from '../../src/core/naming.ts';
 
 /**
  * Groups completed resize jobs into per-config ZIP bundles.

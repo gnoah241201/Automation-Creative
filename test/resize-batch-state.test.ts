@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { ResizeBatchSource } from '../src/render/librarySources.ts';
+import { ResizeBatchSource } from '../src/core/librarySources.ts';
 import {
   applyResizeBatchWorkResult,
   canMutateBrowserForeground,

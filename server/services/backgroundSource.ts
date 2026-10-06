@@ -1,4 +1,4 @@
-import { RenderSpec } from '../../shared/render-contract.ts';
+import { RenderSpec } from '../../src/core/contract.ts';
 
 /**
  * Where a video background comes from.

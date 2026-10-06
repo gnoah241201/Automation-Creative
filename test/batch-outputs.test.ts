@@ -1,12 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ResizeBatchSource } from '../src/render/librarySources.ts';
+import { ResizeBatchSource } from '../src/core/librarySources.ts';
 import {
   deriveBatchOutputCatalog,
   deriveSourceOutputs,
   selectSourceOutputs,
   sourceInputRatio,
-} from '../src/render/batchOutputs.ts';
+} from '../src/core/batchOutputs.ts';
 
 const source = (
   id: string,

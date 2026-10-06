@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { OutputConfig } from '../src/render/outputDerivation.ts';
-import { ResizeBatchSource } from '../src/render/librarySources.ts';
+import { OutputConfig } from '../src/core/outputDerivation.ts';
+import { ResizeBatchSource } from '../src/core/librarySources.ts';
 import { submitResizeBatch } from '../src/render/submitResizeBatch.ts';
-import { deriveBatchOutputCatalog, deriveSourceOutputs } from '../src/render/batchOutputs.ts';
+import { deriveBatchOutputCatalog, deriveSourceOutputs } from '../src/core/batchOutputs.ts';
 import { applyResizeBatchWorkResult, createResizeBatchState, replaceResizeBatch, snapshotResizeBatch } from '../src/render/resizeBatchState.ts';
 
 const source = (id: string, duration = 12): ResizeBatchSource => ({

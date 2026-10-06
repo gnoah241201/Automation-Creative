@@ -5,7 +5,7 @@ import {
   RenderSpec,
   ApiError,
   UploadSessionResponse,
-} from '../../shared/render-contract';
+} from '../core/contract';
 
 export { createLibraryUploadSessions } from '../library/api';
 export type { LibraryUploadSession } from '../library/api';

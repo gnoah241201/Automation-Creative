@@ -1,7 +1,7 @@
-import { CreateJobResponse, RenderSpec } from '../../shared/render-contract.ts';
-import { OutputConfig, planSelectedOutputs } from './outputDerivation.ts';
-import { ResizeBatchSource } from './librarySources.ts';
-import { sourceInputRatio } from './batchOutputs.ts';
+import { CreateJobResponse, RenderSpec } from '../core/contract.ts';
+import { OutputConfig, planSelectedOutputs } from '../core/outputDerivation.ts';
+import { ResizeBatchSource } from '../core/librarySources.ts';
+import { sourceInputRatio } from '../core/batchOutputs.ts';
 import { filterPendingOutputs, ResizeBatchWorkResult } from './resizeBatchState.ts';
 import { buildRenderSpec } from './renderSpec.ts';
 

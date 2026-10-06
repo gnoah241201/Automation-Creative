@@ -5,9 +5,9 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { JobQueueService } from '../services/jobQueue';
-import { RenderSpec } from '../../shared/render-contract';
+import { RenderSpec } from '../../src/core/contract';
 import { createJobDirs, removeWorkDir, isJobExpired, getRetentionDescription } from '../services/fileStore';
-import { validateRenderSpec } from '../services/validation';
+import { validateRenderSpec } from '../../src/core/validation';
 import { uploadSize } from '../metrics.ts';
 import {
   LocalLibraryNotFoundError,

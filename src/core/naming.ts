@@ -1,4 +1,4 @@
-import { NamingMeta } from './render-contract';
+import { NamingMeta } from './contract';
 
 export type { NamingMeta };
 

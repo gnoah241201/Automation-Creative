@@ -1,4 +1,4 @@
-import { RenderSpec } from './render-contract';
+import { RenderSpec } from './contract';
 
 export interface NormalizedRect {
   x: number;

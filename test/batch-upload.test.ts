@@ -6,8 +6,8 @@ import {
   nextConfigVersion,
   type ProbedUpload,
 } from '../src/render/batchUpload.ts';
-import { validateBatchNaming } from '../src/render/batchNaming.ts';
-import { emptyNamingConfig, type NamingConfig } from '../src/naming/namingConfig.ts';
+import { validateBatchNaming } from '../src/core/batchNaming.ts';
+import { emptyNamingConfig, type NamingConfig } from '../src/core/naming/namingConfig.ts';
 
 const probed = (over: Partial<ProbedUpload> = {}): ProbedUpload => ({
   localId: 'local-1',

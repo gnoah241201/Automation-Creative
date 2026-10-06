@@ -1,4 +1,4 @@
-import { RenderSpec } from '../../shared/render-contract';
+import { RenderSpec } from './contract';
 
 const getOutputDimensions = (ratio: RenderSpec['outputRatio']) => {
   switch (ratio) {

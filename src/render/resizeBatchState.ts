@@ -1,6 +1,6 @@
-import { InputRatio } from '../../shared/render-contract.ts';
-import { ResizeBatchSource } from './librarySources.ts';
-import { sourceInputRatio } from './batchOutputs.ts';
+import { InputRatio } from '../core/contract.ts';
+import { ResizeBatchSource } from '../core/librarySources.ts';
+import { sourceInputRatio } from '../core/batchOutputs.ts';
 
 export interface ResizeBatchState {
   revision: number;

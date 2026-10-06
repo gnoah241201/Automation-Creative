@@ -8,9 +8,9 @@ import {
   namingKey,
   rememberNaming,
 } from '../src/naming/namingHistory.ts';
-import { validateBatchNaming } from '../src/render/batchNaming.ts';
-import { ResizeBatchSource } from '../src/render/librarySources.ts';
-import { NamingMeta } from '../shared/render-contract.ts';
+import { validateBatchNaming } from '../src/core/batchNaming.ts';
+import { ResizeBatchSource } from '../src/core/librarySources.ts';
+import { NamingMeta } from '../src/core/contract.ts';
 
 const meta = (over: Partial<NamingMeta> = {}): NamingMeta => ({
   gameName: 'HeroWars', version: 'v60', suffix: 'UGC', ...over,

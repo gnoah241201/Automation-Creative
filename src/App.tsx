@@ -11,10 +11,10 @@ import {
   resolveNamingMeta,
   saveNamingConfig,
   type NamingConfig,
-} from './naming/namingConfig';
-import { JobStateResponse, RenderSpec } from '../shared/render-contract';
+} from './core/naming/namingConfig';
+import { JobStateResponse, RenderSpec } from './core/contract';
 import { buildRenderSpec } from './render/renderSpec';
-import { createOverlayPng } from './render/overlay';
+import { createOverlayPng } from './core/overlay';
 import {
   cancelRenderJob,
   createRenderJob,
@@ -26,18 +26,18 @@ import {
   prepareRenderDownloadBundles,
   startRenderBundleDownload,
 } from './render/api';
-import { deriveOutputs, OutputConfig, planSelectedOutputs } from './render/outputDerivation';
-import { deriveBatchOutputCatalog, deriveSourceOutputs, selectSourceOutputs } from './render/batchOutputs';
+import { deriveOutputs, OutputConfig, planSelectedOutputs } from './core/outputDerivation';
+import { deriveBatchOutputCatalog, deriveSourceOutputs, selectSourceOutputs } from './core/batchOutputs';
 import { buildBatchSources, nextConfigVersion, type ProbedUpload } from './render/batchUpload';
-import { validateBatchNaming } from './render/batchNaming';
+import { validateBatchNaming } from './core/batchNaming';
 import { findAlreadyUsed, loadNamingHistory, rememberNaming } from './naming/namingHistory';
-import { sequenceVersions } from './naming/versionSequence';
+import { sequenceVersions } from './core/naming/versionSequence';
 import {
   browserProbeDeps,
   durationFromState,
   probeVideoDuration,
   type FgDurationState,
-} from './render/fgDuration';
+} from './core/fgDuration';
 import { getJobDisplayName } from './render/jobDisplay';
 import {
   DEFAULT_LOGO_SIZE,
@@ -48,7 +48,7 @@ import {
   DEFAULT_BUTTON_SIZE,
   DEFAULT_BUTTON_X,
   DEFAULT_BUTTON_Y,
-} from './render/overlayDefaults';
+} from './core/overlayDefaults';
 import { createDefaultButtonState, createDefaultLogoState } from './render/resetState';
 import { useJobPolling } from './render/useJobPolling';
 import { AppShell, AppTab } from './app/AppShell';
@@ -56,7 +56,7 @@ import { HookComposerPage } from './composer/HookComposerPage';
 import { LocalLibraryPage } from './library/LocalLibraryPage';
 import { createLibraryUploadSessions, libraryDownloadUrl } from './library/api';
 import { ResizeBatchPanel } from './render/ResizeBatchPanel';
-import { ResizeBatchSource } from './render/librarySources';
+import { ResizeBatchSource } from './core/librarySources';
 import { submitResizeBatch } from './render/submitResizeBatch';
 import { BatchRetryInputs, retryBatchJob } from './render/batchRetry';
 import {
@@ -76,7 +76,7 @@ import {
   getScaledCoverDimensions,
   PRECOMPOSED_BG_SCALE,
   shouldUsePrecomposedHiddenFgAnchor,
-} from '../shared/precomposedAnchor';
+} from './core/precomposedAnchor';
 
 type BrowserRetryInputs = {
   kind: 'browser';

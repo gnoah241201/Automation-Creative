@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildFfmpegCommand } from '../server/ffmpeg/buildCommand.ts';
-import { getPrecomposedAnchorCropExpressions, getPrecomposedHiddenFgAnchorPoint, PRECOMPOSED_BG_SCALE } from '../shared/precomposedAnchor.ts';
-import { RenderSpec } from '../shared/render-contract.ts';
+import { buildFfmpegCommand } from '../src/core/buildCommand.ts';
+import { getPrecomposedAnchorCropExpressions, getPrecomposedHiddenFgAnchorPoint, PRECOMPOSED_BG_SCALE } from '../src/core/precomposedAnchor.ts';
+import { RenderSpec } from '../src/core/contract.ts';
 
 test('clean mode 4:5 uses standard crop filter', () => {
   const args = buildFfmpegCommand({

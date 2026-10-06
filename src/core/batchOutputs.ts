@@ -1,4 +1,4 @@
-import { InputRatio } from '../../shared/render-contract.ts';
+import { InputRatio } from './contract.ts';
 import { ResizeBatchSource } from './librarySources.ts';
 import { deriveOutputs, OutputConfig, planSelectedOutputs } from './outputDerivation.ts';
 

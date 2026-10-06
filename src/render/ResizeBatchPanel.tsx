@@ -1,6 +1,6 @@
 import React from 'react';
 import { Layers3, X } from 'lucide-react';
-import { ResizeBatchSource } from './librarySources.ts';
+import { ResizeBatchSource } from '../core/librarySources.ts';
 
 interface ResizeBatchPanelProps {
   sources: ResizeBatchSource[];

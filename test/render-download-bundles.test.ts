@@ -6,7 +6,7 @@ import {
   type BundleJobLookup,
 } from '../server/services/renderDownloadBundles.ts';
 import { RenderJobRecord } from '../server/types/renderJob.ts';
-import { RenderSpec } from '../shared/render-contract.ts';
+import { RenderSpec } from '../src/core/contract.ts';
 
 const spec = (over: Partial<RenderSpec> = {}): RenderSpec => ({
   inputRatio: '9:16',

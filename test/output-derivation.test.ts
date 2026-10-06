@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SPEED_SECONDS, RATIOS, deriveOutputs, planSelectedOutputs } from '../src/render/outputDerivation.ts';
-import { buildOutputFilename } from '../shared/naming.ts';
+import { SPEED_SECONDS, RATIOS, deriveOutputs, planSelectedOutputs } from '../src/core/outputDerivation.ts';
+import { buildOutputFilename } from '../src/core/naming.ts';
 
 const find = (outputs: ReturnType<typeof deriveOutputs>, id: string) =>
   outputs.find((output) => output.id === id);

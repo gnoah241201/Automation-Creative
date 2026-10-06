@@ -1,12 +1,13 @@
-import { RenderSpec } from '../../shared/render-contract';
+export type EncoderMode = 'libx264' | 'h264_nvenc';
+
+import { RenderSpec } from './contract';
 import {
   getOutputFrameDimensions,
   getPrecomposedAnchorCropExpressions,
   getPrecomposedHiddenFgAnchorPoint,
   PRECOMPOSED_BG_SCALE,
   shouldUsePrecomposedHiddenFgAnchor,
-} from '../../shared/precomposedAnchor';
-import { EncoderMode } from '../services/encoderConfig';
+} from './precomposedAnchor';
 
 export const getOutputDimensions = (ratio: RenderSpec['outputRatio']) => getOutputFrameDimensions(ratio);
 

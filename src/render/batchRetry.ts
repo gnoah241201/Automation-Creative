@@ -1,4 +1,4 @@
-import { CreateJobResponse, RenderSpec } from '../../shared/render-contract.ts';
+import { CreateJobResponse, RenderSpec } from '../core/contract.ts';
 import { LibraryUploadSession } from '../library/api.ts';
 
 interface BatchRetryAssets {

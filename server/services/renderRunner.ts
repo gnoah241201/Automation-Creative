@@ -1,6 +1,6 @@
 import { ChildProcessWithoutNullStreams, spawn, execSync } from 'node:child_process';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
-import { buildFfmpegCommand, buildSpeedUpCommand } from '../ffmpeg/buildCommand';
+import { buildFfmpegCommand, buildSpeedUpCommand } from '../../src/core/buildCommand';
 import { RenderJobRecord } from '../types/renderJob';
 import { EncoderMode, getFfmpegPath } from './encoderConfig';
 import { lowerRenderPriority } from './processPriority.ts';

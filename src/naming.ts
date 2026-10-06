@@ -3,5 +3,5 @@
  * can name bundled files exactly the way the browser does, without reaching
  * into `src/`.
  */
-export type { NamingMeta } from '../shared/naming';
-export { buildOutputFilename, parseVideoNamingMeta } from '../shared/naming';
+export type { NamingMeta } from './core/naming';
+export { buildOutputFilename, parseVideoNamingMeta } from './core/naming';

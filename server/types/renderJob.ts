@@ -1,4 +1,4 @@
-import { RenderJobStatus, RenderSpec } from '../../shared/render-contract';
+import { RenderJobStatus, RenderSpec } from '../../src/core/contract';
 import { ComposerCrop, ComposerRenderSpec, SourceTimeRange } from '../../shared/composer-contract';
 
 export interface JobFiles {

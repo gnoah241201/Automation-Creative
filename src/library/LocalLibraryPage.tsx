@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Download, Film, RefreshCw, Send, Trash2 } from 'lucide-react';
 import { LocalLibraryEntry } from '../../shared/composer-contract.ts';
-import { ResizeBatchSource } from '../render/librarySources.ts';
+import { ResizeBatchSource } from '../core/librarySources.ts';
 import {
   createLibraryUploadSessions,
   deleteLibraryEntries,

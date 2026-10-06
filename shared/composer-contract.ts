@@ -1,4 +1,4 @@
-import { RenderJobStatus } from './render-contract.ts';
+import { RenderJobStatus } from '../src/core/contract.ts';
 
 export type ComposerAssetKind = 'original' | 'hook';
 export type ComposerAssetStatus = 'probing' | 'needs-crop' | 'ready' | 'invalid';

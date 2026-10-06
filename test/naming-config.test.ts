@@ -11,8 +11,8 @@ import {
   saveNamingConfig,
   type NamingConfig,
   type NamingStorage,
-} from '../src/naming/namingConfig.ts';
-import { ResizeBatchSource } from '../src/render/librarySources.ts';
+} from '../src/core/naming/namingConfig.ts';
+import { ResizeBatchSource } from '../src/core/librarySources.ts';
 
 const memoryStorage = (seed: Record<string, string> = {}): NamingStorage & { data: Record<string, string> } => {
   const data = { ...seed };

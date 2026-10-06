@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
-import { buildSpeedUpCommand } from '../server/ffmpeg/buildCommand.ts';
+import { buildSpeedUpCommand } from '../src/core/buildCommand.ts';
 import { getFfmpegPath } from '../server/services/encoderConfig.ts';
 import { probeMedia } from '../server/services/mediaProbe.ts';
 

@@ -10,7 +10,7 @@ import {
   DEFAULT_LOGO_SIZE,
   DEFAULT_LOGO_X,
   DEFAULT_LOGO_Y,
-} from '../src/render/overlayDefaults.ts';
+} from '../src/core/overlayDefaults.ts';
 import { createDefaultButtonState, createDefaultLogoState } from '../src/render/resetState.ts';
 
 test('logo reset helper returns canonical default state', () => {

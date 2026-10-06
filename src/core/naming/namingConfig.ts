@@ -1,5 +1,5 @@
-import { NamingMeta, parseVideoNamingMeta } from '../naming';
-import { ResizeBatchSource } from '../render/librarySources';
+import { NamingMeta, parseVideoNamingMeta } from '../../naming';
+import { ResizeBatchSource } from '../librarySources';
 import { sequenceVersions } from './versionSequence';
 
 /**

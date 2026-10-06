@@ -4,7 +4,7 @@ import {
   incrementVersion,
   parseVersion,
   sequenceVersions,
-} from '../src/naming/versionSequence.ts';
+} from '../src/core/naming/versionSequence.ts';
 
 // --- Parsing ---
 

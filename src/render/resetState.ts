@@ -1,4 +1,4 @@
-import { buttonDefaults, logoDefaults } from './overlayDefaults';
+import { buttonDefaults, logoDefaults } from '../core/overlayDefaults';
 
 export type LogoOverlayState = {
   image: string | null;

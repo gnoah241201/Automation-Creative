@@ -3,7 +3,7 @@ import { promisify } from 'node:util';
 import ffprobeInstaller from '@ffprobe-installer/ffprobe';
 import { getFfmpegPath } from './encoderConfig.ts';
 import { getFfmpegThreadLimit } from './renderRunner.ts';
-import { buildNormalizeCommand } from './sourceNormalize.ts';
+import { buildNormalizeCommand } from '../../src/core/sourceNormalize.ts';
 import { lowerRenderPriority } from './processPriority.ts';
 import { pinRenderToCores } from './processAffinity.ts';
 

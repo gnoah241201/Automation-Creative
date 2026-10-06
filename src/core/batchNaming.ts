@@ -1,5 +1,5 @@
 import { namingKey } from '../naming/namingHistory';
-import { parseVersion } from '../naming/versionSequence';
+import { parseVersion } from './naming/versionSequence';
 import { ResizeBatchSource } from './librarySources';
 
 /**

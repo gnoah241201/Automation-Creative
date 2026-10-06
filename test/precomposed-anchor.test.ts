@@ -8,7 +8,7 @@ import {
   getPrecomposedHiddenFgAnchorPoint,
   getScaledCoverDimensions,
   shouldUsePrecomposedHiddenFgAnchor,
-} from '../shared/precomposedAnchor.ts';
+} from '../src/core/precomposedAnchor.ts';
 
 test('hidden-FG anchor applies only to targeted precomposed left/right portrait cases', () => {
   assert.equal(shouldUsePrecomposedHiddenFgAnchor({
