@@ -34,3 +34,9 @@ test('percent is null when the total is unknown or useless', () => {
     assert.equal(progressPercent('time=00:00:15.00', total), null, `total ${total}`);
   }
 });
+
+test('a line with no timestamp leaves the bar alone rather than resetting it', () => {
+  // The regression this module exists to prevent: ffmpeg prints a banner
+  // before it starts, and 0 would march the bar back to the start on each line.
+  assert.equal(progressPercent('Press [q] to stop, [?] for help', 30), null);
+});
