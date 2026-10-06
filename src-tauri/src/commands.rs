@@ -103,3 +103,34 @@ pub fn list_files(folder: String) -> Result<Vec<String>, String> {
     }
     Ok(names)
 }
+
+#[tauri::command]
+pub fn copy_file(from: String, to: String) -> Result<(), String> {
+    std::fs::copy(&from, &to).map(|_| ()).map_err(|e| format!("{from} -> {to}: {e}"))
+}
+
+/// The video codec of a file, read from `ffmpeg -i`.
+///
+/// ffprobe would be the obvious tool and is not shipped: it is a 78 MB binary
+/// whose only remaining job is this one line, and ffmpeg already prints it.
+///
+/// Deliberately not put in the registry. The registry exists so that no
+/// long-running render outlives the window; `-i` with no output reads the
+/// header and exits in milliseconds, so there is nothing worth cancelling and
+/// the process cannot be left running.
+#[tauri::command]
+pub async fn probe_codec(app: AppHandle, path: String) -> Result<Option<String>, String> {
+    let output = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| e.to_string())?
+        .args(["-hide_banner", "-i", &path])
+        .output()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    // `-i` with no output file always exits non-zero; the stream listing is
+    // still on stderr, which is what we came for. `None` means "could not
+    // tell", and the caller converts rather than copies.
+    Ok(crate::probe::video_codec(&String::from_utf8_lossy(&output.stderr)))
+}

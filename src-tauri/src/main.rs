@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod commands;
+mod probe;
 mod process;
 
 use tauri::{Manager, WindowEvent};
@@ -14,7 +15,9 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::run_ffmpeg,
             commands::cancel_job,
-            commands::list_files
+            commands::list_files,
+            commands::copy_file,
+            commands::probe_codec
         ])
         .on_window_event(|window, event| {
             if let WindowEvent::Destroyed = event {

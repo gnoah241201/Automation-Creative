@@ -19,6 +19,8 @@ export interface Bridge {
   pickFolder(): Promise<string | null>;
   pickImage(): Promise<string | null>;
   listFiles(folder: string): Promise<string[]>;
+  copyFile(from: string, to: string): Promise<void>;
+  probeCodec(path: string): Promise<string | null>;
   runFfmpeg(jobId: string, args: string[]): Promise<void>;
   cancelJob(jobId: string): Promise<void>;
   onProgress(fn: (jobId: string, line: string) => void): Promise<() => void>;
@@ -69,6 +71,12 @@ const real: Bridge = {
   async listFiles(folder) {
     return invoke<string[]>('list_files', { folder });
   },
+  async copyFile(from, to) {
+    return invoke<void>('copy_file', { from, to });
+  },
+  async probeCodec(path) {
+    return invoke<string | null>('probe_codec', { path });
+  },
   async runFfmpeg(jobId, args) {
     try {
       return await invoke<void>('run_ffmpeg', { jobId, args });
@@ -101,6 +109,8 @@ const fallback: Bridge = {
   pickFolder: notInTauri('pickFolder'),
   pickImage: notInTauri('pickImage'),
   listFiles: notInTauri('listFiles'),
+  copyFile: notInTauri('copyFile'),
+  probeCodec: notInTauri('probeCodec'),
   runFfmpeg: notInTauri('runFfmpeg'),
   cancelJob: notInTauri('cancelJob'),
   onProgress: notInTauri('onProgress'),
