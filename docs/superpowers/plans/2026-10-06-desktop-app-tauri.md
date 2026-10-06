@@ -1277,6 +1277,39 @@ test('nothing ticked plans nothing', () => {
   assert.deepEqual(planBatch([source('a', 200)], new Set(), 'speed'), []);
 });
 
+test('cut mode orders parents first even when the catalog does not', () => {
+  // The trap this test exists for: at d = 120.5 the full-length output is
+  // dropped, so the composite is the 120s tier -- which `deriveOutputs` lists
+  // LAST, after the children that trim from it. A plan that inherited the
+  // catalog's order would schedule every child before the file it reads.
+  const jobs = planBatch(
+    [source('a', 120.5)],
+    new Set(['9:16-6s', '9:16-120s']),
+    'cut',
+  );
+  const seen = new Set<string>();
+  for (const job of jobs) {
+    if (job.dependsOn) assert.ok(seen.has(job.dependsOn), `${job.id} is scheduled before its parent`);
+    seen.add(job.id);
+  }
+  assert.equal(jobs[0].kind, 'composite');
+  assert.equal(jobs[0].duration, 120, 'the longest tier carries the composite');
+});
+
+test('every dependsOn names a job that is actually in the plan', () => {
+  // A dangling parent would mean rendering a child from a file this run never
+  // writes -- silently, from whatever an older run left in the folder.
+  for (const [mode, duration] of [['cut', 120.5], ['cut', 200], ['speed', 200]] as const) {
+    const jobs = planBatch([source('a', duration)], new Set([
+      '9:16', '9:16-6s', '9:16-15s', '9:16-30s', '9:16-120s',
+    ]), mode);
+    const ids = new Set(jobs.map((job) => job.id));
+    for (const job of jobs) {
+      if (job.dependsOn) assert.ok(ids.has(job.dependsOn), `${job.id} depends on a job that is not planned`);
+    }
+  }
+});
+
 test('job ids are unique across a whole batch', () => {
   const sources = [source('a', 200), source('b', 200, 'v61'), source('c', 200, 'v62')];
   const jobs = planBatch(sources, new Set(['9:16', '9:16-15s', '16:9']), 'speed');
@@ -1361,9 +1394,12 @@ export const planBatch = (
     };
     for (const output of wanted) pullIn(output.id);
 
-    // `catalog` order already puts a parent ahead of its children.
-    for (const output of catalog) {
-      if (!required.has(output.id)) continue;
+    // `required` is in dependency order, because `pullIn` adds a parent before
+    // the child that asked for it. Do NOT iterate `catalog` here instead: its
+    // order is for display, and in cut mode without a full-length output the
+    // composite is the longest tier and therefore comes last.
+    for (const id of required) {
+      const output = byId.get(id)!;
       const parent = parentOf(output);
       jobs.push({
         id: jobId(source.localId, output.id),
