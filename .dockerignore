@@ -5,7 +5,7 @@
 !.env.example
 node_modules
 dist
-temp_superpowers
+temp_work
 coverage
 *.log
 docs

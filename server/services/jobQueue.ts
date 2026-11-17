@@ -127,7 +127,7 @@ export class JobQueueService {
   private readonly scheduleCleanup: boolean;
 
   constructor(private readonly maxConcurrentJobs: number, deps: QueueDeps = {}) {
-    this.tempRoot = deps.tempRoot ?? path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
+    this.tempRoot = deps.tempRoot ?? path.resolve(process.cwd(), 'temp_work', 'native-renders');
     this.jobStore = new JobStore(this.tempRoot);
     this.runRenderJobImpl = deps.runRenderJob ?? runRenderJob;
     this.runComposerJobImpl = deps.runComposerJob ?? runComposerJob;

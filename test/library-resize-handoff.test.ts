@@ -44,7 +44,7 @@ const resolved = (id: string, filePath: string): ResolvedLibraryOutput => ({
 });
 
 test('library handoff creates upload sessions from trusted IDs without browser file upload', async () => {
-  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_superpowers', 'handoff-source-'));
+  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_work', 'handoff-source-'));
   const first = path.join(sourceRoot, 'entry-1.mp4');
   const second = path.join(sourceRoot, 'entry-2.mp4');
   await Promise.all([fs.writeFile(first, 'first'), fs.writeFile(second, 'second')]);
@@ -83,7 +83,7 @@ test('library handoff creates upload sessions from trusted IDs without browser f
 });
 
 test('library handoff validates the selection and rolls back when any entry is expired', async () => {
-  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_superpowers', 'handoff-rollback-'));
+  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_work', 'handoff-rollback-'));
   const first = path.join(sourceRoot, 'entry-1.mp4');
   await fs.writeFile(first, 'first');
   const library = {
@@ -115,7 +115,7 @@ test('library handoff validates the selection and rolls back when any entry is e
 });
 
 test('library upload session combines its trusted foreground with current Resize background settings', async () => {
-  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_superpowers', 'handoff-background-'));
+  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_work', 'handoff-background-'));
   const foreground = path.join(sourceRoot, 'entry-1.mp4');
   await fs.writeFile(foreground, 'foreground');
   let capturedBackground = '';
@@ -161,7 +161,7 @@ test('library upload session combines its trusted foreground with current Resize
 });
 
 test('job submission conceals internal paths and removes staged copies on validation failure', async () => {
-  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_superpowers', 'handoff-cleanup-'));
+  const sourceRoot = await fs.mkdtemp(path.join(process.cwd(), 'temp_work', 'handoff-cleanup-'));
   const foreground = path.join(sourceRoot, 'entry-1.mp4');
   await fs.writeFile(foreground, 'foreground');
   const secretPath = 'D:\\private\\managed\\resize-output.mp4';

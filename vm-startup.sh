@@ -154,7 +154,7 @@ log "Building frontend"
 run_as_app_user "npm run build"
 
 log "Preparing runtime directories"
-install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR/temp_superpowers"
+install -d -o "$APP_USER" -g "$APP_USER" "$APP_DIR/temp_work"
 
 ENV_FILE="$APP_DIR/.env.runtime"
 log "Writing runtime environment file"

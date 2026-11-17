@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-const tempRoot = path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
+const tempRoot = path.resolve(process.cwd(), 'temp_work', 'native-renders');
 export const managedRenderRoot = tempRoot;
 
 /**
@@ -72,7 +72,7 @@ export const removeWorkDir = async (workDir: string) => {
 /**
  * Centralized cleanup function - cleanup by workDir path
  * 
- * @param workDir - The actual work directory path (e.g., temp_superpowers/native-renders/upload-xxx)
+ * @param workDir - The actual work directory path (e.g., temp_work/native-renders/upload-xxx)
  * @param reason - Why cleanup is being performed
  * @param jobId - Optional job ID for logging
  */

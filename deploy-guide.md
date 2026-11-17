@@ -255,7 +255,7 @@ htop
 | Nginx | `/etc/nginx/sites-available/resize-video` | Reverse proxy config |
 | PM2 | `pm2 list` | Process management |
 | App | `/opt/resize-video/` | Source code + built frontend |
-| Temp files | `/opt/resize-video/temp_superpowers/` | Video render outputs |
+| Temp files | `/opt/resize-video/temp_work/` | Video render outputs |
 | Environment | PM2 env vars | `FFMPEG_BINARY_PATH=/usr/bin/ffmpeg` |
 
 ### Ports

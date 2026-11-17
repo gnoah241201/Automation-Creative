@@ -83,7 +83,7 @@ This repository now includes a Docker-based deployment setup for local productio
 
 - `frontend`: Nginx serving the built Vite app on port `8080` by default
 - `backend`: Express + FFmpeg render server on internal port `3001`
-- `render_data` volume: persisted render temp/output files at `/app/temp_superpowers/native-renders`
+- `render_data` volume: persisted render temp/output files at `/app/temp_work/native-renders`
 
 ### Start the stack
 
@@ -227,13 +227,13 @@ Source edits are non-destructive metadata. **Edit source** opens a right-hand dr
 
 Step 2 can Apply one configuration to every hook group in the current original row, the current hook-duration group across every original column, or the full matrix when both scopes are selected. The confirmation shows the target count and any shorter originals that need clamping. Exact `insertAt`, `trimStart`, and `trimEnd` seconds are transformed per target; an insertion beyond a shorter effective original clamps to that original's exact end while retaining the complete longest hook. One atomic successful Apply marks every target reviewed, while a stale draft revision returns `409` without a partial write.
 
-Local Library outputs can be selected and sent to Resize without downloading and re-uploading them. Resize accepts at most 10 selected entries per batch. Alternatively, **Download selected (.zip)** prepares 1-100 selected usable outputs, temporarily holds them, and returns a session-bound one-time download URL that expires after five minutes. The ZIP streams directly to the browser and is not persisted; holds are released after completion, disconnect, stream failure, or unused-token expiry. Composer drafts, previews, and outputs use the existing `temp_superpowers/native-renders` managed storage root.
+Local Library outputs can be selected and sent to Resize without downloading and re-uploading them. Resize accepts at most 10 selected entries per batch. Alternatively, **Download selected (.zip)** prepares 1-100 selected usable outputs, temporarily holds them, and returns a session-bound one-time download URL that expires after five minutes. The ZIP streams directly to the browser and is not persisted; holds are released after completion, disconnect, stream failure, or unused-token expiry. Composer drafts, previews, and outputs use the existing `temp_work/native-renders` managed storage root.
 
 The backend checks composer retention every five minutes. It removes expired drafts, exact previews, unreferenced source assets, final outputs, and orphaned composer job folders after 24 hours. Outputs held by an active Resize job or a pending/streaming ZIP bundle and exact previews still being rendered are protected until they are released or finish. The cleanup timer is unreferenced, does not overlap cycles, and does not keep the process alive.
 
 Operational counters and the retained-library byte gauge are available from `/metrics` and `/api/metrics` with the `resize_video_composer_` prefix. Source-trim status is limited to `success|conflict|invalid|error`; Apply scope is `row|column|matrix` with the same status set; bundle status is `prepared|completed|expired|aborted|error`. Metrics never label IDs, names, users, or paths.
 
-For a release check using generated local media, follow [the Hook Composer smoke checklist](docs/superpowers/verification/hook-composer-smoke-checklist.md). The automated checks do not require browser uploads and clean their managed temporary files when they finish.
+For a release check using generated local media, run the automated checks; they do not require browser uploads and clean their managed temporary files when they finish.
 
 ## Encoder Mode (CPU vs NVIDIA NVENC)
 

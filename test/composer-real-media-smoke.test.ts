@@ -14,7 +14,7 @@ const ffmpeg = getFfmpegPath();
 test('real FFmpeg smoke renders insertion boundaries, crop, silence, preview and a 2x2 final matrix', {
   timeout: 180_000,
 }, async () => {
-  const managedRoot = path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
+  const managedRoot = path.resolve(process.cwd(), 'temp_work', 'native-renders');
   await fs.mkdir(managedRoot, { recursive: true });
   const root = await fs.mkdtemp(path.join(managedRoot, 'composer-smoke-'));
   try {
@@ -96,7 +96,7 @@ test('real FFmpeg smoke renders insertion boundaries, crop, silence, preview and
 test('real FFmpeg excludes trimmed leading source sections from preview and final output', {
   timeout: 180_000,
 }, async () => {
-  const managedRoot = path.resolve(process.cwd(), 'temp_superpowers', 'native-renders');
+  const managedRoot = path.resolve(process.cwd(), 'temp_work', 'native-renders');
   await fs.mkdir(managedRoot, { recursive: true });
   const root = await fs.mkdtemp(path.join(managedRoot, 'composer-trim-smoke-'));
   try {

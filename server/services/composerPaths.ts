@@ -2,7 +2,7 @@ import path from 'node:path';
 
 export const composerRoot = path.resolve(
   process.cwd(),
-  'temp_superpowers',
+  'temp_work',
   'native-renders',
   'composer',
 );

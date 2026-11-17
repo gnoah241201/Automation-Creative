@@ -16,7 +16,7 @@ services:
       GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
       GOOGLE_WORKSPACE_DOMAIN: ${GOOGLE_WORKSPACE_DOMAIN:-}
     volumes:
-      - render_data:/app/temp_superpowers/native-renders
+      - render_data:/app/temp_work/native-renders
     healthcheck:
       test:
         [

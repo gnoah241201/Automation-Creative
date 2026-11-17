@@ -24,7 +24,7 @@ COPY package.json package-lock.json tsconfig.json ./
 COPY server ./server
 COPY shared ./shared
 COPY --from=deps /app/node_modules ./node_modules
-RUN mkdir -p /app/temp_superpowers/native-renders
+RUN mkdir -p /app/temp_work/native-renders
 ENV NODE_ENV=production \
   PORT=3001 \
   MAX_CONCURRENT_JOBS=2 \
